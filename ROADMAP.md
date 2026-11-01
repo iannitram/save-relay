@@ -1,6 +1,6 @@
 # Roadmap
 
-From `SPEC.md` (re-approved 2026-10-31) to 1.0: Uncharted on the AMD handheld, the Strix Halo tablet and the RTX 3090 Ti desktop sharing saves through Play alone, through the service chosen at setup: Nextcloud, Google Drive or Dropbox (`docs/adr/0002-storage-backends.md`). How the code is laid out: `docs/code-map.md`. Each feature below is one GitHub issue (number in brackets), sized by the pipeline's rubric; Easy ones carry a Qwen brief and locked tests.
+From `SPEC.md` (re-approved 2026-11-01) to 1.0: Uncharted on the AMD handheld, the Strix Halo tablet and the RTX 3090 Ti desktop sharing saves through Play alone, through the service chosen at setup: Nextcloud, Google Drive or Dropbox (`docs/adr/0002-storage-backends.md`); a game still open on another machine said before I play; any Steam game synced with one launch option; and each save shown as a card in a Game Mode panel (`docs/adr/0003-baton-wrap-cards-panel.md`). How the code is laid out: `docs/code-map.md`. Each feature below is one GitHub issue (number in brackets), sized by the pipeline's rubric; Easy ones carry a Qwen brief and locked tests.
 
 ## Features
 
@@ -53,8 +53,29 @@ From `SPEC.md` (re-approved 2026-10-31) to 1.0: Uncharted on the AMD handheld, t
 | F45 | Choosing and setting up a service | `docs/services.md` | M6, M10 | #46 |
 | F46 | Real round trips on Dropbox and Google Drive; Game Mode sign-in (`needs-owner-device`) | `tests/live_services.rs` | M6, M9, M10 | #47 |
 | F47 | Register the app with Google and Dropbox (`needs-owner-device`, the owner's clicks) | `src/clients.rs` | M6, M10 | #36 |
+| F48 | `playing.json` mark: shape, checks, `presence::check` | `presence` (pure) | M11 | #50 |
+| F49 | Plan row for `Held` (`decide_with_mark`); `Action::Held`, exit 6; `layout::playing_path` | `plan`, `api`, `layout` | M11 | #51 |
+| F50 | Write and clear the mark in `pull`/`push`; `--anyway`; `held` in the data and `status` | `sync` | M11 | #52 |
+| F51 | `save-relay where` | `sync::where_open`, `cli` | M11 | #53 |
+| F52 | Parse `wrap`, `which`, `install-wrap`, `answer`, `where`, `picture`, `panel`, `pull --anyway` | `cli::parse` | M11-M15 | #54 |
+| F53 | KeyValues (VDF) reader and writer | `steam::vdf` (pure) | M12, M13 | #55 |
+| F54 | Steam facts: folders per OS, libraries, an app's library, user ids, screenshot pick | `steam` | M12-M14 | #56 |
+| F55 | ludusavi entry to our manifest: placeholders, `when`, save tags, Proton prefix, refuse unclear | `ludusavi::translate` (pure) | M13 | #57 |
+| F56 | ludusavi data: download with ETag, weekly refresh, cache, Steam index; `which` | `ludusavi::Cache` | M13 | #58 |
+| F57 | Pending choices: file shape, `answer`, the 120-second wait | `pending`, `local` | M12 | #59 |
+| F58 | `wrap`: pull, the game as a child, push, the child's exit code, pending choices | `wrap` | M12 | #60 |
+| F59 | `install-wrap`: `LaunchOptions` in `localconfig.vdf`, backup, Steam-running check, `--remove` | `steam::launch` | M13 | #61 |
+| F60 | Save card: shape, sidecar, picture check, playtime rule | `card` (pure) | M14 | #62 |
+| F61 | Cards travel with entries: `put_card`/`read_card`, the session file, `server_card`/`local_card`, `HistoryEntry.card`, `picture`; `scan` and `transfer` skip `.save-relay-*` | `transfer`, `sync`, `local`, `scan` | M14 | #63 |
+| F62 | Panel front end: views, `Bridge`, TypeScript types with contract fixtures, QR code, controller focus | `panel/` | M15 | #64 |
+| F63 | `save-relay panel`: loopback server, token, embedded front end, `/api/*` | `panel` (Rust) | M15 | #65 |
+| F64 | Decky plugin: `plugin.json`, Python backend over `--json`, quick access entry | `decky/` | M15 | #66 |
+| F65 | M11-M14 integration tests: two simulated machines, a wrapped fixture program, fixture ludusavi data, a fixture sidecar | `tests/` | M11-M14 | #67 |
+| F66 | Docs: wrap, which, install-wrap and Proton; the panel; the sidecar in the manifest guide | `docs/wrap.md`, `docs/panel.md`, `docs/manifest.md` | M12-M15 | #68 |
+| F67 | Device checks: suspend hand-off on a handheld, wrap and install-wrap on a PC and a handheld, the panel in Game Mode (`needs-owner-device`) | — | M11-M15 | #69 |
+| F68 | Design pass on the panel (stage 8, `design-pass`) | `panel/`, `decky/` | M15 | #70 |
 
-Every Must has an issue: M1 (F07, F11, F19, F20, F23, F43), M2 (F02, F03, F20, F23, F43), M3 (F07, F19, F20, F23, F43), M4 (F08, F21, F23, F43), M5 (F07, F12, F20, F23, F43), M6 (F13, F14, F18, F22, F27-F30, F35, F37, F42, F44-F47), M7 (F01, F05, F23, F25), M8 (F09, F10, F22, F24, F26, F44), M9 (F12, F27, F31-F34, F36, F38-F41, F43, F46), M10 (F28, F29, F33, F40-F42, F44-F47).
+Every Must has an issue: M1 (F07, F11, F19, F20, F23, F43), M2 (F02, F03, F20, F23, F43), M3 (F07, F19, F20, F23, F43), M4 (F08, F21, F23, F43), M5 (F07, F12, F20, F23, F43), M6 (F13, F14, F18, F22, F27-F30, F35, F37, F42, F44-F47), M7 (F01, F05, F23, F25), M8 (F09, F10, F22, F24, F26, F44), M9 (F12, F27, F31-F34, F36, F38-F41, F43, F46), M10 (F28, F29, F33, F40-F42, F44-F47), M11 (F48-F52, F65, F67), M12 (F52-F54, F57, F58, F65-F67), M13 (F52-F56, F59, F65-F67), M14 (F52, F54, F60, F61, F65-F67), M15 (F52, F62-F64, F66-F68).
 
 ## Mac, PC and Linux (R04)
 
@@ -63,6 +84,9 @@ Every Must has an issue: M1 (F07, F11, F19, F20, F23, F43), M2 (F02, F03, F20, F
 - **Linux risk:** a launcher started from Steam's Game Mode may find no unlocked Secret Service. F18 finds out on the handhelds first; if the store is missing there, it stops and asks, because a fallback store would change M6. The same store holds the Google Drive and Dropbox refresh tokens, so the answer covers every service.
 - **Game Mode sign-in risk (Linux):** a browser started from a Game Mode launcher may never show on screen, so Drive and Dropbox setup there defaults to the code flows (`--no-browser`, then `--finish`; Google: a short code typed on a phone; Dropbox: a code typed back, or Steam's own browser). Recommended: set up once in Desktop Mode. F42 builds it, F46 checks it on a handheld.
 - **Browser start per OS:** `xdg-open` (Linux), `rundll32 url.dll,FileProtocolHandler` (Windows), `open` (macOS), no shell; the loopback redirect is plain `std::net`, the same on all three.
+- **The M11-M15 parts:** the mark, the cards and the ludusavi translation are pure and the same on all three. `wrap` is checked on Linux (native games and Proton, Steam native and Flatpak) and Windows; macOS builds and tests it (Steam for Mac's folder is known) but is no 1.0 device check. `install-wrap` is checked on Linux and Windows; the macOS path is handled but untried on a device. The Decky plugin is Linux Game Mode only; `save-relay panel` runs on all three and opens the browser the same way sign-in does.
+- **Proton risk (Linux):** a Windows game's saves live inside its Proton prefix, whose user folder is always `steamuser`; F55 maps there, and F67 checks one Proton game on a handheld. A game that keeps saves in the prefix's registry is not covered (ludusavi's registry entries are not read).
+- **Steam file risk:** `install-wrap` edits `localconfig.vdf`, which Steam rewrites when it runs; so it refuses while Steam runs (`steam_running`) and keeps a dated backup.
 - **Android and iOS** (2.0): no platform-only dependency in the core; the network and the credential store are traits (`http::Transport`, `CredentialStore`) with their real implementations behind the `http` and `keyring` features, and the three backends are plain Rust over `Transport`, so a mobile app links the library and brings its own transport, store and browser session.
 
 ## Open-source pieces
@@ -70,7 +94,16 @@ Every Must has an issue: M1 (F07, F11, F19, F20, F23, F43), M2 (F02, F03, F20, F
 | Project | License | Use |
 |---|---|---|
 | mtkennerly/ludusavi | MIT | **Learn**, maybe adopt small pieces with credit: its wrap-the-launch flow (back up after quit, restore before start), its cloud conflict check (compare local and cloud against the last sync) and its backup retention (full backups capped by count). Our core stays small instead of depending on it: it is a whole app (GUI, rclone, the big manifest), and we need one game folder and one server. Placeholder ideas for manifests (`<home>`, `<winAppData>`) informed `{home}`, `{data}`, `{config}`, `{documents}`. |
-| mtkennerly/ludusavi-manifest | MIT | **Learn**: the shape of a per-game save location record. Ours is one small JSON file per port, not a shared database. |
+| mtkennerly/ludusavi-manifest | MIT | **Learn**: the shape of a per-game save location record. Ours is one small JSON file per port, not a shared database. **Use** its data (`data/manifest.yaml`) for wrapped Steam games (F55, F56): downloaded with its ETag, cached, never bundled as code; a manifest of my own always wins. |
+| saphyr-rs/serde-saphyr | MIT / Apache-2.0 | The YAML reader for the ludusavi data (F56): a pure-Rust serde deserializer, so the 17 MB file reads into typed structs without a whole tree (ADR 0003 has the crates ruled out). Added by its issue. |
+| SteamDeckHomebrew decky-loader | GPL-2.0 (the host; used, not linked) | Runs the Game Mode panel (F64) in Steam's quick access menu. |
+| @decky/ui, @decky/api | LGPL-2.1 | The Decky plugin's components and its calls to the Python backend (F64). |
+| @decky/rollup | BSD-3-Clause | The Decky plugin's build (with rollup, MIT). |
+| React (`react`, `react-dom`) | MIT | The panel's views, React 18 like Steam's own, which Decky supplies at run time (F62). |
+| Vite, `@vitejs/plugin-react` | MIT | The desktop panel's build into `panel/dist` (F62, F63). |
+| vitest | MIT | The front-end tests (F62, F64). |
+| TypeScript | Apache-2.0 | The front ends' language and `typecheck`. |
+| soldair/node-qrcode (`qrcode`) | MIT | The QR code of the Drive and Dropbox sign-in on the panel (F62). |
 | rclone/rclone | MIT | **Learn** its WebDAV behaviour with Nextcloud: set the modification time on upload (`X-OC-Mtime`), read `getetag` from PROPFIND, retry on 423/5xx, chunked upload only for big files (saves are small: after 1.0). **Use** `rclone serve webdav` as a test server on the Windows and macOS CI jobs (F23). |
 | sigoden/dufs | MIT / Apache-2.0 | Alternative single-binary WebDAV test server, if `rclone serve webdav` misses a method we need. |
 | nextcloud/docker (the `nextcloud` image) | AGPL-3.0 (server; used, not linked) | The truest test server: a service container on the Linux CI job (F23), and the test container on the RTX 3090 Ti desktop for the R12 check of F17. |
@@ -96,9 +129,17 @@ Every Must has an issue: M1 (F07, F11, F19, F20, F23, F43), M2 (F02, F03, F20, F
    - **6c, backends:** F40 Dropbox (Medium), F41 Drive with the M9 guard (Hard), F42 the sign-in flows with Game Mode (Hard).
    - **6d, together:** F43 the M9 suite against every backend (after F20, F21), F44 setup and status for every service (after F22).
    - **6e, the owner's part:** F47 registering the app (any time; nothing else waits on it until F46), then F46 the real round trips and Game Mode sign-in on a PC and a handheld (`needs-owner-device`). F46 is where Drive's 409-on-a-used-id, which the guard rests on, is checked for real.
-7. **1.0 acceptance** (F26): uncharted_pc's launcher calls the released binary around Play (uncharted_pc #163); a save made on each of the three PCs loads on the others (`needs-owner-device`).
-8. **Design pass** (R04, last before 1.0): **skipped, no UI.** save-relay has no screen; its only face is CLI text and the `--json` contract, and the prompts a player sees (the conflict choice, the service choice and the Game Mode sign-in code) are drawn by each port's launcher, so it gets its look in that port's own design pass. The wording that comes from here (the `message` lines and the prompt text in `docs/code-map.md` § API shape) is fixed by the API shape and reviewed with F22 and F44; the sign-in page the loopback shows is one plain sentence (F42). A CHANGELOG line records the skip when the roadmap is built.
+7. **The open-elsewhere mark, wrap, save cards and the panel** (F48-F68, M11-M15; `docs/adr/0003-baton-wrap-cards-panel.md`), in parallel lanes like stage 6:
+   - **7a, pure parts, Easy:** free now F48 (the mark), F53 (VDF), F57 (pending choices, pure part), F60 (the card); then F55 (ludusavi translation, Medium) after #5, F49 after #3, #7, #9, and F52 (parsing) after #10.
+   - **7b, Steam and the data, Medium:** F54 (Steam facts, after F53 and #4), F56 (the ludusavi data, after #37, F54, F55).
+   - **7c, in the engine, Medium:** F50 (the mark in `pull`/`push`, after #20, F48, F49), F51 (`where`, after F50 and #22), F61 (cards with entries, after #19, #20, #21, F60).
+   - **7d, wrap, Hard:** F58 `wrap` (after #20, F50, F52, F56, F57), F59 `install-wrap` (after F53, F54).
+   - **7e, the panel:** F62 the front end (Hard; free now, on the fixtures and the `Bridge`), then F63 `save-relay panel` (Hard, after #22, F62) and F64 the Decky plugin (Medium, after F62).
+   - **7f, together:** F65 the integration tests (after F50, F58, F61), F66 the docs (after F58, F63).
+   - **7g, the owner's part:** F67 the device checks (`needs-owner-device`, after all of the above), F68 the design pass (stage 8).
+8. **Design pass** (R04, before the 1.0 acceptance; F68): **no longer skipped**, because save-relay now has a screen: the panel (M15), in Game Mode and in the browser. The pass checks its views (the games list, the card timeline, restore, the conflict and held choices, pending choices, the QR sign-in) against the design system all my apps share, at 1280x800 with a controller only, and its findings become `design-pass` issues. The prompts a port's launcher draws (the conflict and held choices, the service choice and the sign-in code) still get their look in that port's own design pass; the wording from here (the `message` lines and the prompt text in `docs/code-map.md` § API shape) is fixed by the API shape and reviewed with F22, F44 and F62.
+9. **1.0 acceptance** (F26), last: uncharted_pc's launcher calls the released binary around Play (uncharted_pc #163); a save made on each of the three PCs loads on the others (`needs-owner-device`).
 
 ## After 1.0
 
-Android and iOS bindings (with the game ports' 2.0), with sign-in through the platform's browser session; signed macOS release; moving saves from one service to another (a Won't for 1.0: switching starts fresh); more services (OneDrive, S3) behind the same `Remote`; upload only changed files (server-side COPY of unchanged ones from the previous entry); Nextcloud chunked upload for large save sets; a `save-relay forget <game>`; pruning old conflict backups separately from pushes.
+Android and iOS bindings (with the game ports' 2.0), with sign-in through the platform's browser session (the panel's views can follow them there); signed macOS release; moving saves from one service to another (a Won't for 1.0: switching starts fresh); more services (OneDrive, S3) behind the same `Remote`; upload only changed files (server-side COPY of unchanged ones from the previous entry); Nextcloud chunked upload for large save sets; a `save-relay forget <game>`; pruning old conflict backups separately from pushes; saves kept in the Windows registry for wrapped games (ludusavi's registry entries); wrapping games from launchers other than Steam.
