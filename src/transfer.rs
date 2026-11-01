@@ -1,0 +1,52 @@
+//! Moving a save set between the saves folder and the server, safely. An upload goes to
+//! `incoming/<entry>/` and is renamed into `history/<entry>/` only when every file is there, so
+//! a broken upload never becomes a revision (SPEC.md). A download writes each file to a part
+//! name, checks its hash, then renames it over the old one.
+
+use crate::error::{not_built, Result};
+use crate::layout::Layout;
+use crate::remote::Remote;
+use crate::scan::SaveSet;
+use serde::{Deserialize, Serialize};
+use std::path::Path;
+
+/// What a transfer changed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Counts {
+    pub uploaded: u32,
+    pub downloaded: u32,
+    pub deleted: u32,
+}
+
+/// Upload every file of `set` from `saves_dir` into `incoming/<entry>/` (creating folders),
+/// then move it to `history/<entry>/`. On any failure: delete the incoming folder (best effort)
+/// and return the error; `history/` is untouched. A file whose bytes no longer hash to its
+/// `sha256` (the game wrote meanwhile) is `Error::Io`.
+pub fn upload_entry(
+    remote: &dyn Remote,
+    layout: &Layout,
+    game: &str,
+    entry: &str,
+    saves_dir: &Path,
+    set: &SaveSet,
+) -> Result<Counts> {
+    not_built("transfer::upload_entry")
+}
+
+/// Make `saves_dir` hold exactly `wanted` (the files of history entry `entry`): download each
+/// file whose hash differs from `local`'s into `<name>.save-relay-part`, check its SHA-256
+/// (a mismatch is `Error::Server` and nothing is replaced), rename it into place and set its
+/// modification time to the entry's `mtime` (`File::set_modified`), so the game's load list
+/// shows when the save was made; then delete the files in `local` that `wanted` lacks.
+/// Creates folders as needed.
+pub fn download_entry(
+    remote: &dyn Remote,
+    layout: &Layout,
+    game: &str,
+    entry: &str,
+    wanted: &SaveSet,
+    saves_dir: &Path,
+    local: &SaveSet,
+) -> Result<Counts> {
+    not_built("transfer::download_entry")
+}

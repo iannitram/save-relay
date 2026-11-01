@@ -1,0 +1,30 @@
+[package]
+name = "save-relay"
+version = "0.0.0"
+edition = "2021"
+license = "MIT"
+description = "Share game saves between machines through a Nextcloud server over WebDAV"
+repository = "https://github.com/iannitram/save-relay"
+publish = false
+
+[lib]
+name = "save_relay"
+path = "src/lib.rs"
+
+[[bin]]
+name = "save-relay"
+path = "src/main.rs"
+
+[features]
+# The real backends. Their crates are added by their issues (docs/code-map.md):
+# `webdav` gets ureq with rustls, `keyring` gets the keyring crate. The core never needs them,
+# so a mobile build can supply its own Remote and CredentialStore.
+default = ["webdav", "keyring"]
+webdav = []
+keyring = []
+
+# Pure Rust only, so the core builds for Linux, Windows, macOS and later Android and iOS.
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
