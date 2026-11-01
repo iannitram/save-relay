@@ -112,6 +112,7 @@ impl From<std::io::Error> for Error {
 }
 
 /// `Err(Error::NotBuilt(..))` for a stub.
+#[allow(dead_code)]
 pub(crate) fn not_built<T>(what: &'static str) -> Result<T> {
     Err(Error::NotBuilt(NotBuilt(what)))
 }

@@ -100,13 +100,13 @@ impl KeyringStore {
 #[cfg(feature = "keyring")]
 impl CredentialStore for KeyringStore {
     fn get(&self, account: &str) -> Result<Option<Secret>> {
-        not_built("creds::KeyringStore::get")
+        crate::error::not_built("creds::KeyringStore::get")
     }
     fn set(&self, account: &str, secret: &Secret) -> Result<()> {
-        not_built("creds::KeyringStore::set")
+        crate::error::not_built("creds::KeyringStore::set")
     }
     fn delete(&self, account: &str) -> Result<()> {
-        not_built("creds::KeyringStore::delete")
+        crate::error::not_built("creds::KeyringStore::delete")
     }
     fn kind(&self) -> &'static str {
         crate::not_built!("creds::KeyringStore::kind")

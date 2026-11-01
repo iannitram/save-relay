@@ -53,24 +53,24 @@ impl WebDav {
 #[cfg(feature = "webdav")]
 impl crate::remote::Remote for WebDav {
     fn list(&self, dir: &str) -> Result<Vec<RemoteEntry>> {
-        not_built("webdav::WebDav::list")
+        crate::error::not_built("webdav::WebDav::list")
     }
     fn get(&self, path: &str) -> Result<(Vec<u8>, String)> {
-        not_built("webdav::WebDav::get")
+        crate::error::not_built("webdav::WebDav::get")
     }
     fn put(&self, path: &str, bytes: &[u8], pre: &crate::remote::Precondition) -> Result<String> {
-        not_built("webdav::WebDav::put")
+        crate::error::not_built("webdav::WebDav::put")
     }
     fn mkcol(&self, dir: &str) -> Result<()> {
-        not_built("webdav::WebDav::mkcol")
+        crate::error::not_built("webdav::WebDav::mkcol")
     }
     fn copy(&self, from: &str, to: &str) -> Result<()> {
-        not_built("webdav::WebDav::copy")
+        crate::error::not_built("webdav::WebDav::copy")
     }
     fn move_to(&self, from: &str, to: &str) -> Result<()> {
-        not_built("webdav::WebDav::move_to")
+        crate::error::not_built("webdav::WebDav::move_to")
     }
     fn delete(&self, path: &str) -> Result<()> {
-        not_built("webdav::WebDav::delete")
+        crate::error::not_built("webdav::WebDav::delete")
     }
 }

@@ -31,9 +31,12 @@ pub mod webdav;
 pub use error::{Error, NotBuilt, Result};
 
 /// Panics with "not built yet: <what>"; the body of a stub whose final signature cannot fail.
+/// Kept (allowed unused) until the last stub is built, then delete it with `error::not_built`.
+#[allow(unused_macros)]
 macro_rules! not_built {
     ($what:expr) => {
         panic!("not built yet: {}", $what)
     };
 }
+#[allow(unused_imports)]
 pub(crate) use not_built;

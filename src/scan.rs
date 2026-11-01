@@ -50,7 +50,8 @@ pub fn hash_bytes(bytes: &[u8]) -> String {
 
 /// Walk `dir` and return the files `glob::selected(include, exclude, path)` keeps, sorted by
 /// path. A missing `dir` is an empty set, not an error. Symbolic links are skipped, never
-/// followed. Folders are not entries. Read errors are `Error::Io` naming the file.
+/// followed. Folders are not entries. Read errors are `Error::Io` naming the file; a `dir` that
+/// is a file is `Error::Io("<dir>: not a folder")`.
 pub fn scan(dir: &Path, include: &[String], exclude: &[String]) -> Result<SaveSet> {
     not_built("scan::scan")
 }
