@@ -10,6 +10,11 @@ use crate::scan::SaveSet;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+/// The file inside every history entry that lists its save files (a `SaveSet` as JSON), so any
+/// entry can be restored without reading the others. Written into `incoming/<entry>/` before the
+/// MOVE, so an entry and its list appear together.
+pub const RECORD: &str = ".save-relay-files.json";
+
 /// What a transfer changed.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Counts {
@@ -19,7 +24,7 @@ pub struct Counts {
 }
 
 /// Upload every file of `set` from `saves_dir` into `incoming/<entry>/` (creating folders),
-/// then move it to `history/<entry>/`. On any failure: delete the incoming folder (best effort)
+/// then `set` itself as `RECORD`, then move the folder to `history/<entry>/`. On any failure: delete the incoming folder (best effort)
 /// and return the error; `history/` is untouched. A file whose bytes no longer hash to its
 /// `sha256` (the game wrote meanwhile) is `Error::Io`.
 pub fn upload_entry(
@@ -49,4 +54,15 @@ pub fn download_entry(
     local: &SaveSet,
 ) -> Result<Counts> {
     not_built("transfer::download_entry")
+}
+
+/// The file list of history entry `entry` (its `RECORD`). Missing: `Error::NotFound`;
+/// unreadable: `Error::StateInvalid`.
+pub fn read_record(
+    remote: &dyn Remote,
+    layout: &Layout,
+    game: &str,
+    entry: &str,
+) -> Result<SaveSet> {
+    not_built("transfer::read_record")
 }

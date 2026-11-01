@@ -52,7 +52,8 @@ Under one folder (`root`, default `save-relay`) of the user's Nextcloud files:
 
 ```text
 <root>/<game>/state.json                      ServerState: revision, device, time, entry, files
-<root>/<game>/history/<stamp>-<device>/...    one dated copy per push (and per conflict backup)
+<root>/<game>/history/<stamp>-<device>/...    one dated copy per push (and per conflict backup),
+                                              with its file list in .save-relay-files.json
 <root>/<game>/incoming/<stamp>-<device>/...   an upload in progress
 ```
 
@@ -76,7 +77,7 @@ On each machine: `<config>/save-relay/config.json` (server, user, root, device; 
 | `src/retention.rs` | stub | **pure** `to_drop(entries, keep, current)`; `KEEP = 10` | `layout`; used by `sync` | M4 |
 | `src/remote.rs` | stub | the `Remote` trait (list, get, put with `Precondition`, mkcol, copy, move_to, delete), `ensure_dir`, `MemoryRemote` (the test server, with an offline switch) | implemented by `webdav`; used by `transfer`, `sync` | M1-M5 |
 | `src/webdav.rs` | stub | `files_url`, `encode_segment`, `encode_path`, `parse_propfind` (pure); `WebDav` HTTP client behind feature `webdav` (ureq + rustls) | implements `Remote`; `creds::Secret` | M1-M6 |
-| `src/transfer.rs` | stub | `upload_entry` (incoming, then MOVE into history), `download_entry` (part file, hash check, rename; delete files the entry lacks), `Counts` | `remote`, `layout`, `scan` | M1, M2, M3 |
+| `src/transfer.rs` | stub | `upload_entry` (incoming with its file list `RECORD`, then MOVE into history), `read_record`, `download_entry` (part file, hash check, rename; delete files the entry lacks), `Counts` | `remote`, `layout`, `scan` | M1, M2, M3 |
 | `src/creds.rs` | stub (`Secret` present) | `Secret` (prints `***`), `CredentialStore` trait, `account(server, user)`, `MemoryStore`, `KeyringStore` behind feature `keyring` | used by `cli`, `webdav` | M6 |
 | `src/local.rs` | stub | `LocalStore`: `Config`, `LastSynced`, `GameRecord` files, written via a temp file and rename | `platform`, `state`, `manifest`; used by `sync`, `cli` | M1-M6 |
 | `src/sync.rs` | stub | the engine: `Session`, `Game`, `Resolve`; `pull`, `push`, `status`, `history`, `restore` | everything above | M1-M5 |
