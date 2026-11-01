@@ -3,6 +3,9 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// A clock: seconds since the Unix epoch. `now` is the real one; tests pass a fixed one.
+pub type Clock = fn() -> u64;
+
 /// Seconds since the Unix epoch, now. Built in the skeleton.
 pub fn now() -> u64 {
     SystemTime::now()

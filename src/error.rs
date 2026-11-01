@@ -26,11 +26,11 @@ pub enum Error {
     GameUnknown(String),
     /// `save-relay setup` has not been run on this machine.
     NotSetUp,
-    /// The server refused the user name or app password (HTTP 401/403).
+    /// The Nextcloud server refused the user name or app password (HTTP 401/403).
     AuthFailed,
     /// The server could not be reached (DNS, connect, TLS, timeout).
     Unreachable(String),
-    /// The server answered, but not as WebDAV should (unexpected status or body).
+    /// The server answered, but not as its API should (unexpected status or body).
     Server(String),
     /// A state file (the server's `state.json` or a last-synced record) is unreadable.
     StateInvalid(String),
@@ -42,6 +42,12 @@ pub enum Error {
     NotFound(String),
     /// The system credential store failed or holds no password for this server.
     Credentials(String),
+    /// Google Drive or Dropbox refused the stored sign-in (the refresh token expired or was
+    /// withdrawn): sign in again with `save-relay setup`. The string is the service's label.
+    ReauthNeeded(String),
+    /// A sign-in in the browser during `setup` did not finish: refused, timed out, or the
+    /// answer did not match the request.
+    SignInFailed(String),
     /// A local file operation failed.
     Io(String),
 }
@@ -65,6 +71,8 @@ impl Error {
             Error::NoSuchEntry(_) => "no_such_entry",
             Error::NotFound(_) => "not_found",
             Error::Credentials(_) => "credentials",
+            Error::ReauthNeeded(_) => "reauth_needed",
+            Error::SignInFailed(_) => "sign_in_failed",
             Error::Io(_) => "io",
         }
     }
@@ -92,6 +100,11 @@ impl fmt::Display for Error {
             Error::NoSuchEntry(e) => write!(f, "no history entry '{e}'"),
             Error::NotFound(p) => write!(f, "not found on the server: {p}"),
             Error::Credentials(m) => write!(f, "credential store: {m}"),
+            Error::ReauthNeeded(s) => write!(
+                f,
+                "the sign-in to {s} has expired or was withdrawn: run `save-relay setup` again"
+            ),
+            Error::SignInFailed(m) => write!(f, "sign-in failed: {m}"),
             Error::Io(m) => write!(f, "{m}"),
         }
     }

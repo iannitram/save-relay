@@ -3,7 +3,7 @@ name = "save-relay"
 version = "0.0.0"
 edition = "2021"
 license = "MIT"
-description = "Share game saves between machines through a Nextcloud server over WebDAV"
+description = "Share game saves between machines through Nextcloud (WebDAV), Google Drive or Dropbox"
 repository = "https://github.com/iannitram/save-relay"
 publish = false
 
@@ -16,11 +16,13 @@ name = "save-relay"
 path = "src/main.rs"
 
 [features]
-# The real backends. Their crates are added by their issues (docs/code-map.md):
-# `webdav` gets ureq with rustls, `keyring` gets the keyring crate. The core never needs them,
-# so a mobile build can supply its own Remote and CredentialStore.
-default = ["webdav", "keyring"]
-webdav = []
+# The platform parts. Their crates are added by their issues (docs/code-map.md):
+# `http` gets ureq with rustls (the real `http::Transport`, used by all three backends),
+# `keyring` gets the keyring crate. The backends themselves (WebDAV, Dropbox, Google Drive)
+# are plain Rust over `http::Transport` and always built, so CI tests them against the fakes
+# with no network, and a mobile build can supply its own Transport and CredentialStore.
+default = ["http", "keyring"]
+http = []
 keyring = []
 
 # Pure Rust only, so the core builds for Linux, Windows, macOS and later Android and iOS.

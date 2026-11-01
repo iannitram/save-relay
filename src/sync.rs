@@ -1,7 +1,9 @@
 //! The engine: each CLI command as one function over a `Remote`, a `LocalStore` and the saves
 //! folder. It reads, asks `plan::decide`, then acts through `transfer`, writes `state.json` with
-//! an If-Match on the etag it read (so a second machine pushing at once gets
-//! `Error::Changed`, never a lost revision), applies `retention`, and records `LastSynced`.
+//! `Precondition::Match` on the etag it read (so a second machine pushing at once gets
+//! `Error::Changed`, never a lost revision: If-Match on Nextcloud, the rev on Dropbox, the
+//! claim guard on Google Drive, M9), applies `retention`, and records `LastSynced`. It never
+//! knows which service it talks to.
 
 use crate::api::{HistoryData, RestoreData, StatusData, SyncData};
 use crate::error::{not_built, Result};

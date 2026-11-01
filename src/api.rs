@@ -64,6 +64,8 @@ pub struct SyncData {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StatusData {
     pub game: String,
+    /// The service this machine was set up with: "nextcloud", "gdrive", "dropbox" (M6).
+    pub service: String,
     pub reachable: bool,
     /// What `pull` would do now.
     pub would: Decision,
@@ -113,15 +115,35 @@ pub struct RestoreData {
     pub message: String,
 }
 
-/// `data` of `setup`. Never the password.
+/// `data` of `setup`. Never the password or a token.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SetupData {
+    /// "nextcloud", "gdrive", "dropbox".
+    pub service: String,
+    /// The Nextcloud address; for Google Drive and Dropbox the service key again.
     pub server: String,
+    /// The Nextcloud user; for Google Drive and Dropbox the account's e-mail address.
     pub user: String,
     pub device: String,
     pub root: String,
-    /// `CredentialStore::kind` of the store the password went into.
+    /// `CredentialStore::kind` of the store the password or refresh token went into.
     pub credential_store: String,
+}
+
+/// `data` of `setup --no-browser` (Google Drive, Dropbox): the sign-in to finish on any
+/// device, then `setup --service <s> --finish`. A launcher shows `url` and `code` (as text or
+/// a QR code); nothing is set up yet.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignInPrompt {
+    pub service: String,
+    /// The page to open.
+    pub url: String,
+    /// Google: the code to type on that page. Dropbox: `null` (Dropbox shows a code to type
+    /// back into `setup --finish` instead).
+    pub code: Option<String>,
+    /// RFC 3339 UTC; after it, start again.
+    pub expires_at: String,
+    pub message: String,
 }
 
 /// `{"ok":true,"command":<command>,"data":<data>}` on one line, no trailing newline.
@@ -142,7 +164,7 @@ pub fn exit_code_for(action: Action) -> i32 {
 
 /// The exit code of a failed command:
 /// 2 `usage`, `manifest_invalid`, `game_unknown`, `no_such_entry`;
-/// 4 `not_set_up`, `auth_failed`, `credentials`;
+/// 4 `not_set_up`, `auth_failed`, `credentials`, `reauth_needed`, `sign_in_failed`;
 /// 5 `server_unreachable`, `server_error`, `state_invalid`, `changed_on_server`, `not_found`;
 /// 1 anything else (`io`, `not_built`).
 pub fn exit_code(error: &Error) -> i32 {

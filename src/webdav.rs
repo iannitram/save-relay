@@ -1,6 +1,7 @@
-//! Nextcloud over WebDAV. The URL helpers and the PROPFIND parser are pure and always built;
-//! the HTTP client (`WebDav`) is behind the `webdav` feature (ureq with rustls, added by its
-//! issue), so the core builds without a network stack.
+//! Nextcloud over WebDAV, one of the three services (docs/adr/0002-storage-backends.md). The
+//! URL helpers and the PROPFIND parser are pure; `WebDav` sends its requests through a
+//! `http::Transport` (the real one is behind the `http` feature), so the core builds without a
+//! network stack. Its overwrite guard is the server's own `If-Match`.
 
 use crate::error::{not_built, Result};
 use crate::remote::RemoteEntry;
@@ -33,24 +34,27 @@ pub fn parse_propfind(xml: &str, dir_href: &str) -> Result<Vec<RemoteEntry>> {
     not_built("webdav::parse_propfind")
 }
 
-/// The real server. Every request carries Basic auth; 401/403 is `Error::AuthFailed`; a
+/// The real server, over any `Transport`. Every request carries Basic auth; 401/403 is `Error::AuthFailed`; a
 /// connection, DNS, TLS or timeout failure is `Error::Unreachable`; 412 is `Error::Changed`;
 /// 404 is `Error::NotFound`; 409 on PUT/MKCOL/MOVE/COPY is `Error::NotFound(parent)`.
 /// The password is never logged or put in an error message.
-#[cfg(feature = "webdav")]
 pub struct WebDav {
     _private: (),
 }
 
-#[cfg(feature = "webdav")]
 impl WebDav {
-    /// `files_url` from `files_url()`; the password from the credential store.
-    pub fn new(files_url: &str, user: &str, password: crate::creds::Secret) -> WebDav {
+    /// `files_url` from `files_url()`; the password from the credential store; `transport`
+    /// is `http::UreqTransport` outside tests.
+    pub fn new(
+        files_url: &str,
+        user: &str,
+        password: crate::creds::Secret,
+        transport: std::sync::Arc<dyn crate::http::Transport>,
+    ) -> WebDav {
         WebDav { _private: () }
     }
 }
 
-#[cfg(feature = "webdav")]
 impl crate::remote::Remote for WebDav {
     fn list(&self, dir: &str) -> Result<Vec<RemoteEntry>> {
         crate::error::not_built("webdav::WebDav::list")

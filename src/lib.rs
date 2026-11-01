@@ -1,6 +1,7 @@
-//! save-relay: share one game's saves between machines through a Nextcloud server over WebDAV.
-//! A launcher calls `save-relay pull` before Play and `save-relay push` after the game quits
-//! (SPEC.md M1-M8). The map of this crate is `docs/code-map.md`.
+//! save-relay: share one game's saves between machines through the service chosen at setup:
+//! a Nextcloud server over WebDAV, Google Drive or Dropbox. A launcher calls `save-relay pull`
+//! before Play and `save-relay push` after the game quits (SPEC.md M1-M10). The map of this
+//! crate is `docs/code-map.md`.
 //!
 //! Skeleton (2026-10-31): every module has its final public signatures. A function that is not
 //! built yet returns `Err(Error::NotBuilt(..))`, or panics with "not built yet" when its final
@@ -11,17 +12,24 @@
 
 pub mod api;
 pub mod cli;
+pub mod clients;
 pub mod creds;
+pub mod dropbox;
 pub mod error;
+pub mod fake;
+pub mod gdrive;
 pub mod glob;
+pub mod http;
 pub mod layout;
 pub mod local;
 pub mod manifest;
+pub mod oauth;
 pub mod plan;
 pub mod platform;
 pub mod remote;
 pub mod retention;
 pub mod scan;
+pub mod service;
 pub mod stamp;
 pub mod state;
 pub mod sync;

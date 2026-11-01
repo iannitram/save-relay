@@ -1,7 +1,8 @@
 //! This machine's own files, under `platform::AppDirs`:
 //!
 //! ```text
-//! <config>/save-relay/config.json        Config: server, user, root, device (never a password)
+//! <config>/save-relay/config.json        Config: service (in `server`), user, root, device;
+//!                                        never a password or token
 //! <data>/save-relay/last/<game>.json     state::LastSynced: what this machine last synced
 //! <data>/save-relay/games/<game>.json    GameRecord: the manifest and saves folder last used
 //! ```
@@ -19,12 +20,16 @@ use std::path::PathBuf;
 /// The config format this build reads and writes.
 pub const FORMAT: u32 = 1;
 
-/// Written by `save-relay setup`. Holds no password: that is in the credential store (M6).
+/// Written by `save-relay setup`. Holds no password or token: those are in the credential
+/// store (M6). The chosen service is `service::Service::from_server(&config.server)`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
     pub format: u32,
-    /// The Nextcloud address as given to setup, e.g. `https://cloud.example.org`.
+    /// The Nextcloud address as given to setup, e.g. `https://cloud.example.org`; or the
+    /// service key `gdrive` or `dropbox` for those services.
     pub server: String,
+    /// The Nextcloud user; for Google Drive and Dropbox the account's e-mail address as the
+    /// service reports it (the refresh token is filed under `service::token_account`).
     pub user: String,
     /// The folder under the user's files that holds every game (`layout::Layout::new`).
     pub root: String,

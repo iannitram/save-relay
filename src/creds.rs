@@ -1,5 +1,8 @@
-//! The app password, kept in the system's credential store and nowhere else (SPEC.md M6): never
-//! in a file, a log, an error message or `--json` output. `KeyringStore` (Secret Service on
+//! The app password (Nextcloud) or refresh token (Google Drive, Dropbox), kept in the system's
+//! credential store and nowhere else (SPEC.md M6): never in a file, a log, an error message or
+//! `--json` output. A Nextcloud password is filed under `account`, a refresh token under
+//! `service::token_account`, a sign-in waiting for `setup --finish` under
+//! `"pending:<service key>"` (`oauth::Pending`). `KeyringStore` (Secret Service on
 //! Linux, Credential Manager on Windows, Keychain on macOS) is behind the `keyring` feature;
 //! `MemoryStore` is for tests; a mobile build brings its own `CredentialStore`.
 
@@ -9,7 +12,7 @@ use std::fmt;
 /// The service name every stored password is filed under.
 pub const SERVICE: &str = "save-relay";
 
-/// A password. `Debug` and `Display` print `***`, so it cannot leak through a log line.
+/// A password or token. `Debug` and `Display` print `***`, so it cannot leak through a log line.
 /// Built in the skeleton, on purpose: the redaction must exist before anything can print one.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Secret(String);
