@@ -1,0 +1,12 @@
+{
+  "name": "save-relay-frontends",
+  "private": true,
+  "description": "The panel (desktop page and shared views) and the Decky plugin. The Rust crate does not need these to build.",
+  "license": "MIT",
+  "packageManager": "pnpm@9.15.9",
+  "scripts": {
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "build": "pnpm -r build"
+  }
+}

@@ -1,0 +1,5 @@
+/* The desktop page's own styles; the views are styled by their issues. */
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+}

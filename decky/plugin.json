@@ -1,0 +1,11 @@
+{
+  "name": "Save Relay",
+  "author": "iannitram",
+  "flags": [],
+  "api_version": 1,
+  "publish": {
+    "tags": ["saves", "sync"],
+    "description": "Share a game's saves between machines: see who has a game open, answer a save choice, browse history with save cards, and sign in, all in Game Mode.",
+    "image": ""
+  }
+}

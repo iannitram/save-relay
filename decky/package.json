@@ -1,0 +1,25 @@
+{
+  "name": "save-relay-decky",
+  "private": true,
+  "version": "0.0.0",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "rollup -c",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@decky/api": "1.1.3",
+    "@decky/ui": "4.16.4",
+    "panel": "workspace:*"
+  },
+  "devDependencies": {
+    "@decky/rollup": "1.0.2",
+    "@types/react": "18.3.31",
+    "react": "18.3.1",
+    "rollup": "4.52.5",
+    "typescript": "5.9.3",
+    "vitest": "4.1.12"
+  }
+}

@@ -1,0 +1,5 @@
+# The two front ends (docs/adr/0003-baton-wrap-cards-panel.md): `panel` is the shared views and
+# the desktop page `save-relay panel` serves; `decky` is the Game Mode plugin that reuses them.
+packages:
+  - panel
+  - decky
