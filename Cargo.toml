@@ -24,6 +24,12 @@ path = "src/main.rs"
 default = ["http", "keyring"]
 http = []
 keyring = []
+# Embed the built panel front end (`panel/dist`, from `pnpm --dir panel build`) into
+# `save-relay panel`; off by default, so a plain `cargo build` needs no Node and serves a
+# placeholder page. Release builds turn it on.
+panel-dist = []
+# The ludusavi data reader (`ludusavi::parse`) gets serde-saphyr (MIT OR Apache-2.0, pure
+# Rust) from its issue (docs/adr/0003-baton-wrap-cards-panel.md).
 
 # Pure Rust only, so the core builds for Linux, Windows, macOS and later Android and iOS.
 [dependencies]

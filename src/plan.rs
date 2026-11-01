@@ -1,6 +1,7 @@
 //! The sync decision. Pure: given the local save set, this machine's last-synced record and what
 //! the server holds, say what to do. Nothing is overwritten without a choice (SPEC.md M3).
 
+use crate::presence::Hold;
 use crate::scan::SaveSet;
 use crate::state::LastSynced;
 use serde::{Deserialize, Serialize};
@@ -38,6 +39,9 @@ pub enum Decision {
     Conflict,
     /// The server is unreachable: play with local saves, push later (M5).
     Offline,
+    /// At launch, another machine has the game open (M11): touch nothing and ask (Wait or
+    /// Play anyway). Only `decide_with_mark` answers this; `decide` never does.
+    Held,
 }
 
 /// The table (`local changed` = `!local.same_content(&last.save_set())`;
@@ -65,4 +69,25 @@ pub fn decide(
     server: &ServerView,
 ) -> Decision {
     crate::not_built!("plan::decide")
+}
+
+/// `decide` with the open-elsewhere mark (M11), one row added after `Unreachable`:
+///
+/// | server | hold | anyway | Launch | Exit |
+/// |---|---|---|---|---|
+/// | Unreachable | any | any | Offline | Offline |
+/// | not Unreachable | Elsewhere | false | Held | (`decide`) |
+/// | otherwise | | | (`decide`) | (`decide`) |
+///
+/// The mark is never checked at exit: a push goes ahead whoever has the game open, and M3
+/// still guards it. `anyway` is `pull --anyway`.
+pub fn decide_with_mark(
+    intent: Intent,
+    hold: &Hold,
+    anyway: bool,
+    local: &SaveSet,
+    last: Option<&LastSynced>,
+    server: &ServerView,
+) -> Decision {
+    crate::not_built!("plan::decide_with_mark")
 }

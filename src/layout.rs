@@ -2,6 +2,7 @@
 //!
 //! ```text
 //! <root>/<game>/state.json                     current revision (state::ServerState)
+//! <root>/<game>/playing.json                   the open-elsewhere mark (presence::Mark)
 //! <root>/<game>/history/<stamp>-<device>/...   one dated copy per push; the current saves are
 //!                                              the entry state.json names
 //! <root>/<game>/incoming/<stamp>-<device>/     an upload in progress (transfer)
@@ -36,6 +37,11 @@ impl Layout {
     /// `<root>/<game>/state.json`
     pub fn state_path(&self, game: &str) -> String {
         crate::not_built!("layout::Layout::state_path")
+    }
+
+    /// `<root>/<game>/playing.json` (`presence::FILE`)
+    pub fn playing_path(&self, game: &str) -> String {
+        crate::not_built!("layout::Layout::playing_path")
     }
 
     /// `<root>/<game>/history`

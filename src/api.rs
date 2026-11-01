@@ -7,7 +7,9 @@
 //! {"ok":false,"command":"pull","error":{"code":"server_error","message":"..."}}
 //! ```
 
+use crate::card::Card;
 use crate::error::Error;
+use crate::pending::{Answer, ChoiceKind, PendingChoice};
 use crate::plan::Decision;
 use crate::transfer::Counts;
 use serde::{Deserialize, Serialize};
@@ -40,6 +42,19 @@ pub enum Action {
     Deferred,
     /// Both sides changed: nothing was touched; ask the player, then call again with `--resolve`.
     Conflict,
+    /// `pull`: another machine has the game open (its open-elsewhere mark, M11); nothing was
+    /// touched. Ask the player: Wait (poll `status` until `held` is `null`), or Play anyway
+    /// (`pull --anyway`). Exit code 6.
+    Held,
+}
+
+/// Who has a game open, from its open-elsewhere mark (`presence::Mark`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Held {
+    /// The other machine.
+    pub device: String,
+    /// RFC 3339 UTC: when its `pull` ran.
+    pub since: String,
 }
 
 /// `data` of `pull` and `push`.
@@ -60,6 +75,26 @@ pub struct SyncData {
     pub message: String,
 }
 
+/// `data` of `pull` and `push` as the CLI prints it: `SyncData`'s fields, flattened, plus the
+/// open-elsewhere mark and the two sides' save cards. These are siblings, not fields of
+/// `SyncData` and `Side`, so the struct literals in #9's locked tests stay valid; in JSON they
+/// are plain fields of `data` (`"held"`, `"server_card"`, `"local_card"`, each `null` when none).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncReport {
+    #[serde(flatten)]
+    pub sync: SyncData,
+    /// `Action::Held`: who has the game open. `null` otherwise.
+    #[serde(default)]
+    pub held: Option<Held>,
+    /// The card of the server's current entry; `null` when it has none (M14).
+    #[serde(default)]
+    pub server_card: Option<Card>,
+    /// The card the local saves would carry (their place and picture from the sidecar);
+    /// `null` when there are no local saves.
+    #[serde(default)]
+    pub local_card: Option<Card>,
+}
+
 /// `data` of `status`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StatusData {
@@ -76,6 +111,13 @@ pub struct StatusData {
     /// Local files differ from the last sync (or exist with no sync yet).
     pub local_changed: bool,
     pub message: String,
+    /// Another machine's open-elsewhere mark, `null` when none (or this machine's own). A
+    /// launcher that chose Wait polls `status` until this is `null` (M11).
+    #[serde(default)]
+    pub held: Option<Held>,
+    /// A choice waiting for an answer on this machine (`wrap`, M12), `null` when none.
+    #[serde(default)]
+    pub pending: Option<PendingChoice>,
 }
 
 /// One row of `history`.
@@ -88,6 +130,9 @@ pub struct HistoryEntry {
     pub time: String,
     /// It holds the server's current revision.
     pub current: bool,
+    /// The entry's save card; `null` for entries pushed before cards (M14).
+    #[serde(default)]
+    pub card: Option<Card>,
 }
 
 /// `data` of `history`: newest first, at most `retention::KEEP` plus any conflict backups not
@@ -146,6 +191,92 @@ pub struct SignInPrompt {
     pub message: String,
 }
 
+/// One row of `where`: a game this machine remembers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WhereGame {
+    pub game: String,
+    /// The machine that has it open (its mark, this machine's own included); `null` when none.
+    pub held: Option<Held>,
+    /// The server's current saves; `null` when nothing was pushed yet.
+    pub server: Option<Side>,
+}
+
+/// `data` of `where`: every game this machine remembers, by id. Unreachable is an error (exit 5).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WhereData {
+    pub games: Vec<WhereGame>,
+}
+
+/// Where a wrapped game's saves folder came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WhichSource {
+    /// A manifest of the person's own (always wins).
+    Manifest,
+    /// The ludusavi-manifest data.
+    Ludusavi,
+}
+
+/// `data` of `which <appid>`. No clear folder is the error `save_location_unclear` (exit 2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WhichData {
+    pub app_id: u32,
+    /// `steam-<appid>`.
+    pub game: String,
+    /// The game's name in the data or the manifest.
+    pub name: String,
+    pub saves_dir: String,
+    /// The files that count as saves, relative to `saves_dir`.
+    pub include: Vec<String>,
+    pub source: WhichSource,
+    pub message: String,
+}
+
+/// One launch option `install-wrap` changed (or would, with `--dry-run`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstallWrapApp {
+    pub app_id: u32,
+    /// The Steam user whose `localconfig.vdf` holds it.
+    pub user_id: String,
+    pub before: Option<String>,
+    pub after: Option<String>,
+}
+
+/// `data` of `install-wrap`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstallWrapData {
+    pub dry_run: bool,
+    pub changed: Vec<InstallWrapApp>,
+    /// The backup files written (none with `--dry-run`).
+    pub backups: Vec<String>,
+    pub message: String,
+}
+
+/// `data` of `answer`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnswerData {
+    pub game: String,
+    pub kind: ChoiceKind,
+    pub answer: Answer,
+    pub message: String,
+}
+
+/// `data` of `picture <game> <entry> --out <file>`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PictureData {
+    /// The file written.
+    pub path: String,
+    pub bytes: u64,
+}
+
+/// `data` of `panel`: printed once, when it is listening.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelData {
+    /// `http://127.0.0.1:<port>/?token=<token>`.
+    pub url: String,
+    pub port: u16,
+}
+
 /// `{"ok":true,"command":<command>,"data":<data>}` on one line, no trailing newline.
 pub fn success<T: Serialize>(command: &str, data: &T) -> String {
     crate::not_built!("api::success")
@@ -157,13 +288,15 @@ pub fn failure(command: &str, error: &Error) -> String {
     crate::not_built!("api::failure")
 }
 
-/// The exit code of a command that succeeded: 3 for `Action::Conflict`, else 0.
+/// The exit code of a command that succeeded: 3 for `Action::Conflict`, 6 for `Action::Held`,
+/// else 0.
 pub fn exit_code_for(action: Action) -> i32 {
     crate::not_built!("api::exit_code_for")
 }
 
 /// The exit code of a failed command:
-/// 2 `usage`, `manifest_invalid`, `game_unknown`, `no_such_entry`;
+/// 2 `usage`, `manifest_invalid`, `game_unknown`, `no_such_entry`, `save_location_unclear`,
+/// `steam_not_found`, `steam_running`, `no_pending_choice`;
 /// 4 `not_set_up`, `auth_failed`, `credentials`, `reauth_needed`, `sign_in_failed`;
 /// 5 `server_unreachable`, `server_error`, `state_invalid`, `changed_on_server`, `not_found`;
 /// 1 anything else (`io`, `not_built`).

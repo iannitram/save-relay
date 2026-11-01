@@ -7,6 +7,15 @@
 //! save-relay status  <game> [--manifest <file>] [--saves-dir <dir>] [--json]
 //! save-relay history <game> [--json]
 //! save-relay restore <game> <entry> [--manifest <file>] [--saves-dir <dir>] [--json]
+//! save-relay pull    <game> --anyway [...]       (play past another machine's open-elsewhere mark)
+//! save-relay wrap    [--game <id>] [--manifest <file>] [--saves-dir <dir>] -- <command>...
+//!                    (Steam launch option `save-relay wrap -- %command%`: pull, run, push)
+//! save-relay which   <appid> [--json]
+//! save-relay install-wrap (<appid>... | --all-known) [--remove] [--dry-run] [--json]
+//! save-relay answer  <game> keep-server|keep-local|play-anyway|wait [--json]
+//! save-relay where   [--json]
+//! save-relay picture <game> <entry> --out <file> [--json]
+//! save-relay panel   [--port <n>] [--no-open] [--json]
 //! save-relay setup   [--service nextcloud] --server <url> --user <name> [--device <name>] [--root <folder>] [--json]
 //!                    (reads the app password from the first line of standard input)
 //! save-relay setup   --service gdrive|dropbox [--no-browser | --finish] [--device <name>] [--root <folder>] [--json]
@@ -18,6 +27,7 @@
 //! ```
 
 use crate::error::{not_built, Result};
+use crate::pending::Answer;
 use crate::service::Service;
 use crate::sync::Resolve;
 use std::io::{Read, Write};
@@ -52,6 +62,11 @@ pub enum Command {
         game: GameArg,
         resolve: Option<Resolve>,
     },
+    /// `pull --anyway` (M11): a sibling of `Pull`, so #10's struct literals stay valid.
+    PullAnyway {
+        game: GameArg,
+        resolve: Option<Resolve>,
+    },
     Push {
         game: GameArg,
         resolve: Option<Resolve>,
@@ -80,6 +95,46 @@ pub enum Command {
         device: Option<String>,
         root: String,
         step: SignInStep,
+    },
+    /// M12: `wrap [--game <id>] [--manifest <file>] [--saves-dir <dir>] -- <command>...`.
+    /// No `--game` is `steam-<appid>` from the environment (`wrap::game_id`); `command` is
+    /// everything after `--` and may not be empty.
+    Wrap {
+        game: Option<String>,
+        manifest: Option<PathBuf>,
+        saves_dir: Option<PathBuf>,
+        command: Vec<String>,
+    },
+    /// M13: `which <appid>`.
+    Which {
+        app_id: u32,
+    },
+    /// M12: `install-wrap <appid>...` or `--all-known` (every app id in the ludusavi data that
+    /// is installed); not both, and one of them.
+    InstallWrap {
+        app_ids: Vec<u32>,
+        all_known: bool,
+        remove: bool,
+        dry_run: bool,
+    },
+    /// M12: `answer <game> <answer>` (`pending::Answer::parse`).
+    Answer {
+        game: String,
+        answer: Answer,
+    },
+    /// M11: `where`.
+    Where,
+    /// M14: `picture <game> <entry> --out <file>`.
+    Picture {
+        game: String,
+        entry: String,
+        out: PathBuf,
+    },
+    /// M15: `panel [--port <n>] [--no-open]`; `open` is false with `--no-open`. With `--json`
+    /// it prints `api::PanelData` as one envelope line once it listens, then serves.
+    Panel {
+        port: Option<u16>,
+        open: bool,
     },
     Help,
     Version,
@@ -111,8 +166,9 @@ pub fn parse(args: &[String]) -> Result<Args> {
     not_built("cli::parse")
 }
 
-/// The command's name as it appears in the envelope: "pull", "push", "status", "history",
-/// "restore", "setup" (both setup forms), "help", "version".
+/// The command's name as it appears in the envelope: "pull" (`Pull` and `PullAnyway`), "push",
+/// "status", "history", "restore", "setup" (both setup forms), "wrap", "which",
+/// "install-wrap", "answer", "where", "picture", "panel", "help", "version".
 pub fn command_name(command: &Command) -> &'static str {
     crate::not_built!("cli::command_name")
 }

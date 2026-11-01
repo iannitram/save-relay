@@ -2,7 +2,12 @@
 //! `incoming/<entry>/` and is renamed into `history/<entry>/` only when every file is there, so
 //! a broken upload never becomes a revision (SPEC.md). A download writes each file to a part
 //! name, checks its hash, then renames it over the old one.
+//!
+//! A save card (`card::CARD_FILE`) and its picture go into `history/<entry>/` after the MOVE
+//! and before `state.json` (`put_card`): a crash in between leaves an entry with no card,
+//! which reads as `card: null`, never a broken revision.
 
+use crate::card::Card;
 use crate::error::{not_built, Result};
 use crate::layout::Layout;
 use crate::remote::Remote;
@@ -65,4 +70,41 @@ pub fn read_record(
     entry: &str,
 ) -> Result<SaveSet> {
     not_built("transfer::read_record")
+}
+
+/// Write `card` as `history/<entry>/` + `card::CARD_FILE`, and the picture first when given
+/// (`(file name, bytes)`, the name being `card::PictureKind::file_name`). Called by `sync::push`
+/// after `upload_entry` and before `state.json`; `upload_entry` is unchanged.
+pub fn put_card(
+    remote: &dyn Remote,
+    layout: &Layout,
+    game: &str,
+    entry: &str,
+    card: &Card,
+    picture: Option<(&str, &[u8])>,
+) -> Result<()> {
+    not_built("transfer::put_card")
+}
+
+/// The card of history entry `entry`. Missing or unreadable is `Ok(None)` (old entries have
+/// none); only a server failure is an error.
+pub fn read_card(
+    remote: &dyn Remote,
+    layout: &Layout,
+    game: &str,
+    entry: &str,
+) -> Result<Option<Card>> {
+    not_built("transfer::read_card")
+}
+
+/// The picture named by `card.picture` in entry `entry`: its bytes and MIME type
+/// (`card::PictureKind::mime`). No picture is `Error::NotFound`.
+pub fn get_picture(
+    remote: &dyn Remote,
+    layout: &Layout,
+    game: &str,
+    entry: &str,
+    card: &Card,
+) -> Result<(Vec<u8>, String)> {
+    not_built("transfer::get_picture")
 }

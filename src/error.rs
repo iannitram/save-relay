@@ -48,6 +48,17 @@ pub enum Error {
     /// A sign-in in the browser during `setup` did not finish: refused, timed out, or the
     /// answer did not match the request.
     SignInFailed(String),
+    /// A wrapped game has no clear saves folder (M13): no entry for its Steam app id in the
+    /// ludusavi data, an entry with no save paths for this OS, or more than one folder that
+    /// could be it. Never guessed. The string says which, and what was looked at.
+    SaveLocationUnclear(String),
+    /// No Steam installation was found (`steam`); the string names the folders looked at.
+    SteamNotFound(String),
+    /// `install-wrap` found Steam running: Steam rewrites `localconfig.vdf` when it quits, so
+    /// the change would be lost. save-relay never closes Steam itself.
+    SteamRunning,
+    /// `answer` named a game with no pending choice on this machine (`pending`).
+    NoPendingChoice(String),
     /// A local file operation failed.
     Io(String),
 }
@@ -73,6 +84,10 @@ impl Error {
             Error::Credentials(_) => "credentials",
             Error::ReauthNeeded(_) => "reauth_needed",
             Error::SignInFailed(_) => "sign_in_failed",
+            Error::SaveLocationUnclear(_) => "save_location_unclear",
+            Error::SteamNotFound(_) => "steam_not_found",
+            Error::SteamRunning => "steam_running",
+            Error::NoPendingChoice(_) => "no_pending_choice",
             Error::Io(_) => "io",
         }
     }
@@ -105,6 +120,19 @@ impl fmt::Display for Error {
                 "the sign-in to {s} has expired or was withdrawn: run `save-relay setup` again"
             ),
             Error::SignInFailed(m) => write!(f, "sign-in failed: {m}"),
+            Error::SaveLocationUnclear(m) => write!(
+                f,
+                "no clear saves folder: {m}; write a manifest for this game and pass --manifest"
+            ),
+            Error::SteamNotFound(m) => write!(
+                f,
+                "Steam was not found ({m}): set SAVE_RELAY_STEAM_DIR to its folder"
+            ),
+            Error::SteamRunning => write!(
+                f,
+                "Steam is running: quit Steam, then run install-wrap again"
+            ),
+            Error::NoPendingChoice(g) => write!(f, "no choice is waiting for game '{g}'"),
             Error::Io(m) => write!(f, "{m}"),
         }
     }
