@@ -81,7 +81,8 @@ fn scan_directory(
     exclude: &[String],
     files: &mut Vec<FileEntry>,
 ) -> Result<()> {
-    let entries = fs::read_dir(dir).map_err(|error| Error::Io(format!("{}: {error}", dir.display())))?;
+    let entries =
+        fs::read_dir(dir).map_err(|error| Error::Io(format!("{}: {error}", dir.display())))?;
     for entry in entries {
         let entry = entry.map_err(|error| Error::Io(format!("{}: {error}", dir.display())))?;
         let path = entry.path();
