@@ -3,7 +3,7 @@
 //! `http::Transport` (the real one is behind the `http` feature), so the core builds without a
 //! network stack. Its overwrite guard is the server's own `If-Match`.
 
-use crate::error::{Error, Result, not_built};
+use crate::error::{not_built, Error, Result};
 use crate::remote::RemoteEntry;
 use quick_xml::events::Event;
 use quick_xml::name::ResolveResult;

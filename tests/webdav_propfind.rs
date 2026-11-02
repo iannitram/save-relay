@@ -1,6 +1,6 @@
-use save_relay::Error;
 use save_relay::remote::RemoteEntry;
 use save_relay::webdav::parse_propfind;
+use save_relay::Error;
 
 fn entry(name: &str, is_dir: bool, size: u64, etag: Option<&str>) -> RemoteEntry {
     RemoteEntry {
