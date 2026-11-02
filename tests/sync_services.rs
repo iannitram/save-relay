@@ -159,6 +159,8 @@ fn push_then_pull(r: &dyn Remote, _online: &dyn Fn(bool)) {
     assert_eq!(two.saves(), "first");
     assert_eq!(state(r).revision, 1);
     assert_eq!(state(r).device, "device-one");
+    // Machine two's launch left its mark; closing the game clears it, so machine one is not held.
+    assert_eq!(two.push(r, None).unwrap().action, Action::Noop);
     assert_eq!(one.pull(r, None).unwrap().action, Action::Noop);
 }
 

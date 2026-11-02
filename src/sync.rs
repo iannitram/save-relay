@@ -5,12 +5,13 @@
 //! claim guard on Google Drive, M9), applies `retention`, and records `LastSynced`. It never
 //! knows which service it talks to.
 //!
-//! Planned for M11-M14 (docs/adr/0003-baton-wrap-cards-panel.md): `pull` reads and writes the game's
-//! open-elsewhere mark (`presence`) and asks `plan::decide_with_mark`; `push` writes a save
-//! card into each new history entry (`transfer::put_card`) and removes this machine's mark.
+//! `pull` reads the game's open-elsewhere mark (`presence`, M11), asks `plan::decide_with_mark` and
+//! writes this machine's mark after a launch that synced; `push` clears it again
+//! (docs/adr/0003-baton-wrap-cards-panel.md). Planned for M14: each new history entry gets a save
+//! card (`transfer::put_card`).
 
 use crate::api::{
-    Action, HistoryData, HistoryEntry, PictureData, RestoreData, Side, StatusData, SyncData,
+    Action, Held, HistoryData, HistoryEntry, PictureData, RestoreData, Side, StatusData, SyncData,
     SyncReport, WhereData,
 };
 use crate::error::{not_built, Error, Result};
@@ -18,7 +19,8 @@ use crate::layout::{entry_name, parse_entry_name, Layout};
 use crate::local::LocalStore;
 use crate::manifest::Manifest;
 use crate::plan::{self, Decision, Intent, ServerView};
-use crate::remote::{Precondition, Remote, RemoteEntry};
+use crate::presence::{self, Hold, Mark};
+use crate::remote::{ensure_dir, Precondition, Remote, RemoteEntry};
 use crate::scan::{scan, SaveSet};
 use crate::state::{LastSynced, ServerState, FORMAT};
 use crate::{retention, stamp, transfer};
@@ -50,51 +52,59 @@ pub enum Resolve {
     KeepLocal,
 }
 
-/// Before Play (M1, M3, M5). `plan::decide(Intent::Launch, ..)`, then: Noop; Adopt (record
+/// Before Play (M1, M3, M5, M11). The mark is read first (`read_mark`: no file, or one that does
+/// not parse, is no mark), then `plan::decide_with_mark(Intent::Launch, ..)`: Noop; Adopt (record
 /// only); Pull (download the current entry); Push (offline play caught up: upload as a new
 /// revision); Offline (touch nothing, `Action::Offline`); Conflict (touch nothing,
-/// `Action::Conflict`) unless `resolve` is given, which settles it as described on `Resolve`.
-///
-/// Planned for M11: first reads `playing.json`; another machine's mark is `Action::Held` (touch nothing,
-/// `held` set) unless `anyway` (`pull --anyway`). After its own work, even a `noop`, it writes
-/// this machine's mark (`Precondition::Any`) and the session start (`LocalStore::save_session`);
-/// offline it writes neither. The report carries both sides' cards when there are two (M14).
+/// `Action::Conflict`) unless `resolve` is given, which settles it as described on `Resolve`;
+/// Held (another machine's mark and not `anyway`: touch nothing, `Action::Held`, `held` set).
+/// After Noop, Adopt, Pull or Push, even a resolved conflict, this machine writes its mark
+/// (`write_mark`); offline and an unresolved conflict write nothing. The session start (M14) is
+/// not written here. The report carries both sides' cards when there are two (M14).
 pub fn pull(
     s: &Session,
     game: &Game,
     store: &LocalStore,
     resolve: Option<Resolve>,
-    _anyway: bool,
+    anyway: bool,
 ) -> Result<SyncReport> {
-    sync(s, game, store, resolve, Intent::Launch)
+    sync(s, game, store, resolve, Intent::Launch, anyway)
 }
 
-/// After the game quits (M2, M3, M5). `plan::decide(Intent::Exit, ..)`, then: Push (upload,
+/// After the game quits (M2, M3, M5, M11). `plan::decide(Intent::Exit, ..)`, then: Push (upload,
 /// new revision with this device and time, then retention); unreachable is `Action::Deferred`;
-/// the rest as in `pull`.
+/// the rest as in `pull`. The mark is not read to decide: at exit `decide_with_mark` ignores it.
+/// After Noop, Adopt, Pull (a resolved conflict) or Push, `clear_mark` removes `playing.json`, but
+/// only when it names this device: another machine's mark stays. A `deferred` push and an
+/// unresolved conflict leave it, since the saves are still only here.
 ///
-/// Planned for M14: each new entry gets a card (`card::for_push`: the session start for playtime, the
-/// sidecar's place and picture) through `transfer::put_card` after the MOVE and before
-/// `state.json`. M11: after the push, removes `playing.json` only when it names this device,
-/// and clears the session start; a `deferred` push leaves both.
+/// Planned for M14: each new entry gets a card (`card::for_push`: the session start for playtime,
+/// the sidecar's place and picture) through `transfer::put_card` after the MOVE and before
+/// `state.json`. The session start (M14) is not cleared here.
 pub fn push(
     s: &Session,
     game: &Game,
     store: &LocalStore,
     resolve: Option<Resolve>,
 ) -> Result<SyncReport> {
-    sync(s, game, store, resolve, Intent::Exit)
+    sync(s, game, store, resolve, Intent::Exit, false)
 }
 
-// M11's mark/anyway handling and M14's cards are added by their own issues.
+// The mark (M11) is read and written by `pull`, and cleared by `push`; the cards (M14) come later.
 fn sync(
     s: &Session,
     game: &Game,
     store: &LocalStore,
     resolve: Option<Resolve>,
     intent: Intent,
+    anyway: bool,
 ) -> Result<SyncReport> {
     let id = &game.manifest.id;
+    // Only a launch reads the mark: a push decides without it.
+    let hold = match intent {
+        Intent::Launch => presence::check(read_mark(s, id)?.as_ref(), &s.device),
+        Intent::Exit => Hold::Free,
+    };
     let (state, pre, reachable) = read_server(s, id)?;
     let local = scan(
         &game.saves_dir,
@@ -113,7 +123,8 @@ fn sync(
         counts: transfer::Counts::default(),
         message: "No saves transferred.".into(),
     };
-    let mut decision = plan::decide(intent, &local, last.as_ref(), &view);
+    let mut held = None;
+    let mut decision = plan::decide_with_mark(intent, &hold, anyway, &local, last.as_ref(), &view);
     if decision == Decision::Conflict {
         match resolve {
             Some(Resolve::KeepServer) => {
@@ -236,14 +247,98 @@ fn sync(
             data.revision = None;
             data.message = "Local and server saves changed: choose which to keep.".into();
         }
-        Decision::Held => unreachable!("plan::decide does not return Held"),
+        Decision::Held => match hold {
+            Hold::Elsewhere { device, since } => {
+                let by = Held { device, since };
+                data.action = Action::Held;
+                data.revision = None;
+                data.message = held_message(&by);
+                held = Some(by);
+            }
+            Hold::Free | Hold::Mine => {
+                unreachable!("decide_with_mark answers Held only for another machine's mark")
+            }
+        },
+    }
+    if synced(data.action) {
+        let outcome = match intent {
+            Intent::Launch => write_mark(s, id, data.revision),
+            Intent::Exit => clear_mark(s, id),
+        };
+        if let Err(error) = outcome {
+            let verb = match intent {
+                Intent::Launch => "write",
+                Intent::Exit => "clear",
+            };
+            // The saves are already in step; the mark is advice, so this is not the command's error.
+            data.message = format!("{} Could not {verb} playing.json: {error}.", data.message);
+        }
     }
     Ok(SyncReport {
         sync: data,
-        held: None,
+        held,
         server_card: None,
         local_card: None,
     })
+}
+
+/// The line `pull` and `status` give for another machine's mark (M11).
+fn held_message(held: &Held) -> String {
+    format!("{} has the game open since {}.", held.device, held.since)
+}
+
+/// The actions after which this machine's saves and the server's revision agree, so the mark is
+/// written (launch) or cleared (exit). Not after `offline`, `deferred`, an unresolved `conflict`
+/// or `held`: then the saves are still only here, or nothing was decided.
+fn synced(action: Action) -> bool {
+    matches!(
+        action,
+        Action::Noop | Action::Adopted | Action::Pulled | Action::Pushed
+    )
+}
+
+/// This game's mark (M11). No file, a file that is not a valid `Mark` (a broken mark is no mark)
+/// and an unreachable server are all `None`.
+fn read_mark(s: &Session, game: &str) -> Result<Option<Mark>> {
+    match s.remote.get(&s.layout.playing_path(game)) {
+        Ok((bytes, _)) => Ok(std::str::from_utf8(&bytes)
+            .ok()
+            .and_then(|text| Mark::from_json(text).ok())),
+        Err(Error::NotFound(_) | Error::Unreachable(_)) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+/// Writes this machine's mark after a launch that synced (M11). `Precondition::Any`: the mark is
+/// advice and takes no part in the compare-and-swap of `state.json`. The game's folder is made
+/// first, for a game nothing was ever pushed for.
+fn write_mark(s: &Session, game: &str, revision_read: Option<u64>) -> Result<()> {
+    let mark = Mark {
+        format: presence::FORMAT,
+        device: s.device.clone(),
+        since: stamp::rfc3339(s.now),
+        revision_read,
+    };
+    ensure_dir(s.remote, &s.layout.game_dir(game))?;
+    s.remote.put(
+        &s.layout.playing_path(game),
+        mark.to_json().as_bytes(),
+        &Precondition::Any,
+    )?;
+    Ok(())
+}
+
+/// Removes `playing.json` only when it names this device (M11): read, `presence::check` is `Mine`,
+/// then delete. Another machine's mark, and a broken one, stay. A file already gone is fine.
+fn clear_mark(s: &Session, game: &str) -> Result<()> {
+    let mark = read_mark(s, game)?;
+    if presence::check(mark.as_ref(), &s.device) != Hold::Mine {
+        return Ok(());
+    }
+    match s.remote.delete(&s.layout.playing_path(game)) {
+        Err(Error::NotFound(_)) => Ok(()),
+        other => other,
+    }
 }
 
 fn server_side(state: &ServerState) -> Side {
@@ -274,7 +369,7 @@ fn read_server(s: &Session, id: &str) -> Result<(Option<ServerState>, Preconditi
     }
 }
 
-/// What `plan::decide` gets as the server's side.
+/// What `plan::decide_with_mark` gets as the server's side.
 fn server_view(state: Option<&ServerState>, reachable: bool) -> ServerView {
     match state {
         Some(state) => ServerView::At {
@@ -359,6 +454,7 @@ fn record_sync(
 /// `held` is another machine's mark; `pending` is this machine's pending choice, if any.
 pub fn status(s: &Session, game: &Game, store: &LocalStore) -> Result<StatusData> {
     let id = &game.manifest.id;
+    let hold = presence::check(read_mark(s, id)?.as_ref(), &s.device);
     let (state, _, reachable) = read_server(s, id)?;
     let local = scan(
         &game.saves_dir,
@@ -367,7 +463,17 @@ pub fn status(s: &Session, game: &Game, store: &LocalStore) -> Result<StatusData
     )?;
     let last = store.load_last(id)?;
     let view = server_view(state.as_ref(), reachable);
-    let would = plan::decide(Intent::Launch, &local, last.as_ref(), &view);
+    let would = plan::decide_with_mark(Intent::Launch, &hold, false, &local, last.as_ref(), &view);
+    let held = match hold {
+        Hold::Elsewhere { device, since } if would == Decision::Held => {
+            Some(Held { device, since })
+        }
+        _ => None,
+    };
+    let message = match &held {
+        Some(by) => held_message(by),
+        None => status_message(would),
+    };
     Ok(StatusData {
         game: id.clone(),
         // The service is the CLI's to name (it holds the config); `sync` does not know it.
@@ -378,9 +484,9 @@ pub fn status(s: &Session, game: &Game, store: &LocalStore) -> Result<StatusData
         local: local_side(s, &local, last.as_ref()),
         last_synced_revision: last.as_ref().map(|last| last.revision),
         local_changed: local_changed(&local, last.as_ref()),
-        message: status_message(would),
-        // The open-elsewhere mark (M11) and pending choices (M12) are not read yet.
-        held: None,
+        message,
+        // Another machine's mark (M11); pending choices (M12) are not read yet.
+        held,
         pending: None,
     })
 }
