@@ -277,23 +277,131 @@ pub fn parse(args: &[String]) -> Result<Args> {
         "setup" => {
             let flags = split(
                 &args[1..],
-                &["--server", "--user", "--device", "--root"],
-                &[],
+                &["--service", "--server", "--user", "--device", "--root"],
+                &["--no-browser", "--finish"],
             )?;
             require(&flags.positionals, 0, &[])?;
-            let server = match flags.flag("--server") {
-                Some(value) => value.to_string(),
-                None => return missing("--server"),
+            let server = flags.flag("--server");
+            let user = flags.flag("--user");
+            let device = flags.flag("--device").map(String::from);
+            let root = flags.flag("--root").unwrap_or(DEFAULT_ROOT).to_string();
+            let no_browser = flags.has("--no-browser");
+            let finish = flags.has("--finish");
+            if no_browser && finish {
+                return Err(Error::Usage(
+                    "--no-browser and --finish cannot be used together".to_string(),
+                ));
+            }
+            let step = if no_browser {
+                SignInStep::Code
+            } else if finish {
+                SignInStep::Finish
+            } else {
+                SignInStep::Browser
             };
-            let user = match flags.flag("--user") {
-                Some(value) => value.to_string(),
-                None => return missing("--user"),
+            let service = match flags.flag("--service") {
+                Some("nextcloud") => Some(Service::Nextcloud),
+                Some("gdrive") => Some(Service::Gdrive),
+                Some("dropbox") => Some(Service::Dropbox),
+                Some(value) => {
+                    return Err(Error::Usage(format!(
+                        "unknown service '{value}': use nextcloud, gdrive or dropbox"
+                    )));
+                }
+                None => None,
             };
-            Command::Setup {
-                server,
-                user,
-                device: flags.flag("--device").map(String::from),
-                root: flags.flag("--root").unwrap_or(DEFAULT_ROOT).to_string(),
+            match service {
+                Some(Service::Nextcloud) => {
+                    if no_browser {
+                        return Err(Error::Usage(
+                            "--no-browser requires an OAuth service".to_string(),
+                        ));
+                    }
+                    if finish {
+                        return Err(Error::Usage(
+                            "--finish requires an OAuth service".to_string(),
+                        ));
+                    }
+                    let server = match server {
+                        Some(value) => value.to_string(),
+                        None => return missing("--server"),
+                    };
+                    let user = match user {
+                        Some(value) => value.to_string(),
+                        None => return missing("--user"),
+                    };
+                    Command::Setup {
+                        server,
+                        user,
+                        device,
+                        root,
+                    }
+                }
+                None if server.is_some() || user.is_some() => {
+                    if no_browser {
+                        return Err(Error::Usage(
+                            "--no-browser requires an OAuth service".to_string(),
+                        ));
+                    }
+                    if finish {
+                        return Err(Error::Usage(
+                            "--finish requires an OAuth service".to_string(),
+                        ));
+                    }
+                    let server = match server {
+                        Some(value) => value.to_string(),
+                        None => return missing("--server"),
+                    };
+                    let user = match user {
+                        Some(value) => value.to_string(),
+                        None => return missing("--user"),
+                    };
+                    Command::Setup {
+                        server,
+                        user,
+                        device,
+                        root,
+                    }
+                }
+                Some(service @ (Service::Gdrive | Service::Dropbox)) => {
+                    if server.is_some() {
+                        return Err(Error::Usage(
+                            "--server cannot be used with this service".to_string(),
+                        ));
+                    }
+                    if user.is_some() {
+                        return Err(Error::Usage(
+                            "--user cannot be used with this service".to_string(),
+                        ));
+                    }
+                    Command::SetupService {
+                        service: Some(service),
+                        device,
+                        root,
+                        step,
+                    }
+                }
+                None => {
+                    if no_browser {
+                        return Err(Error::Usage(
+                            "--no-browser requires an OAuth service".to_string(),
+                        ));
+                    }
+                    if finish {
+                        return Err(Error::Usage(
+                            "--finish requires an OAuth service".to_string(),
+                        ));
+                    }
+                    if json {
+                        return Err(Error::Usage("--json setup requires --service".to_string()));
+                    }
+                    Command::SetupService {
+                        service: None,
+                        device,
+                        root,
+                        step: SignInStep::Browser,
+                    }
+                }
             }
         }
         "which" => {
