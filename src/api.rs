@@ -279,19 +279,52 @@ pub struct PanelData {
 
 /// `{"ok":true,"command":<command>,"data":<data>}` on one line, no trailing newline.
 pub fn success<T: Serialize>(command: &str, data: &T) -> String {
-    crate::not_built!("api::success")
+    #[derive(Serialize)]
+    struct SuccessEnvelope<'a, T> {
+        ok: bool,
+        command: &'a str,
+        data: &'a T,
+    }
+
+    serde_json::to_string(&SuccessEnvelope {
+        ok: true,
+        command,
+        data,
+    })
+    .expect("serializing API success envelope should not fail")
 }
 
 /// `{"ok":false,"command":<command>,"error":{"code":<error.code()>,"message":<error's Display>}}`
 /// on one line, no trailing newline.
 pub fn failure(command: &str, error: &Error) -> String {
-    crate::not_built!("api::failure")
+    #[derive(Serialize)]
+    struct FailureEnvelope<'a> {
+        ok: bool,
+        command: &'a str,
+        error: ErrorDetail,
+    }
+
+    #[derive(Serialize)]
+    struct ErrorDetail {
+        code: &'static str,
+        message: String,
+    }
+
+    serde_json::to_string(&FailureEnvelope {
+        ok: false,
+        command,
+        error: ErrorDetail {
+            code: error.code(),
+            message: error.to_string(),
+        },
+    })
+    .expect("serializing API failure envelope should not fail")
 }
 
 /// The exit code of a command that succeeded: 3 for `Action::Conflict`, 6 for `Action::Held`,
 /// else 0.
 pub fn exit_code_for(action: Action) -> i32 {
-    crate::not_built!("api::exit_code_for")
+    if action == Action::Conflict { 3 } else { 0 }
 }
 
 /// The exit code of a failed command:
@@ -301,5 +334,25 @@ pub fn exit_code_for(action: Action) -> i32 {
 /// 5 `server_unreachable`, `server_error`, `state_invalid`, `changed_on_server`, `not_found`;
 /// 1 anything else (`io`, `not_built`).
 pub fn exit_code(error: &Error) -> i32 {
-    crate::not_built!("api::exit_code")
+    match error {
+        Error::Usage(_)
+        | Error::ManifestInvalid(_)
+        | Error::GameUnknown(_)
+        | Error::NoSuchEntry(_)
+        | Error::SaveLocationUnclear(_)
+        | Error::SteamNotFound(_)
+        | Error::SteamRunning
+        | Error::NoPendingChoice(_) => 2,
+        Error::NotSetUp
+        | Error::AuthFailed
+        | Error::Credentials(_)
+        | Error::ReauthNeeded(_)
+        | Error::SignInFailed(_) => 4,
+        Error::Unreachable(_)
+        | Error::Server(_)
+        | Error::StateInvalid(_)
+        | Error::Changed
+        | Error::NotFound(_) => 5,
+        Error::Io(_) | Error::NotBuilt(_) => 1,
+    }
 }
