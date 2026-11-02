@@ -58,9 +58,7 @@ impl Manifest {
     /// segment. The first failure is returned.
     pub fn validate(&self) -> Result<()> {
         if self.format != FORMAT {
-            return Err(Error::ManifestInvalid(format!(
-                "format: expected {FORMAT}"
-            )));
+            return Err(Error::ManifestInvalid(format!("format: expected {FORMAT}")));
         }
         if self.id.is_empty()
             || self.id.len() > 64
@@ -111,9 +109,9 @@ pub fn expand(template: &str, vars: &PathVars) -> Result<PathBuf> {
     while let Some(open) = remaining.find('{') {
         result.push_str(&remaining[..open]);
         let placeholder = &remaining[open + 1..];
-        let close = placeholder.find('}').ok_or_else(|| {
-            Error::ManifestInvalid("saves: unclosed placeholder".into())
-        })?;
+        let close = placeholder
+            .find('}')
+            .ok_or_else(|| Error::ManifestInvalid("saves: unclosed placeholder".into()))?;
         let name = &placeholder[..close];
         let path = match name {
             "home" => &vars.home,
