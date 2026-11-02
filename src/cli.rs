@@ -163,6 +163,56 @@ pub struct Args {
 /// `--service`, `--server` or `--user` is `SetupService { service: None, .. }`, except with
 /// `--json`, where it is `Error::Usage` naming `--service` (a launcher must say which).
 pub fn parse(args: &[String]) -> Result<Args> {
+    let first_non_json = args
+        .iter()
+        .find(|arg| arg.as_str() != "--json")
+        .map(String::as_str);
+
+    if first_non_json == Some("wrap") {
+        let dash_pos = args.iter().position(|arg| arg.as_str() == "--");
+        let before_dash = match dash_pos {
+            Some(idx) => &args[..idx],
+            None => args,
+        };
+        if before_dash.iter().any(|arg| arg.as_str() == "--password") {
+            return Err(Error::Usage(
+                "the password is read from standard input, not from --password".to_string(),
+            ));
+        }
+        let dash_idx = match dash_pos {
+            Some(idx) => idx,
+            None => return missing("--"),
+        };
+        let command: Vec<String> = args[dash_idx + 1..].to_vec();
+        if command.is_empty() {
+            return missing("<command>");
+        }
+        let json = args[..dash_idx].iter().any(|arg| arg.as_str() == "--json");
+        let before: Vec<&str> = args[..dash_idx]
+            .iter()
+            .filter(|arg| arg.as_str() != "--json")
+            .map(String::as_str)
+            .collect();
+        let flags = split(
+            &before[1..],
+            &["--game", "--manifest", "--saves-dir"],
+            &[],
+        )?;
+        require(&flags.positionals, 0, &[])?;
+        let game = flags.flag("--game").map(String::from);
+        let manifest = flags.flag("--manifest").map(PathBuf::from);
+        let saves_dir = flags.flag("--saves-dir").map(PathBuf::from);
+        return Ok(Args {
+            command: Command::Wrap {
+                game,
+                manifest,
+                saves_dir,
+                command,
+            },
+            json,
+        });
+    }
+
     if args.iter().any(|arg| arg == "--password") {
         return Err(Error::Usage(
             "the password is read from standard input, not from --password".to_string(),
@@ -184,15 +234,26 @@ pub fn parse(args: &[String]) -> Result<Args> {
         "help" | "--help" | "-h" => Command::Help,
         "version" | "--version" | "-V" => Command::Version,
         "pull" => {
-            let flags = split(&args[1..], &["--manifest", "--saves-dir", "--resolve"])?;
+            let flags = split(
+                &args[1..],
+                &["--manifest", "--saves-dir", "--resolve"],
+                &["--anyway"],
+            )?;
             require(&flags.positionals, 1, &["<game>"])?;
-            Command::Pull {
-                game: game_arg(flags.positionals[0], &flags),
-                resolve: resolve(&flags)?,
+            let game = game_arg(flags.positionals[0], &flags);
+            let resolve = resolve(&flags)?;
+            if flags.has("--anyway") {
+                Command::PullAnyway { game, resolve }
+            } else {
+                Command::Pull { game, resolve }
             }
         }
         "push" => {
-            let flags = split(&args[1..], &["--manifest", "--saves-dir", "--resolve"])?;
+            let flags = split(
+                &args[1..],
+                &["--manifest", "--saves-dir", "--resolve"],
+                &[],
+            )?;
             require(&flags.positionals, 1, &["<game>"])?;
             Command::Push {
                 game: game_arg(flags.positionals[0], &flags),
@@ -200,21 +261,21 @@ pub fn parse(args: &[String]) -> Result<Args> {
             }
         }
         "status" => {
-            let flags = split(&args[1..], &["--manifest", "--saves-dir"])?;
+            let flags = split(&args[1..], &["--manifest", "--saves-dir"], &[])?;
             require(&flags.positionals, 1, &["<game>"])?;
             Command::Status {
                 game: game_arg(flags.positionals[0], &flags),
             }
         }
         "history" => {
-            let flags = split(&args[1..], &[])?;
+            let flags = split(&args[1..], &[], &[])?;
             require(&flags.positionals, 1, &["<game>"])?;
             Command::History {
                 game: flags.positionals[0].to_string(),
             }
         }
         "restore" => {
-            let flags = split(&args[1..], &["--manifest", "--saves-dir"])?;
+            let flags = split(&args[1..], &["--manifest", "--saves-dir"], &[])?;
             require(&flags.positionals, 2, &["<game>", "<entry>"])?;
             Command::Restore {
                 game: game_arg(flags.positionals[0], &flags),
@@ -222,7 +283,11 @@ pub fn parse(args: &[String]) -> Result<Args> {
             }
         }
         "setup" => {
-            let flags = split(&args[1..], &["--server", "--user", "--device", "--root"])?;
+            let flags = split(
+                &args[1..],
+                &["--server", "--user", "--device", "--root"],
+                &[],
+            )?;
             require(&flags.positionals, 0, &[])?;
             let server = match flags.flag("--server") {
                 Some(value) => value.to_string(),
@@ -239,6 +304,96 @@ pub fn parse(args: &[String]) -> Result<Args> {
                 root: flags.flag("--root").unwrap_or(DEFAULT_ROOT).to_string(),
             }
         }
+        "which" => {
+            let flags = split(&args[1..], &[], &[])?;
+            require(&flags.positionals, 1, &["<appid>"])?;
+            let app_id = parse_app_id(flags.positionals[0])?;
+            Command::Which { app_id }
+        }
+        "install-wrap" => {
+            let flags = split(&args[1..], &[], &["--all-known", "--remove", "--dry-run"])?;
+            let all_known = flags.has("--all-known");
+            let remove = flags.has("--remove");
+            let dry_run = flags.has("--dry-run");
+            if all_known && !flags.positionals.is_empty() {
+                return Err(Error::Usage(
+                    "cannot use both <appid> and --all-known".to_string(),
+                ));
+            }
+            if !all_known && flags.positionals.is_empty() {
+                return Err(Error::Usage(
+                    "missing <appid> or --all-known".to_string(),
+                ));
+            }
+            let mut app_ids = Vec::with_capacity(flags.positionals.len());
+            for pos in &flags.positionals {
+                app_ids.push(parse_app_id(pos)?);
+            }
+            app_ids.sort_unstable();
+            app_ids.dedup();
+            Command::InstallWrap {
+                app_ids,
+                all_known,
+                remove,
+                dry_run,
+            }
+        }
+        "answer" => {
+            let flags = split(&args[1..], &[], &[])?;
+            require(&flags.positionals, 2, &["<game>", "<answer>"])?;
+            let answer = match Answer::parse(flags.positionals[1]) {
+                Some(a) => a,
+                None => {
+                    return Err(Error::Usage(format!(
+                        "unknown answer '{}': use keep-server, keep-local, play-anyway or wait",
+                        flags.positionals[1]
+                    )));
+                }
+            };
+            Command::Answer {
+                game: flags.positionals[0].to_string(),
+                answer,
+            }
+        }
+        "where" => {
+            let flags = split(&args[1..], &[], &[])?;
+            require(&flags.positionals, 0, &[])?;
+            Command::Where
+        }
+        "picture" => {
+            let flags = split(&args[1..], &["--out"], &[])?;
+            require(&flags.positionals, 2, &["<game>", "<entry>"])?;
+            let out = match flags.flag("--out") {
+                Some(value) => PathBuf::from(value),
+                None => return missing("--out"),
+            };
+            Command::Picture {
+                game: flags.positionals[0].to_string(),
+                entry: flags.positionals[1].to_string(),
+                out,
+            }
+        }
+        "panel" => {
+            let flags = split(&args[1..], &["--port"], &["--no-open"])?;
+            require(&flags.positionals, 0, &[])?;
+            let port = match flags.flag("--port") {
+                None => None,
+                Some(value) => {
+                    let p = match value.parse::<u16>() {
+                        Ok(p) if p >= 1 => p,
+                        _ => {
+                            return Err(Error::Usage(format!(
+                                "--port must be a whole number from 1 to {}",
+                                u16::MAX
+                            )));
+                        }
+                    };
+                    Some(p)
+                }
+            };
+            let open = !flags.has("--no-open");
+            Command::Panel { port, open }
+        }
         other => {
             return Err(Error::Usage(format!("unknown command '{other}'")));
         }
@@ -249,6 +404,7 @@ pub fn parse(args: &[String]) -> Result<Args> {
 struct Flags<'a> {
     positionals: Vec<&'a str>,
     values: Vec<(&'a str, &'a str)>,
+    switches: Vec<&'a str>,
 }
 
 impl<'a> Flags<'a> {
@@ -260,35 +416,63 @@ impl<'a> Flags<'a> {
         }
         None
     }
+
+    fn has(&self, name: &str) -> bool {
+        self.switches.contains(&name)
+    }
 }
 
-fn split<'a>(args: &[&'a str], allowed: &[&str]) -> Result<Flags<'a>> {
+fn split<'a>(
+    args: &[&'a str],
+    allowed_values: &[&str],
+    allowed_switches: &[&str],
+) -> Result<Flags<'a>> {
     let mut flags = Flags {
         positionals: Vec::new(),
         values: Vec::new(),
+        switches: Vec::new(),
     };
     let mut index = 0;
     while index < args.len() {
         let arg = args[index];
-        if arg.starts_with('-') && arg != "-" {
-            if !allowed.contains(&arg) {
+        let is_negative_number =
+            arg.len() > 1 && arg.starts_with('-') && arg[1..].chars().all(|c| c.is_ascii_digit());
+        if arg.starts_with('-') && arg != "-" && !is_negative_number {
+            if allowed_switches.contains(&arg) {
+                if flags.switches.contains(&arg) {
+                    return Err(Error::Usage(format!("flag '{arg}' given twice")));
+                }
+                flags.switches.push(arg);
+                index += 1;
+            } else if allowed_values.contains(&arg) {
+                if flags.values.iter().any(|(name, _)| *name == arg) {
+                    return Err(Error::Usage(format!("flag '{arg}' given twice")));
+                }
+                let value = match args.get(index + 1) {
+                    Some(value) => *value,
+                    None => return Err(Error::Usage(format!("flag '{arg}' needs a value"))),
+                };
+                flags.values.push((arg, value));
+                index += 2;
+            } else {
                 return Err(Error::Usage(format!("unknown flag '{arg}'")));
             }
-            if flags.values.iter().any(|(name, _)| *name == arg) {
-                return Err(Error::Usage(format!("flag '{arg}' given twice")));
-            }
-            let value = match args.get(index + 1) {
-                Some(value) => *value,
-                None => return Err(Error::Usage(format!("flag '{arg}' needs a value"))),
-            };
-            flags.values.push((arg, value));
-            index += 2;
         } else {
             flags.positionals.push(arg);
             index += 1;
         }
     }
     Ok(flags)
+}
+
+fn parse_app_id(text: &str) -> Result<u32> {
+    match text.parse::<u32>() {
+        Ok(id) if id >= 1 => Ok(id),
+        _ => Err(Error::Usage(format!(
+            "<appid> must be a whole number from 1 to {}",
+            u32::MAX
+        ))),
+    }
 }
 
 fn require(positionals: &[&str], count: usize, missing: &[&str]) -> Result<()> {
@@ -364,6 +548,14 @@ Commands:
   status  <game> [--manifest <file>] [--saves-dir <dir>]
   history <game>
   restore <game> <entry> [--manifest <file>] [--saves-dir <dir>]
+  pull    <game> --anyway [...]
+  wrap    [--game <id>] [--manifest <file>] [--saves-dir <dir>] -- <command>...
+  which   <appid>
+  install-wrap (<appid>... | --all-known) [--remove] [--dry-run]
+  answer  <game> keep-server|keep-local|play-anyway|wait
+  where
+  picture <game> <entry> --out <file>
+  panel   [--port <n>] [--no-open]
   setup   --server <url> --user <name> [--device <name>] [--root <folder>]
           (reads the app password from the first line of standard input)
   help | --help | -h
