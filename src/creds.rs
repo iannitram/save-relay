@@ -112,7 +112,9 @@ impl CredentialStore for MemoryStore {
     }
 }
 
-/// The system credential store, through the `keyring` crate (added by its issue).
+/// The system credential store, through the `keyring` crate: Secret Service on Linux (pure-Rust
+/// zbus backend), Credential Manager on Windows, Keychain on macOS. Each account is one entry
+/// under the service name `SERVICE`.
 #[cfg(feature = "keyring")]
 #[derive(Debug, Default)]
 pub struct KeyringStore {
@@ -126,18 +128,96 @@ impl KeyringStore {
     }
 }
 
+/// An error for the user, built from the failure's kind only: never the crate's own text, which
+/// could carry bytes of the stored value (`BadEncoding`).
+#[cfg(feature = "keyring")]
+fn credentials_error(what: &str, err: &keyring::Error) -> Error {
+    use keyring::Error as K;
+    let why = match err {
+        K::NoDefaultStore => "no credential store is available on this machine",
+        K::NoStorageAccess(_) => "the credential store is locked or cannot be reached",
+        K::PlatformFailure(_) => "the credential store reported a failure",
+        K::TooLong(..) => "the value is too long for the credential store",
+        K::BadEncoding(_) | K::BadDataFormat(..) | K::BadStoreFormat(_) => {
+            "the stored value is not readable"
+        }
+        K::Ambiguous(_) => "more than one entry matches this account",
+        _ => "the credential store refused the request",
+    };
+    Error::Credentials(format!("{what}: {why}"))
+}
+
+#[cfg(feature = "keyring")]
+fn entry(account: &str) -> Result<keyring::Entry> {
+    keyring::Entry::new(SERVICE, account).map_err(|e| credentials_error("open entry", &e))
+}
+
 #[cfg(feature = "keyring")]
 impl CredentialStore for KeyringStore {
     fn get(&self, account: &str) -> Result<Option<Secret>> {
-        crate::error::not_built("creds::KeyringStore::get")
+        match entry(account)?.get_password() {
+            Ok(value) => Ok(Some(Secret::new(value))),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(e) => Err(credentials_error("read", &e)),
+        }
     }
     fn set(&self, account: &str, secret: &Secret) -> Result<()> {
-        crate::error::not_built("creds::KeyringStore::set")
+        entry(account)?
+            .set_password(secret.expose())
+            .map_err(|e| credentials_error("store", &e))
     }
     fn delete(&self, account: &str) -> Result<()> {
-        crate::error::not_built("creds::KeyringStore::delete")
+        match entry(account)?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(e) => Err(credentials_error("delete", &e)),
+        }
     }
     fn kind(&self) -> &'static str {
-        crate::not_built!("creds::KeyringStore::kind")
+        if cfg!(target_os = "windows") {
+            "windows-credential-manager"
+        } else if cfg!(target_os = "macos") {
+            "macos-keychain"
+        } else {
+            "secret-service"
+        }
+    }
+}
+
+#[cfg(all(test, feature = "keyring"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kind_names_the_platform_store() {
+        let k = KeyringStore::new().kind();
+        assert!([
+            "secret-service",
+            "windows-credential-manager",
+            "macos-keychain"
+        ]
+        .contains(&k));
+    }
+
+    #[test]
+    fn error_text_has_no_secret() {
+        let e = credentials_error("read", &keyring::Error::BadEncoding(b"hunter2".to_vec()));
+        assert!(!e.to_string().contains("hunter2"));
+    }
+
+    /// Needs a real, unlocked credential store: run by hand on each OS with
+    /// `cargo test --lib -- --ignored keyring_round_trip`.
+    #[test]
+    #[ignore]
+    fn keyring_round_trip() {
+        let store = KeyringStore::new();
+        let account = format!("save-relay-test-{}@throwaway.invalid", std::process::id());
+        assert!(store.get(&account).unwrap().is_none());
+        store.set(&account, &Secret::new("first")).unwrap();
+        assert_eq!(store.get(&account).unwrap().unwrap().expose(), "first");
+        store.set(&account, &Secret::new("second")).unwrap();
+        assert_eq!(store.get(&account).unwrap().unwrap().expose(), "second");
+        store.delete(&account).unwrap();
+        assert!(store.get(&account).unwrap().is_none());
+        store.delete(&account).unwrap();
     }
 }
