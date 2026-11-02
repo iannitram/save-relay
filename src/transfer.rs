@@ -15,7 +15,7 @@ use crate::scan::{hash_bytes, SaveSet};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH};
 
 /// The suffix of a file being downloaded, before it is renamed into place.
@@ -28,6 +28,22 @@ fn local_path(saves_dir: &Path, path: &str) -> PathBuf {
         full.push(segment);
     }
     full
+}
+
+/// A save path from a record can never lead out of the saves folder: every segment must be a
+/// plain name on this OS (no `..`, `.`, drive prefix, root or `\` separator), so `local_path`
+/// stays under `saves_dir`. Anything else is `Error::StateInvalid`.
+fn check_save_path(path: &str) -> Result<()> {
+    let plain = !path.is_empty()
+        && path.split('/').filter(|s| !s.is_empty()).all(|segment| {
+            let mut parts = Path::new(segment).components();
+            matches!(parts.next(), Some(Component::Normal(_))) && parts.next().is_none()
+        });
+    if plain {
+        Ok(())
+    } else {
+        Err(Error::StateInvalid(format!("unsafe save path: {path}")))
+    }
 }
 
 fn io_err(path: &Path, err: std::io::Error) -> Error {
@@ -156,6 +172,9 @@ pub fn download_entry(
     saves_dir: &Path,
     local: &SaveSet,
 ) -> Result<Counts> {
+    for file in wanted.files.iter().chain(&local.files) {
+        check_save_path(&file.path)?;
+    }
     let entry_dir = layout.entry_dir(game, entry);
     let mut staged: Vec<(PathBuf, PathBuf)> = Vec::new();
     if let Err(err) = stage_downloads(remote, &entry_dir, wanted, saves_dir, local, &mut staged) {
@@ -164,8 +183,13 @@ pub fn download_entry(
         }
         return Err(err);
     }
-    for (part, target) in &staged {
-        fs::rename(part, target).map_err(|e| io_err(target, e))?;
+    for (index, (part, target)) in staged.iter().enumerate() {
+        if let Err(e) = fs::rename(part, target) {
+            for (left, _) in &staged[index..] {
+                let _ = fs::remove_file(left);
+            }
+            return Err(io_err(target, e));
+        }
     }
     let mut deleted = 0u32;
     for old in &local.files {

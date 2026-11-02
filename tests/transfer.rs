@@ -230,3 +230,32 @@ fn read_record_cases() {
         Err(Error::StateInvalid(_))
     ));
 }
+
+#[test]
+fn download_refuses_paths_that_leave_the_saves_folder() {
+    let remote = MemoryRemote::new();
+    let root = temp("unsafe");
+    let dest = root.join("saves");
+    fs::create_dir_all(&dest).unwrap();
+    for bad in ["../escape.sav", "slots/../../escape.sav", "./a.sav", ".."] {
+        let mut wanted = SaveSet::default();
+        wanted.files.push(save_relay::scan::FileEntry {
+            path: bad.to_string(),
+            size: 1,
+            mtime: 0,
+            sha256: save_relay::scan::hash_bytes(b"x"),
+        });
+        let err = download_entry(
+            &remote,
+            &layout(),
+            GAME,
+            ENTRY,
+            &wanted,
+            &dest,
+            &SaveSet::default(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::StateInvalid(_)), "{bad}: {err:?}");
+    }
+    assert!(!root.join("escape.sav").exists());
+}
