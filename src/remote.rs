@@ -5,7 +5,9 @@
 //! Paths are relative to the files URL, `/`-separated, no leading or trailing `/`; `""` is the
 //! files root, which always exists.
 
-use crate::error::{not_built, Result};
+use crate::error::{Error, Result};
+use std::collections::BTreeMap;
+use std::sync::{Mutex, MutexGuard};
 
 /// One child of a listed folder.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,7 +53,101 @@ pub trait Remote {
 
 /// `mkcol` `dir` and every missing folder above it, top down.
 pub fn ensure_dir(remote: &dyn Remote, dir: &str) -> Result<()> {
-    not_built("remote::ensure_dir")
+    let mut current = String::new();
+    for part in dir.split('/').filter(|part| !part.is_empty()) {
+        if !current.is_empty() {
+            current.push('/');
+        }
+        current.push_str(part);
+        remote.mkcol(&current)?;
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone)]
+enum Node {
+    File { bytes: Vec<u8>, etag: String },
+    Dir,
+}
+
+#[derive(Debug)]
+struct Inner {
+    nodes: BTreeMap<String, Node>,
+    next_etag: u64,
+    reachable: bool,
+}
+
+impl Default for Inner {
+    fn default() -> Inner {
+        Inner {
+            nodes: BTreeMap::new(),
+            next_etag: 1,
+            reachable: true,
+        }
+    }
+}
+
+fn parent_of(path: &str) -> &str {
+    match path.rsplit_once('/') {
+        Some((parent, _)) => parent,
+        None => "",
+    }
+}
+
+impl Inner {
+    fn offline(&self) -> Result<()> {
+        if self.reachable {
+            Ok(())
+        } else {
+            Err(Error::Unreachable("memory remote is offline".to_string()))
+        }
+    }
+
+    fn is_dir(&self, path: &str) -> bool {
+        path.is_empty() || matches!(self.nodes.get(path), Some(Node::Dir))
+    }
+
+    fn is_file(&self, path: &str) -> bool {
+        matches!(self.nodes.get(path), Some(Node::File { .. }))
+    }
+
+    fn require_dir(&self, path: &str) -> Result<()> {
+        if self.is_dir(path) {
+            Ok(())
+        } else {
+            Err(Error::NotFound(path.to_string()))
+        }
+    }
+
+    fn tree_paths(&self, from: &str) -> Vec<String> {
+        let prefix = format!("{from}/");
+        self.nodes
+            .keys()
+            .filter(|path| *path == from || path.starts_with(&prefix))
+            .cloned()
+            .collect()
+    }
+
+    fn remove_tree(&mut self, path: &str) {
+        let prefix = format!("{path}/");
+        self.nodes
+            .retain(|key, _| key != path && !key.starts_with(&prefix));
+    }
+
+    fn copy_tree(&mut self, from: &str, to: &str) {
+        let entries: Vec<(String, Node)> = self
+            .tree_paths(from)
+            .into_iter()
+            .map(|path| {
+                let rest = &path[from.len()..];
+                let node = self.nodes.get(&path).cloned().expect("tree path exists");
+                (format!("{to}{rest}"), node)
+            })
+            .collect();
+        for (path, node) in entries {
+            self.nodes.insert(path, node);
+        }
+    }
 }
 
 /// An in-memory server for tests: files and folders in a map, etags that change on every
@@ -59,7 +155,7 @@ pub fn ensure_dir(remote: &dyn Remote, dir: &str) -> Result<()> {
 /// Interior mutability (a `Mutex`), so it is used through `&self` like a real server.
 #[derive(Debug, Default)]
 pub struct MemoryRemote {
-    _private: (),
+    inner: Mutex<Inner>,
 }
 
 impl MemoryRemote {
@@ -67,42 +163,194 @@ impl MemoryRemote {
         MemoryRemote::default()
     }
 
+    fn lock(&self) -> MutexGuard<'_, Inner> {
+        self.inner.lock().expect("memory remote lock poisoned")
+    }
+
     /// While `false`, every `Remote` call returns `Error::Unreachable("memory remote is offline")`.
     pub fn set_reachable(&self, reachable: bool) {
-        crate::not_built!("remote::MemoryRemote::set_reachable")
+        self.lock().reachable = reachable;
     }
 
     /// Every file path, sorted (folders left out). Works while unreachable.
     pub fn file_paths(&self) -> Vec<String> {
-        crate::not_built!("remote::MemoryRemote::file_paths")
+        let inner = self.lock();
+        inner
+            .nodes
+            .iter()
+            .filter_map(|(path, node)| match node {
+                Node::File { .. } => Some(path.clone()),
+                Node::Dir => None,
+            })
+            .collect()
     }
 
     /// A file's bytes, or `None`. Works while unreachable.
     pub fn read(&self, path: &str) -> Option<Vec<u8>> {
-        crate::not_built!("remote::MemoryRemote::read")
+        match self.lock().nodes.get(path) {
+            Some(Node::File { bytes, .. }) => Some(bytes.clone()),
+            _ => None,
+        }
     }
 }
 
 impl Remote for MemoryRemote {
     fn list(&self, dir: &str) -> Result<Vec<RemoteEntry>> {
-        not_built("remote::MemoryRemote::list")
+        let inner = self.lock();
+        inner.offline()?;
+        inner.require_dir(dir)?;
+        let prefix = format!("{dir}/");
+        let mut entries: Vec<RemoteEntry> = inner
+            .nodes
+            .iter()
+            .filter_map(|(path, node)| {
+                let name = if dir.is_empty() {
+                    if path.contains('/') {
+                        return None;
+                    }
+                    path.as_str()
+                } else {
+                    path.strip_prefix(&prefix)?
+                };
+                if name.is_empty() || name.contains('/') {
+                    return None;
+                }
+                let entry = match node {
+                    Node::File { bytes, etag } => RemoteEntry {
+                        name: name.to_string(),
+                        is_dir: false,
+                        size: bytes.len() as u64,
+                        etag: Some(etag.clone()),
+                    },
+                    Node::Dir => RemoteEntry {
+                        name: name.to_string(),
+                        is_dir: true,
+                        size: 0,
+                        etag: None,
+                    },
+                };
+                Some(entry)
+            })
+            .collect();
+        entries.sort_by(|left, right| left.name.cmp(&right.name));
+        Ok(entries)
     }
+
     fn get(&self, path: &str) -> Result<(Vec<u8>, String)> {
-        not_built("remote::MemoryRemote::get")
+        let inner = self.lock();
+        inner.offline()?;
+        match inner.nodes.get(path) {
+            Some(Node::File { bytes, etag }) => Ok((bytes.clone(), etag.clone())),
+            _ => Err(Error::NotFound(path.to_string())),
+        }
     }
+
     fn put(&self, path: &str, bytes: &[u8], pre: &Precondition) -> Result<String> {
-        not_built("remote::MemoryRemote::put")
+        let mut inner = self.lock();
+        inner.offline()?;
+        if path.is_empty() {
+            return Err(Error::Server("cannot write the files root".to_string()));
+        }
+        let existing = inner.nodes.get(path);
+        match pre {
+            Precondition::Any => {}
+            Precondition::Match(etag) => {
+                let matches = matches!(
+                    existing,
+                    Some(Node::File { etag: current, .. }) if current == etag
+                );
+                if !matches {
+                    return Err(Error::Changed);
+                }
+            }
+            Precondition::Absent => {
+                if existing.is_some() {
+                    return Err(Error::Changed);
+                }
+            }
+        }
+        if matches!(existing, Some(Node::Dir)) {
+            return Err(Error::Server(format!("a folder is already at '{path}'")));
+        }
+        let parent = parent_of(path);
+        if !inner.is_dir(parent) {
+            return Err(Error::NotFound(parent.to_string()));
+        }
+        let etag = format!("\"{}\"", inner.next_etag);
+        inner.next_etag += 1;
+        inner.nodes.insert(
+            path.to_string(),
+            Node::File {
+                bytes: bytes.to_vec(),
+                etag: etag.clone(),
+            },
+        );
+        Ok(etag)
     }
+
     fn mkcol(&self, dir: &str) -> Result<()> {
-        not_built("remote::MemoryRemote::mkcol")
+        let mut inner = self.lock();
+        inner.offline()?;
+        if dir.is_empty() {
+            return Ok(());
+        }
+        let parent = parent_of(dir);
+        if !inner.is_dir(parent) {
+            return Err(Error::NotFound(parent.to_string()));
+        }
+        let existing = inner.nodes.get(dir);
+        if matches!(existing, Some(Node::Dir)) {
+            return Ok(());
+        }
+        if matches!(existing, Some(Node::File { .. })) {
+            return Err(Error::Server(format!("a file is already at '{dir}'")));
+        }
+        inner.nodes.insert(dir.to_string(), Node::Dir);
+        Ok(())
     }
+
     fn copy(&self, from: &str, to: &str) -> Result<()> {
-        not_built("remote::MemoryRemote::copy")
+        let mut inner = self.lock();
+        inner.offline()?;
+        if !inner.is_dir(from) && !inner.is_file(from) {
+            return Err(Error::NotFound(from.to_string()));
+        }
+        if to.is_empty() || inner.nodes.contains_key(to) {
+            return Err(Error::Server(format!("something is already at '{to}'")));
+        }
+        let parent = parent_of(to);
+        if !inner.is_dir(parent) {
+            return Err(Error::NotFound(parent.to_string()));
+        }
+        inner.copy_tree(from, to);
+        Ok(())
     }
+
     fn move_to(&self, from: &str, to: &str) -> Result<()> {
-        not_built("remote::MemoryRemote::move_to")
+        let mut inner = self.lock();
+        inner.offline()?;
+        if !inner.is_dir(from) && !inner.is_file(from) {
+            return Err(Error::NotFound(from.to_string()));
+        }
+        if to.is_empty() || inner.nodes.contains_key(to) {
+            return Err(Error::Server(format!("something is already at '{to}'")));
+        }
+        let parent = parent_of(to);
+        if !inner.is_dir(parent) {
+            return Err(Error::NotFound(parent.to_string()));
+        }
+        inner.copy_tree(from, to);
+        inner.remove_tree(from);
+        Ok(())
     }
+
     fn delete(&self, path: &str) -> Result<()> {
-        not_built("remote::MemoryRemote::delete")
+        let mut inner = self.lock();
+        inner.offline()?;
+        if !inner.is_dir(path) && !inner.is_file(path) {
+            return Err(Error::NotFound(path.to_string()));
+        }
+        inner.remove_tree(path);
+        Ok(())
     }
 }
