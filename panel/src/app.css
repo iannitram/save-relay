@@ -58,9 +58,11 @@ p {
   border-radius: 10px;
   cursor: pointer;
 }
-/* Focus is the one thing a controller shows: a thick, high-contrast ring. */
-.btn:focus,
-.btn:focus-visible {
+/* Focus is the one thing a controller shows: a thick, high-contrast ring. `data-focused` is
+   set by the focus scope (focus.ts) so the ring shows from the first load, not only after a key
+   press; a mouse click does not set it. */
+.btn:focus-visible,
+.btn[data-focused] {
   outline: 5px solid var(--accent);
   outline-offset: 3px;
   background: #2a3647;
