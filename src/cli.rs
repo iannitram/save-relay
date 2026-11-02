@@ -193,11 +193,7 @@ pub fn parse(args: &[String]) -> Result<Args> {
             .filter(|arg| arg.as_str() != "--json")
             .map(String::as_str)
             .collect();
-        let flags = split(
-            &before[1..],
-            &["--game", "--manifest", "--saves-dir"],
-            &[],
-        )?;
+        let flags = split(&before[1..], &["--game", "--manifest", "--saves-dir"], &[])?;
         require(&flags.positionals, 0, &[])?;
         let game = flags.flag("--game").map(String::from);
         let manifest = flags.flag("--manifest").map(PathBuf::from);
@@ -249,11 +245,7 @@ pub fn parse(args: &[String]) -> Result<Args> {
             }
         }
         "push" => {
-            let flags = split(
-                &args[1..],
-                &["--manifest", "--saves-dir", "--resolve"],
-                &[],
-            )?;
+            let flags = split(&args[1..], &["--manifest", "--saves-dir", "--resolve"], &[])?;
             require(&flags.positionals, 1, &["<game>"])?;
             Command::Push {
                 game: game_arg(flags.positionals[0], &flags),
@@ -321,9 +313,7 @@ pub fn parse(args: &[String]) -> Result<Args> {
                 ));
             }
             if !all_known && flags.positionals.is_empty() {
-                return Err(Error::Usage(
-                    "missing <appid> or --all-known".to_string(),
-                ));
+                return Err(Error::Usage("missing <appid> or --all-known".to_string()));
             }
             let mut app_ids = Vec::with_capacity(flags.positionals.len());
             for pos in &flags.positionals {

@@ -444,11 +444,23 @@ fn panel_with_and_without_json_in_two_flag_orders() {
     // defaults
     assert_eq!(
         p("panel"),
-        ok(Command::Panel { port: None, open: true }, false)
+        ok(
+            Command::Panel {
+                port: None,
+                open: true
+            },
+            false
+        )
     );
     assert_eq!(
         p("panel --no-open"),
-        ok(Command::Panel { port: None, open: false }, false)
+        ok(
+            Command::Panel {
+                port: None,
+                open: false
+            },
+            false
+        )
     );
 
     // without --json, flag order 1
@@ -486,11 +498,23 @@ fn panel_with_and_without_json_in_two_flag_orders() {
     // port boundaries
     assert_eq!(
         p("panel --port 1"),
-        ok(Command::Panel { port: Some(1), open: true }, false)
+        ok(
+            Command::Panel {
+                port: Some(1),
+                open: true
+            },
+            false
+        )
     );
     assert_eq!(
         p("panel --port 65535"),
-        ok(Command::Panel { port: Some(65535), open: true }, false)
+        ok(
+            Command::Panel {
+                port: Some(65535),
+                open: true
+            },
+            false
+        )
     );
 }
 
@@ -533,12 +557,7 @@ fn command_name_covers_every_variant() {
             },
             "status",
         ),
-        (
-            Command::History {
-                game: "g".into(),
-            },
-            "history",
-        ),
+        (Command::History { game: "g".into() }, "history"),
         (
             Command::Restore {
                 game: game("g", None, None),
@@ -573,12 +592,7 @@ fn command_name_covers_every_variant() {
             },
             "wrap",
         ),
-        (
-            Command::Which {
-                app_id: 123,
-            },
-            "which",
-        ),
+        (Command::Which { app_id: 123 }, "which"),
         (
             Command::InstallWrap {
                 app_ids: vec![123],
