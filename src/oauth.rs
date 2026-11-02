@@ -17,10 +17,11 @@
 use crate::clients::Client;
 use crate::creds::Secret;
 use crate::error::{not_built, Result};
-use crate::http::Transport;
+use crate::http::{Request, Transport};
 use crate::service::Service;
 use crate::stamp::Clock;
-use std::sync::Arc;
+use std::fmt;
+use std::sync::{Arc, Mutex};
 
 /// Refresh an access token this many seconds before it expires.
 pub const REFRESH_MARGIN: u64 = 60;
@@ -333,7 +334,26 @@ pub fn needs_refresh(expires_at: u64, now: u64) -> bool {
 /// Access tokens for one service, refreshed from the stored refresh token as needed.
 /// Interior mutability (a `Mutex`), used through `&self` by a backend.
 pub struct TokenSource {
-    _private: (),
+    provider: &'static Provider,
+    client: Client,
+    transport: Arc<dyn Transport>,
+    clock: Clock,
+    state: Mutex<State>,
+}
+
+#[derive(Debug)]
+struct State {
+    cached: Option<Tokens>,
+    refresh: Secret,
+    rotated: Option<Secret>,
+}
+
+impl fmt::Debug for TokenSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TokenSource")
+            .field("service", &self.provider.service)
+            .finish()
+    }
 }
 
 impl TokenSource {
@@ -345,24 +365,73 @@ impl TokenSource {
         transport: Arc<dyn Transport>,
         clock: Clock,
     ) -> TokenSource {
-        TokenSource { _private: () }
+        TokenSource {
+            provider,
+            client,
+            transport,
+            clock,
+            state: Mutex::new(State {
+                cached: None,
+                refresh,
+                rotated: None,
+            }),
+        }
     }
 
     /// A valid access token: the cached one, or a new one from the token endpoint when none is
     /// cached or `needs_refresh`. `invalid_grant` is `Error::ReauthNeeded`.
     pub fn bearer(&self) -> Result<Secret> {
-        not_built("oauth::TokenSource::bearer")
+        let mut state = self.state.lock().expect("token source lock poisoned");
+        let now = (self.clock)();
+        if let Some(ref tokens) = state.cached {
+            if !needs_refresh(tokens.expires_at, now) {
+                return Ok(tokens.access.clone());
+            }
+        }
+
+        let refresh_token = state.refresh.expose();
+        let mut pairs: Vec<(&str, &str)> = Vec::new();
+        pairs.push(("client_id", self.client.id));
+        if self.provider.service == Service::Gdrive {
+            pairs.push(("client_secret", self.client.secret.unwrap_or("")));
+        }
+        pairs.push(("refresh_token", refresh_token));
+        pairs.push(("grant_type", "refresh_token"));
+
+        let body = form_encode(&pairs);
+        let request = Request::new("POST", self.provider.token_url)
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(body.into_bytes());
+
+        let response = self.transport.send(&request)?;
+        let tokens = parse_token_response(
+            self.provider.service,
+            response.status,
+            &response.text(),
+            now,
+        )?;
+
+        if let Some(ref new_refresh) = tokens.refresh {
+            state.refresh = new_refresh.clone();
+            state.rotated = Some(new_refresh.clone());
+        }
+
+        let access = tokens.access.clone();
+        state.cached = Some(tokens);
+        Ok(access)
     }
 
     /// Forget the cached access token (a backend calls this after a 401, then retries once).
     pub fn invalidate(&self) {
-        crate::not_built!("oauth::TokenSource::invalidate")
+        let mut state = self.state.lock().expect("token source lock poisoned");
+        state.cached = None;
     }
 
     /// A new refresh token the service sent on a refresh, which the caller must store in place
     /// of the old one; `None` when it did not rotate.
     pub fn rotated(&self) -> Option<Secret> {
-        crate::not_built!("oauth::TokenSource::rotated")
+        let mut state = self.state.lock().expect("token source lock poisoned");
+        state.rotated.take()
     }
 }
 
