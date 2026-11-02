@@ -72,6 +72,12 @@ impl Manifest {
                 "id: must be 1-64 lowercase letters, digits, or hyphens, starting with a letter or digit".into(),
             ));
         }
+        if is_windows_reserved(&self.id) {
+            return Err(Error::ManifestInvalid(
+                "id: is a name Windows reserves for devices (con, prn, aux, nul, com0-9, lpt0-9)"
+                    .into(),
+            ));
+        }
         if self.name.is_empty() {
             return Err(Error::ManifestInvalid("name: must not be empty".into()));
         }
@@ -144,4 +150,13 @@ fn validate_pattern(pattern: &str, field: &str) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+/// The game id is a folder name on the server, and the Windows sync client cannot make a folder
+/// with one of these names, so they are refused as ids (lowercase, as ids are).
+fn is_windows_reserved(id: &str) -> bool {
+    matches!(id, "con" | "prn" | "aux" | "nul")
+        || (id.len() == 4
+            && (id.starts_with("com") || id.starts_with("lpt"))
+            && id.as_bytes()[3].is_ascii_digit())
 }
