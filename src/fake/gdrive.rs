@@ -900,7 +900,8 @@ impl Inner {
         if let Some(response) = self.validate_parents(&node.parents) {
             return response;
         }
-        if node.parents.iter().any(|parent| self.is_at_or_below(parent, id)) {
+        let inside_itself = node.parents.iter().any(|parent| self.is_at_or_below(parent, id));
+        if inside_itself {
             return bad_request("fake drive: a folder cannot move into itself or its subtree");
         }
         if let Some(bytes) = content {
