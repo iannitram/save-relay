@@ -30,7 +30,7 @@ The password is read privately during setup and saved in the system credential s
 
 ## Google Drive
 
-Setup opens your browser. Sign in to the Google account you want to use and approve access. Drive access is limited to `drive.file`: save-relay can see files it created, not your other Drive files. Its files are in a visible App folder named `save-relay` in My Drive, so you can find and rescue them yourself.
+Setup opens your browser. Sign in to the Google account you want to use and approve access. Drive access is limited to `drive.file`: save-relay can see files it created, not your other Drive files. Its files are in a normal `save-relay` folder in My Drive, so you can find and rescue them yourself.
 
 ```text
 save-relay setup --service gdrive
