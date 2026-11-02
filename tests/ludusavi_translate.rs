@@ -315,12 +315,22 @@ fn parent_segments_and_windows_reserved_names_never_reach_the_manifest() {
     let parent = entry(json!({
         "<home>/../escape/*.sav": {"tags": ["save"]}
     }));
-    let message = unclear(locate(&parent, &facts(Platform::Mac), &["fixture/escape"], &[]));
+    let message = unclear(locate(
+        &parent,
+        &facts(Platform::Mac),
+        &["fixture/escape"],
+        &[],
+    ));
     assert!(message.contains("no existing save folder"));
     let reserved = entry(json!({
         "<home>/saves/CON.sav": {"tags": ["save"]}
     }));
-    match locate(&reserved, &facts(Platform::Mac), &["fixture/home/saves"], &[]) {
+    match locate(
+        &reserved,
+        &facts(Platform::Mac),
+        &["fixture/home/saves"],
+        &[],
+    ) {
         Err(Error::ManifestInvalid(message)) => assert!(message.contains("CON.sav")),
         other => panic!("expected an invalid manifest, got {other:?}"),
     }
