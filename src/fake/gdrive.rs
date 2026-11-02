@@ -40,6 +40,8 @@ const MONTHS: [&str; 12] = [
 // - omitting `parents` on create puts the file in My Drive's root.
 // - deleting a folder removes everything below it.
 // - `copy` copies a file only; a folder copy is refused, as Drive has no folder copy.
+// - a folder cannot move under itself or under its own subtree: `files.update` answers 400 and
+//   changes nothing, so no cycle forms and no subtree drops out of My Drive.
 // - access tokens are retired only by `expire_access_tokens` or `revoke`; `advance` exists for
 //   lease ages, not token expiry.
 
@@ -581,6 +583,24 @@ impl Inner {
         None
     }
 
+    /// True when `id` is `folder` or lies below it, following parents upward from `id`.
+    fn is_at_or_below(&self, id: &str, folder: &str) -> bool {
+        let mut seen = BTreeSet::new();
+        let mut pending = vec![id.to_string()];
+        while let Some(current) = pending.pop() {
+            if current == folder {
+                return true;
+            }
+            if !seen.insert(current.clone()) {
+                continue;
+            }
+            if let Some(node) = self.nodes.get(&current) {
+                pending.extend(node.parents.iter().cloned());
+            }
+        }
+        false
+    }
+
     fn children(&self, parent: &str, name: Option<&str>) -> Vec<String> {
         let mut children: Vec<&Node> = self
             .nodes
@@ -879,6 +899,9 @@ impl Inner {
         }
         if let Some(response) = self.validate_parents(&node.parents) {
             return response;
+        }
+        if node.parents.iter().any(|parent| self.is_at_or_below(parent, id)) {
+            return bad_request("fake drive: a folder cannot move into itself or its subtree");
         }
         if let Some(bytes) = content {
             if node.is_dir {

@@ -754,3 +754,67 @@ fn a_create_with_a_missing_parent_is_not_found() {
     assert!(response.text().contains("not-a-folder"));
     assert!(fake.file_paths().is_empty());
 }
+
+#[test]
+fn a_folder_cannot_move_into_itself_or_its_subtree() {
+    let fake = FakeDrive::new();
+    let access = token(&fake);
+    let outer = create_json(
+        &fake,
+        &access,
+        json!({"name": "outer", "mimeType": FOLDER_MIME, "parents": ["root"]}),
+    );
+    let outer_id = id_of(&outer);
+    let inner = create_json(
+        &fake,
+        &access,
+        json!({"name": "inner", "mimeType": FOLDER_MIME, "parents": [outer_id.clone()]}),
+    );
+    let inner_id = id_of(&inner);
+    let file = create_json(
+        &fake,
+        &access,
+        json!({"name": "save.json", "parents": [inner_id.clone()]}),
+    );
+    assert_eq!(file.status, 201);
+    let before = fake.file_paths();
+    assert_eq!(before, vec!["outer/inner/save.json"]);
+
+    // Drive refuses a folder moved under itself or under its own subtree.
+    let into_subtree = update_json_at(
+        &fake,
+        &access,
+        &format!("{API}/files/{outer_id}?addParents={inner_id}&removeParents=root"),
+        json!({}),
+    );
+    assert_eq!(into_subtree.status, 400, "{}", into_subtree.text());
+    let into_self = update_json_at(
+        &fake,
+        &access,
+        &format!("{API}/files/{outer_id}?addParents={outer_id}"),
+        json!({}),
+    );
+    assert_eq!(into_self.status, 400, "{}", into_self.text());
+    let by_metadata = update_json(
+        &fake,
+        &access,
+        &outer_id,
+        json!({"parents": [inner_id.clone()]}),
+    );
+    assert_eq!(by_metadata.status, 400, "{}", by_metadata.text());
+
+    // The refused moves changed nothing: the tree is as before, and outer is still at the root.
+    assert_eq!(fake.file_paths(), before);
+    let root = list(&fake, &access, "'root' in parents and trashed = false");
+    assert_eq!(names(&root), vec!["outer"]);
+
+    // A move that stays out of the subtree still works: inner moves up to My Drive's root.
+    let moved = update_json_at(
+        &fake,
+        &access,
+        &format!("{API}/files/{inner_id}?addParents=root&removeParents={outer_id}"),
+        json!({}),
+    );
+    assert_eq!(moved.status, 200, "{}", moved.text());
+    assert_eq!(fake.file_paths(), vec!["inner/save.json"]);
+}
