@@ -1,8 +1,8 @@
-use save_relay::clients::Client;
+use save_relay::clients::{Client, DROPBOX_REDIRECT};
 use save_relay::creds::Secret;
 use save_relay::http::{Request, Response, Transport};
 use save_relay::oauth::{
-    finish_code, finish_code_with_sleep, in_game_mode, random_bytes, sign_in_browser,
+    challenge, finish_code, finish_code_with_sleep, in_game_mode, random_bytes, sign_in_browser,
     sign_in_browser_timeout, start_code, Pending, DROPBOX, GOOGLE,
 };
 use save_relay::service::Service;
@@ -216,9 +216,11 @@ fn sign_in_browser_ignores_favicon() {
 
 #[test]
 fn sign_in_browser_refuses_wrong_state() {
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
     let transport = MockTransport::new(|_| panic!("transport should not be called on wrong state"));
 
     let open = |url: &str| {
+        let tx = tx.clone();
         let params = parse_query(url);
         let redirect_uri = params.get("redirect_uri").unwrap().clone();
 
@@ -232,6 +234,7 @@ fn sign_in_browser_refuses_wrong_state() {
             stream.write_all(req.as_bytes()).unwrap();
             let mut resp = String::new();
             let _ = stream.read_to_string(&mut resp);
+            let _ = tx.send(resp);
         });
         Ok(())
     };
@@ -242,14 +245,17 @@ fn sign_in_browser_refuses_wrong_state() {
         err,
         Error::SignInFailed("the answer did not match this sign-in".into())
     );
+    assert_failed_page(&rx.recv_timeout(Duration::from_secs(5)).expect("browser got a response"));
 }
 
 #[test]
 fn sign_in_browser_refuses_access_denied() {
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
     let transport =
         MockTransport::new(|_| panic!("transport should not be called on access_denied"));
 
     let open = |url: &str| {
+        let tx = tx.clone();
         let params = parse_query(url);
         let redirect_uri = params.get("redirect_uri").unwrap().clone();
 
@@ -265,6 +271,7 @@ fn sign_in_browser_refuses_access_denied() {
             stream.write_all(req.as_bytes()).unwrap();
             let mut resp = String::new();
             let _ = stream.read_to_string(&mut resp);
+            let _ = tx.send(resp);
         });
         Ok(())
     };
@@ -272,6 +279,7 @@ fn sign_in_browser_refuses_access_denied() {
     let err = sign_in_browser(&GOOGLE, GOOGLE_CLIENT, &transport, &open, || 1000)
         .expect_err("sign_in_browser must refuse access_denied");
     assert_eq!(err, Error::SignInFailed("access_denied".into()));
+    assert_failed_page(&rx.recv_timeout(Duration::from_secs(5)).expect("browser got a response"));
 }
 
 #[test]
@@ -295,19 +303,172 @@ fn sign_in_browser_times_out() {
     );
 }
 
+/// Only one test may hold the Dropbox loopback port (53710) at a time.
+static PORT_LOCK: Mutex<()> = Mutex::new(());
+
+fn lock_port() -> std::sync::MutexGuard<'static, ()> {
+    PORT_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// A refused sign-in answers with a page that says so, and never claims success.
+fn assert_failed_page(resp: &str) {
+    assert!(resp.starts_with("HTTP/1.1 400 Bad Request"), "{resp}");
+    assert!(!resp.contains("Signed in"), "{resp}");
+    assert!(resp.contains("The sign-in did not complete"), "{resp}");
+}
+
 #[test]
 fn sign_in_browser_dropbox_port_in_use() {
+    let _port = lock_port();
     let transport = MockTransport::new(|_| panic!("transport should not be called"));
     let open = |_url: &str| Ok(());
 
-    if let Ok(_guard) = TcpListener::bind("127.0.0.1:53710") {
-        let err = sign_in_browser(&DROPBOX, DROPBOX_CLIENT, &transport, &open, || 1000)
-            .expect_err("must fail if port 53710 is in use");
+    // Hold the port ourselves when it is free. If something else already holds it, the
+    // sign-in must refuse with the same error.
+    let _held = TcpListener::bind("127.0.0.1:53710").ok();
+    let err = sign_in_browser(&DROPBOX, DROPBOX_CLIENT, &transport, &open, || 1000)
+        .expect_err("must fail if port 53710 is in use");
+    assert_eq!(
+        err,
+        Error::SignInFailed("port 53710 is in use: use --no-browser".into())
+    );
+}
+
+#[test]
+fn sign_in_browser_dropbox_success() {
+    let _port = lock_port();
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let expected_challenge = Arc::new(Mutex::new(String::new()));
+    let expected_challenge_open = expected_challenge.clone();
+    let token_called = Arc::new(AtomicUsize::new(0));
+    let token_called_clone = token_called.clone();
+
+    let transport = MockTransport::new(move |req: &Request| {
+        if req.url == DROPBOX.token_url && req.method == "POST" {
+            token_called_clone.fetch_add(1, Ordering::SeqCst);
+            let body = String::from_utf8_lossy(&req.body);
+            let fields = parse_query(&body);
+            assert_eq!(
+                fields.get("grant_type").map(String::as_str),
+                Some("authorization_code")
+            );
+            assert_eq!(
+                fields.get("code").map(String::as_str),
+                Some("dbx-browser-code")
+            );
+            assert_eq!(
+                fields.get("redirect_uri").map(String::as_str),
+                Some(DROPBOX_REDIRECT)
+            );
+            assert_eq!(
+                fields.get("client_id").map(String::as_str),
+                Some("test-dropbox-key")
+            );
+            assert!(
+                !fields.contains_key("client_secret"),
+                "Dropbox sign-in sends no client_secret"
+            );
+            let verifier = fields.get("code_verifier").expect("code_verifier sent");
+            assert_eq!(
+                challenge(verifier),
+                *expected_challenge.lock().unwrap(),
+                "the verifier must match the challenge in the auth URL"
+            );
+
+            return Ok(Response::new(
+                200,
+                json!({
+                    "access_token": "dbx-browser-access",
+                    "expires_in": 14400,
+                    "refresh_token": "dbx-browser-refresh",
+                    "token_type": "bearer"
+                })
+                .to_string(),
+            ));
+        }
+        panic!("unexpected request: {:?}", req);
+    });
+
+    let open = |url: &str| {
+        let tx = tx.clone();
+        let params = parse_query(url);
         assert_eq!(
-            err,
-            Error::SignInFailed("port 53710 is in use: use --no-browser".into())
+            params.get("redirect_uri").map(String::as_str),
+            Some(DROPBOX_REDIRECT)
         );
-    }
+        assert_eq!(
+            params.get("code_challenge_method").map(String::as_str),
+            Some("S256")
+        );
+        *expected_challenge_open.lock().unwrap() =
+            params.get("code_challenge").cloned().unwrap_or_default();
+        let state = params.get("state").expect("state in auth URL").clone();
+
+        std::thread::spawn(move || {
+            let addr = DROPBOX_REDIRECT
+                .strip_prefix("http://")
+                .and_then(|s| s.strip_suffix('/'))
+                .unwrap();
+            let mut stream = TcpStream::connect(addr).expect("connect to the Dropbox redirect");
+            let req = format!("GET /?code=dbx-browser-code&state={state} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
+            stream.write_all(req.as_bytes()).unwrap();
+            let mut resp = String::new();
+            let _ = stream.read_to_string(&mut resp);
+            let _ = tx.send(resp);
+        });
+        Ok(())
+    };
+
+    let tokens = sign_in_browser(&DROPBOX, DROPBOX_CLIENT, &transport, &open, || 1000)
+        .expect("Dropbox browser sign-in succeeds");
+    assert_eq!(tokens.access.expose(), "dbx-browser-access");
+    assert_eq!(tokens.refresh.unwrap().expose(), "dbx-browser-refresh");
+    assert_eq!(token_called.load(Ordering::SeqCst), 1);
+
+    let resp = rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("browser got a response");
+    assert!(resp.starts_with("HTTP/1.1 200 OK"), "{resp}");
+    assert!(resp.contains("Signed in to save-relay"), "{resp}");
+}
+
+#[test]
+fn finish_code_google_zero_interval_is_floored_to_one_second() {
+    let polls = AtomicUsize::new(0);
+    let transport = MockTransport::new(|req: &Request| {
+        assert_eq!(req.url, GOOGLE.token_url);
+        if polls.fetch_add(1, Ordering::SeqCst) == 0 {
+            return Ok(Response::new(
+                400,
+                json!({"error": "authorization_pending"}).to_string(),
+            ));
+        }
+        Ok(Response::new(
+            200,
+            json!({"access_token": "zero-interval-access", "expires_in": 3600}).to_string(),
+        ))
+    });
+    let pending = Pending {
+        service: Service::Gdrive,
+        url: "https://www.google.com/device".into(),
+        user_code: Some("USER-CODE".into()),
+        expires_at: 2000,
+        interval: 0,
+        secret: Secret::new("dev-code"),
+    };
+    let sleeps = Mutex::new(Vec::new());
+    let tokens = finish_code_with_sleep(
+        &GOOGLE,
+        GOOGLE_CLIENT,
+        &pending,
+        None,
+        &transport,
+        || 1000,
+        &|secs| sleeps.lock().unwrap().push(secs),
+    )
+    .expect("finish_code succeeds after one pending poll");
+    assert_eq!(tokens.access.expose(), "zero-interval-access");
+    assert_eq!(*sleeps.lock().unwrap(), vec![1]);
 }
 
 #[test]

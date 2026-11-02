@@ -610,6 +610,21 @@ pub fn sign_in_browser_timeout(
             continue;
         }
 
+        // Check the redirect before answering, so the page never claims a sign-in that failed.
+        let code = match parse_redirect(target, &state) {
+            Ok(code) => code,
+            Err(e) => {
+                let html = "<!DOCTYPE html><html><body><p>The sign-in did not complete. Run setup again.</p></body></html>";
+                let resp = format!(
+                    "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    html.len(),
+                    html
+                );
+                let _ = stream.write_all(resp.as_bytes());
+                let _ = stream.flush();
+                return Err(e);
+            }
+        };
         let html = "<!DOCTYPE html><html><body><p>Signed in to save-relay. You can close this tab.</p></body></html>";
         let resp = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -618,8 +633,6 @@ pub fn sign_in_browser_timeout(
         );
         let _ = stream.write_all(resp.as_bytes());
         let _ = stream.flush();
-
-        let code = parse_redirect(target, &state)?;
         break code;
     };
 
@@ -811,7 +824,8 @@ pub fn finish_code_with_sleep(
             parse_token_response(Service::Dropbox, response.status, &response.text(), (now)())
         }
         Service::Gdrive => {
-            let mut interval = pending.interval;
+            // A server interval of 0 would poll with no pause: floor it at one second.
+            let mut interval = pending.interval.max(1);
             loop {
                 if (now)() >= pending.expires_at {
                     return Err(crate::error::Error::SignInFailed(
