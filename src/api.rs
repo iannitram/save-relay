@@ -324,7 +324,11 @@ pub fn failure(command: &str, error: &Error) -> String {
 /// The exit code of a command that succeeded: 3 for `Action::Conflict`, 6 for `Action::Held`,
 /// else 0.
 pub fn exit_code_for(action: Action) -> i32 {
-    if action == Action::Conflict { 3 } else { 0 }
+    if action == Action::Conflict {
+        3
+    } else {
+        0
+    }
 }
 
 /// The exit code of a failed command:
