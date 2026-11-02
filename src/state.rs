@@ -31,8 +31,8 @@ impl ServerState {
     /// sorted by path with no duplicates, each `sha256` 64 lowercase hex characters, each path
     /// relative with no `..` segment. Any failure is `Error::StateInvalid`.
     pub fn from_json(text: &str) -> Result<ServerState> {
-        let state: ServerState = serde_json::from_str(text)
-            .map_err(|e| Error::StateInvalid(e.to_string()))?;
+        let state: ServerState =
+            serde_json::from_str(text).map_err(|e| Error::StateInvalid(e.to_string()))?;
         check_common(state.format, &state.game, &state.time, &state.files)?;
         if state.revision == 0 {
             return Err(Error::StateInvalid("revision must be at least 1".into()));
@@ -48,7 +48,10 @@ impl ServerState {
 
     /// Pretty JSON, fields in declaration order, ending in one newline.
     pub fn to_json(&self) -> String {
-        format!("{}\n", serde_json::to_string_pretty(self).expect("state serialization cannot fail"))
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(self).expect("state serialization cannot fail")
+        )
     }
 
     /// The file list as a save set. Built in the skeleton.
@@ -74,15 +77,18 @@ pub struct LastSynced {
 impl LastSynced {
     /// The same checks as `ServerState::from_json` (revision may be any value).
     pub fn from_json(text: &str) -> Result<LastSynced> {
-        let state: LastSynced = serde_json::from_str(text)
-            .map_err(|e| Error::StateInvalid(e.to_string()))?;
+        let state: LastSynced =
+            serde_json::from_str(text).map_err(|e| Error::StateInvalid(e.to_string()))?;
         check_common(state.format, &state.game, &state.time, &state.files)?;
         Ok(state)
     }
 
     /// Pretty JSON, fields in declaration order, ending in one newline.
     pub fn to_json(&self) -> String {
-        format!("{}\n", serde_json::to_string_pretty(self).expect("state serialization cannot fail"))
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(self).expect("state serialization cannot fail")
+        )
     }
 
     /// The file list as a save set. Built in the skeleton.
