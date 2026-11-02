@@ -245,7 +245,10 @@ fn sign_in_browser_refuses_wrong_state() {
         err,
         Error::SignInFailed("the answer did not match this sign-in".into())
     );
-    assert_failed_page(&rx.recv_timeout(Duration::from_secs(5)).expect("browser got a response"));
+    assert_failed_page(
+        &rx.recv_timeout(Duration::from_secs(5))
+            .expect("browser got a response"),
+    );
 }
 
 #[test]
@@ -279,7 +282,10 @@ fn sign_in_browser_refuses_access_denied() {
     let err = sign_in_browser(&GOOGLE, GOOGLE_CLIENT, &transport, &open, || 1000)
         .expect_err("sign_in_browser must refuse access_denied");
     assert_eq!(err, Error::SignInFailed("access_denied".into()));
-    assert_failed_page(&rx.recv_timeout(Duration::from_secs(5)).expect("browser got a response"));
+    assert_failed_page(
+        &rx.recv_timeout(Duration::from_secs(5))
+            .expect("browser got a response"),
+    );
 }
 
 #[test]
