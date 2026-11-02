@@ -31,7 +31,8 @@ panel-dist = []
 # The ludusavi data reader (`ludusavi::parse`) gets serde-saphyr (MIT OR Apache-2.0, pure
 # Rust) from its issue (docs/adr/0003-baton-wrap-cards-panel.md).
 
-# Pure Rust only, so the core builds for Linux, Windows, macOS and later Android and iOS.
+# No system libraries, so the core builds for Linux, Windows, macOS and later Android and iOS
+# (`ring`, under rustls, compiles its own bundled C: docs/code-map.md, rules).
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
