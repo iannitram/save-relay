@@ -22,7 +22,7 @@ path = "src/main.rs"
 # are plain Rust over `http::Transport` and always built, so CI tests them against the fakes
 # with no network, and a mobile build can supply its own Transport and CredentialStore.
 default = ["http", "keyring"]
-http = []
+http = ["dep:ureq"]
 keyring = []
 # Embed the built panel front end (`panel/dist`, from `pnpm --dir panel build`) into
 # `save-relay panel`; off by default, so a plain `cargo build` needs no Node and serves a
@@ -37,3 +37,4 @@ panel-dist = []
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+ureq = { version = "2.12", optional = true, default-features = false, features = ["tls"] }
