@@ -1,0 +1,1 @@
+{"ok":true,"command":"which","data":{"app_id":504230,"game":"steam-504230","name":"Celeste","saves_dir":"/home/deck/.local/share/Celeste/Saves","include":["*.celeste","settings.celeste"],"source":"ludusavi","message":"Celeste saves in /home/deck/.local/share/Celeste/Saves."}}

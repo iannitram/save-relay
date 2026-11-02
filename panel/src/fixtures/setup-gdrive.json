@@ -1,0 +1,1 @@
+{"ok":true,"command":"setup","data":{"service":"gdrive","url":"https://www.google.com/device","code":"ABCD-EFGH","expires_at":"2026-10-31T20:21:00Z","message":"On a phone or computer, open https://www.google.com/device and enter ABCD-EFGH. Then run setup --service gdrive --finish."}}
