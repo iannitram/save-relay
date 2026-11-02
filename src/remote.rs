@@ -332,6 +332,11 @@ impl Remote for MemoryRemote {
         if !inner.is_dir(from) && !inner.is_file(from) {
             return Err(Error::NotFound(from.to_string()));
         }
+        if inner.is_dir(from) && (to == from || to.starts_with(&format!("{from}/"))) {
+            return Err(Error::Server(format!(
+                "a folder cannot be moved into itself or its subtree: '{from}' to '{to}'"
+            )));
+        }
         if to.is_empty() || inner.nodes.contains_key(to) {
             return Err(Error::Server(format!("something is already at '{to}'")));
         }
