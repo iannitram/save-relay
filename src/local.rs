@@ -175,7 +175,20 @@ fn write_json<T: Serialize>(path: &std::path::Path, value: &T) -> Result<()> {
     let mut text = serde_json::to_string_pretty(value)
         .map_err(|error| Error::StateInvalid(error.to_string()))?;
     text.push('\n');
-    fs::write(&temp, text)?;
-    fs::rename(temp, path)?;
+    let result = write_synced(&temp, text.as_bytes())
+        .and_then(|()| fs::rename(&temp, path).map_err(Error::from));
+    if result.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    result
+}
+
+/// Writes `bytes` to `temp` and flushes them to disk, so the rename that follows never
+/// publishes a file whose contents are still only in memory.
+fn write_synced(temp: &std::path::Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+    let mut file = fs::File::create(temp)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
     Ok(())
 }
