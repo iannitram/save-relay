@@ -156,7 +156,7 @@ pub struct Facts {
 /// The save path templates of `entry` that apply on this machine: tagged `save`, a `when` that
 /// fits (`facts.platform`, or `windows` under Proton; store `steam` or none), every placeholder
 /// known, expanded with `facts`. `/`-separated, glob characters (`*`, `?`, `**`) kept, sorted,
-/// no duplicates.
+/// no duplicates. A path with a `..` segment is dropped.
 pub fn candidates(entry: &Entry, facts: &Facts) -> Vec<String> {
     named_candidates(entry, facts, None)
 }
@@ -227,7 +227,9 @@ fn named_candidates(entry: &Entry, facts: &Facts, name: Option<&str>) -> Vec<Str
                 remaining = &remaining[close + 1..];
             }
             result.push_str(remaining);
-            Some(result.replace('\\', "/"))
+            let path = result.replace('\\', "/");
+            // A `..` segment would let a saves folder or pattern leave the folder it names.
+            (!path.split('/').any(|segment| segment == "..")).then_some(path)
         };
         if let Some(path) = expand() {
             paths.push(path);
@@ -293,17 +295,39 @@ pub fn translate(
     let (folder, mut include) = folders.into_iter().next().expect("one folder");
     include.sort();
     include.dedup();
+    // The ludusavi data is external input: refuse a pattern a Windows sync client cannot
+    // create, then run the manifest's own checks (#107): `..`, absolute patterns, and more.
+    if let Some(pattern) = include
+        .iter()
+        .find(|pattern| pattern.split('/').any(windows_reserved_name))
+    {
+        return Err(Error::ManifestInvalid(format!(
+            "include: {pattern:?} uses a name Windows reserves"
+        )));
+    }
+    let manifest = Manifest {
+        format: crate::manifest::FORMAT,
+        id: crate::steam::game_id(facts.app_id),
+        name: name.to_owned(),
+        saves: BTreeMap::from([(facts.platform, folder.clone())]),
+        include,
+        exclude: Vec::new(),
+    };
+    manifest.validate()?;
     Ok(Located {
         saves_dir: PathBuf::from(&folder),
-        manifest: Manifest {
-            format: crate::manifest::FORMAT,
-            id: crate::steam::game_id(facts.app_id),
-            name: name.to_owned(),
-            saves: BTreeMap::from([(facts.platform, folder)]),
-            include,
-            exclude: Vec::new(),
-        },
+        manifest,
     })
+}
+
+/// A file or folder name Windows cannot create, with or without an extension (`con`, `nul`,
+/// `com1`, `lpt9`, any case). Glob segments such as `*.sav` are never reserved.
+fn windows_reserved_name(segment: &str) -> bool {
+    let stem = segment.split('.').next().unwrap_or("").to_ascii_lowercase();
+    matches!(stem.as_str(), "con" | "prn" | "aux" | "nul")
+        || (stem.len() == 4
+            && (stem.starts_with("com") || stem.starts_with("lpt"))
+            && stem.as_bytes()[3].is_ascii_digit())
 }
 
 /// The cache under `<data>/save-relay/ludusavi/`.
