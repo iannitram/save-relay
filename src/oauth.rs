@@ -484,8 +484,9 @@ impl Pending {
     }
 
     pub fn from_secret(secret: &Secret) -> Result<Pending> {
-        let record: PendingRecord = serde_json::from_str(secret.expose())
-            .map_err(|e| crate::error::Error::Credentials(format!("invalid pending secret: {e}")))?;
+        let record: PendingRecord = serde_json::from_str(secret.expose()).map_err(|e| {
+            crate::error::Error::Credentials(format!("invalid pending secret: {e}"))
+        })?;
         Ok(Pending {
             service: record.service,
             url: record.url,
@@ -542,9 +543,7 @@ pub fn sign_in_browser_timeout(
         }
         Service::Dropbox => {
             let listener = TcpListener::bind("127.0.0.1:53710").map_err(|_| {
-                crate::error::Error::SignInFailed(
-                    "port 53710 is in use: use --no-browser".into(),
-                )
+                crate::error::Error::SignInFailed("port 53710 is in use: use --no-browser".into())
             })?;
             (listener, crate::clients::DROPBOX_REDIRECT.to_string())
         }
@@ -670,10 +669,7 @@ pub fn start_code(
             let device_url = provider.device_url.ok_or_else(|| {
                 crate::error::Error::Usage("Google provider missing device_url".into())
             })?;
-            let body = form_encode(&[
-                ("client_id", client.id),
-                ("scope", provider.scope),
-            ]);
+            let body = form_encode(&[("client_id", client.id), ("scope", provider.scope)]);
             let req = Request::new("POST", device_url)
                 .header("Content-Type", "application/x-www-form-urlencoded")
                 .body(body.into_bytes());
@@ -681,7 +677,9 @@ pub fn start_code(
             let status = resp.status;
             let text = resp.text();
             if (500..=599).contains(&status) {
-                return Err(crate::error::Error::Server(format!("device endpoint: {status}")));
+                return Err(crate::error::Error::Server(format!(
+                    "device endpoint: {status}"
+                )));
             }
             let val: serde_json::Value = serde_json::from_str(&text)
                 .map_err(|_| crate::error::Error::Server(format!("device endpoint: {status}")))?;
@@ -690,7 +688,10 @@ pub fn start_code(
                     .get("error")
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or("unknown error");
-                let msg = match val.get("error_description").and_then(serde_json::Value::as_str) {
+                let msg = match val
+                    .get("error_description")
+                    .and_then(serde_json::Value::as_str)
+                {
                     Some(desc) => format!("{err}: {desc}"),
                     None => err.to_string(),
                 };
@@ -732,9 +733,9 @@ pub fn start_code(
                 secret: Secret::new(device_code),
             })
         }
-        Service::Nextcloud => {
-            Err(crate::error::Error::Usage("Nextcloud does not use OAuth".into()))
-        }
+        Service::Nextcloud => Err(crate::error::Error::Usage(
+            "Nextcloud does not use OAuth".into(),
+        )),
     }
 }
 
@@ -750,11 +751,19 @@ pub fn finish_code(
     transport: &dyn Transport,
     now: Clock,
 ) -> Result<Tokens> {
-    finish_code_with_sleep(provider, client, pending, typed_code, transport, now, &|secs| {
-        if secs > 0 {
-            std::thread::sleep(Duration::from_secs(secs));
-        }
-    })
+    finish_code_with_sleep(
+        provider,
+        client,
+        pending,
+        typed_code,
+        transport,
+        now,
+        &|secs| {
+            if secs > 0 {
+                std::thread::sleep(Duration::from_secs(secs));
+            }
+        },
+    )
 }
 
 /// A version of `finish_code` taking an explicit sleep callback (for tests).
@@ -825,15 +834,18 @@ pub fn finish_code_with_sleep(
                 let text = response.text();
 
                 if (500..=599).contains(&status) {
-                    return Err(crate::error::Error::Server(format!("token endpoint: {status}")));
+                    return Err(crate::error::Error::Server(format!(
+                        "token endpoint: {status}"
+                    )));
                 }
 
                 if status == 200 {
                     return parse_token_response(Service::Gdrive, status, &text, (now)());
                 }
 
-                let answer: serde_json::Value = serde_json::from_str(&text)
-                    .map_err(|_| crate::error::Error::Server(format!("token endpoint: {status}")))?;
+                let answer: serde_json::Value = serde_json::from_str(&text).map_err(|_| {
+                    crate::error::Error::Server(format!("token endpoint: {status}"))
+                })?;
 
                 match answer.get("error").and_then(serde_json::Value::as_str) {
                     Some("authorization_pending") => {
@@ -852,21 +864,26 @@ pub fn finish_code_with_sleep(
                         ));
                     }
                     Some(err) => {
-                        let message = match answer.get("error_description").and_then(serde_json::Value::as_str) {
+                        let message = match answer
+                            .get("error_description")
+                            .and_then(serde_json::Value::as_str)
+                        {
                             Some(desc) => format!("{err}: {desc}"),
                             None => err.to_string(),
                         };
                         return Err(crate::error::Error::SignInFailed(message));
                     }
                     None => {
-                        return Err(crate::error::Error::Server(format!("token endpoint: {status}")));
+                        return Err(crate::error::Error::Server(format!(
+                            "token endpoint: {status}"
+                        )));
                     }
                 }
             }
         }
-        Service::Nextcloud => {
-            Err(crate::error::Error::Usage("Nextcloud does not use OAuth".into()))
-        }
+        Service::Nextcloud => Err(crate::error::Error::Usage(
+            "Nextcloud does not use OAuth".into(),
+        )),
     }
 }
 
@@ -910,7 +927,7 @@ pub fn open_browser(url: &str) -> Result<()> {
         c
     };
 
-    cmd.spawn()
-        .map(|_| ())
-        .map_err(|_| crate::error::Error::SignInFailed("could not open a browser: use --no-browser".into()))
+    cmd.spawn().map(|_| ()).map_err(|_| {
+        crate::error::Error::SignInFailed("could not open a browser: use --no-browser".into())
+    })
 }

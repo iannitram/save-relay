@@ -94,10 +94,22 @@ fn sign_in_browser_success_and_redirect_page() {
             token_called_clone.fetch_add(1, Ordering::SeqCst);
             let body = String::from_utf8_lossy(&req.body);
             let fields = parse_query(&body);
-            assert_eq!(fields.get("grant_type").map(String::as_str), Some("authorization_code"));
-            assert_eq!(fields.get("code").map(String::as_str), Some("mock-auth-code"));
-            assert_eq!(fields.get("client_id").map(String::as_str), Some("test-google-id"));
-            assert_eq!(fields.get("client_secret").map(String::as_str), Some("test-google-secret"));
+            assert_eq!(
+                fields.get("grant_type").map(String::as_str),
+                Some("authorization_code")
+            );
+            assert_eq!(
+                fields.get("code").map(String::as_str),
+                Some("mock-auth-code")
+            );
+            assert_eq!(
+                fields.get("client_id").map(String::as_str),
+                Some("test-google-id")
+            );
+            assert_eq!(
+                fields.get("client_secret").map(String::as_str),
+                Some("test-google-secret")
+            );
             assert!(fields.contains_key("code_verifier"));
             assert!(fields.contains_key("redirect_uri"));
 
@@ -117,7 +129,10 @@ fn sign_in_browser_success_and_redirect_page() {
 
     let open = |url: &str| {
         let params = parse_query(url);
-        let redirect_uri = params.get("redirect_uri").expect("redirect_uri in auth_url").clone();
+        let redirect_uri = params
+            .get("redirect_uri")
+            .expect("redirect_uri in auth_url")
+            .clone();
         let state = params.get("state").expect("state in auth_url").clone();
 
         std::thread::spawn(move || {
@@ -175,7 +190,9 @@ fn sign_in_browser_ignores_favicon() {
             // First request: favicon.ico
             let mut fav_stream = TcpStream::connect(addr).expect("connect for favicon");
             fav_stream
-                .write_all(b"GET /favicon.ico HTTP/1.1\r\nHost: loopback\r\nConnection: close\r\n\r\n")
+                .write_all(
+                    b"GET /favicon.ico HTTP/1.1\r\nHost: loopback\r\nConnection: close\r\n\r\n",
+                )
                 .unwrap();
             let mut fav_resp = String::new();
             fav_stream.read_to_string(&mut fav_resp).unwrap();
@@ -229,7 +246,8 @@ fn sign_in_browser_refuses_wrong_state() {
 
 #[test]
 fn sign_in_browser_refuses_access_denied() {
-    let transport = MockTransport::new(|_| panic!("transport should not be called on access_denied"));
+    let transport =
+        MockTransport::new(|_| panic!("transport should not be called on access_denied"));
 
     let open = |url: &str| {
         let params = parse_query(url);
@@ -241,7 +259,9 @@ fn sign_in_browser_refuses_access_denied() {
                 .and_then(|s| s.strip_suffix('/'))
                 .unwrap();
             let mut stream = TcpStream::connect(addr).unwrap();
-            let req = format!("GET /?error=access_denied HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
+            let req = format!(
+                "GET /?error=access_denied HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
+            );
             stream.write_all(req.as_bytes()).unwrap();
             let mut resp = String::new();
             let _ = stream.read_to_string(&mut resp);
@@ -269,7 +289,10 @@ fn sign_in_browser_times_out() {
     )
     .expect_err("must time out when redirect never arrives");
 
-    assert!(matches!(err, Error::SignInFailed(ref msg) if msg.contains("timed out")), "{err:?}");
+    assert!(
+        matches!(err, Error::SignInFailed(ref msg) if msg.contains("timed out")),
+        "{err:?}"
+    );
 }
 
 #[test]
@@ -297,9 +320,18 @@ fn start_code_and_finish_code_dropbox() {
             token_called_clone.fetch_add(1, Ordering::SeqCst);
             let body = String::from_utf8_lossy(&req.body);
             let fields = parse_query(&body);
-            assert_eq!(fields.get("grant_type").map(String::as_str), Some("authorization_code"));
-            assert_eq!(fields.get("code").map(String::as_str), Some("typed-dropbox-code"));
-            assert_eq!(fields.get("client_id").map(String::as_str), Some("test-dropbox-key"));
+            assert_eq!(
+                fields.get("grant_type").map(String::as_str),
+                Some("authorization_code")
+            );
+            assert_eq!(
+                fields.get("code").map(String::as_str),
+                Some("typed-dropbox-code")
+            );
+            assert_eq!(
+                fields.get("client_id").map(String::as_str),
+                Some("test-dropbox-key")
+            );
             assert!(fields.contains_key("code_verifier"));
 
             return Ok(Response::new(
@@ -326,8 +358,10 @@ fn start_code_and_finish_code_dropbox() {
     assert!(!pending.url.contains("redirect_uri"));
 
     // Finishing without code fails
-    let err_no_code = finish_code(&DROPBOX, DROPBOX_CLIENT, &pending, None, &transport, || 1050)
-        .expect_err("finish_code requires code for Dropbox");
+    let err_no_code = finish_code(&DROPBOX, DROPBOX_CLIENT, &pending, None, &transport, || {
+        1050
+    })
+    .expect_err("finish_code requires code for Dropbox");
     assert!(matches!(err_no_code, Error::SignInFailed(_)));
 
     // Finishing after expiry fails
@@ -371,7 +405,10 @@ fn start_code_and_finish_code_google_with_polling() {
         if req.url == dev_endpoint && req.method == "POST" {
             let body = String::from_utf8_lossy(&req.body);
             let fields = parse_query(&body);
-            assert_eq!(fields.get("client_id").map(String::as_str), Some("test-google-id"));
+            assert_eq!(
+                fields.get("client_id").map(String::as_str),
+                Some("test-google-id")
+            );
             assert_eq!(fields.get("scope").map(String::as_str), Some(GOOGLE.scope));
 
             return Ok(Response::new(
@@ -395,9 +432,18 @@ fn start_code_and_finish_code_google_with_polling() {
                 fields.get("grant_type").map(String::as_str),
                 Some("urn:ietf:params:oauth:grant-type:device_code")
             );
-            assert_eq!(fields.get("device_code").map(String::as_str), Some("dev-code-xyz"));
-            assert_eq!(fields.get("client_id").map(String::as_str), Some("test-google-id"));
-            assert_eq!(fields.get("client_secret").map(String::as_str), Some("test-google-secret"));
+            assert_eq!(
+                fields.get("device_code").map(String::as_str),
+                Some("dev-code-xyz")
+            );
+            assert_eq!(
+                fields.get("client_id").map(String::as_str),
+                Some("test-google-id")
+            );
+            assert_eq!(
+                fields.get("client_secret").map(String::as_str),
+                Some("test-google-secret")
+            );
 
             if count == 0 {
                 return Ok(Response::new(
@@ -513,7 +559,8 @@ fn finish_code_google_expired_token_response() {
 
 #[test]
 fn finish_code_google_expired_by_clock() {
-    let transport = MockTransport::new(|_| panic!("transport should not be called if already expired"));
+    let transport =
+        MockTransport::new(|_| panic!("transport should not be called if already expired"));
 
     let pending = Pending {
         service: Service::Gdrive,
