@@ -81,11 +81,16 @@ pub struct FilePage {
     pub next_page: Option<String>,
 }
 
+/// A non-empty run of ASCII digits: `size` and `version` as Drive writes them (no sign).
+fn is_digits(text: &str) -> bool {
+    !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit())
+}
+
 fn parse_drive_file(value: &serde_json::Value) -> Option<DriveFile> {
     fn number(value: Option<&serde_json::Value>) -> Option<u64> {
         match value {
             None => Some(0),
-            Some(serde_json::Value::String(s)) => s.parse().ok(),
+            Some(serde_json::Value::String(s)) if is_digits(s) => s.parse().ok(),
             Some(serde_json::Value::Number(n)) => n.as_u64(),
             _ => None,
         }
@@ -216,5 +221,18 @@ impl Remote for Drive {
     }
     fn delete(&self, path: &str) -> Result<()> {
         not_built("gdrive::Drive::delete")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_file;
+
+    #[test]
+    fn size_and_version_are_digits_only() {
+        assert!(parse_file(r#"{"id":"a","name":"a","size":"+5"}"#).is_err());
+        assert!(parse_file(r#"{"id":"a","name":"a","version":"+5"}"#).is_err());
+        assert!(parse_file(r#"{"id":"a","name":"a","size":""}"#).is_err());
+        assert!(parse_file(r#"{"id":"a","name":"a","size":"5"}"#).is_ok());
     }
 }
