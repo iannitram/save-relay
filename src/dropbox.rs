@@ -171,13 +171,56 @@ pub struct ListPage {
 /// Parse a `list_folder` answer. Not JSON, or an entry without `.tag`/`name`, is
 /// `Error::Server("dropbox: bad list answer")`.
 pub fn parse_list(body: &str) -> Result<ListPage> {
-    not_built("dropbox::parse_list")
+    let bad = || Error::Server("dropbox: bad list answer".into());
+    let value: serde_json::Value = serde_json::from_str(body).map_err(|_| bad())?;
+    let object = value.as_object().ok_or_else(bad)?;
+    let entries = object
+        .get("entries")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(bad)?;
+    let mut parsed = Vec::new();
+    for entry in entries {
+        let entry = entry.as_object().ok_or_else(bad)?;
+        let tag = entry.get(".tag").and_then(serde_json::Value::as_str).ok_or_else(bad)?;
+        let name = entry.get("name").and_then(serde_json::Value::as_str).ok_or_else(bad)?;
+        match tag {
+            "file" => parsed.push(RemoteEntry {
+                name: name.into(),
+                is_dir: false,
+                size: entry.get("size").and_then(serde_json::Value::as_u64).unwrap_or(0),
+                etag: entry.get("rev").and_then(serde_json::Value::as_str).map(str::to_string),
+            }),
+            "folder" => parsed.push(RemoteEntry {
+                name: name.into(),
+                is_dir: true,
+                size: 0,
+                etag: None,
+            }),
+            _ => {}
+        }
+    }
+    parsed.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(ListPage {
+        entries: parsed,
+        cursor: object
+            .get("cursor")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .into(),
+        has_more: object
+            .get("has_more")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+    })
 }
 
 /// The `rev` of a file metadata answer (an upload's reply, or the `Dropbox-API-Result` header
 /// of a download). Missing, or not JSON, is `Error::Server("dropbox: no rev in the answer")`.
 pub fn parse_rev(body: &str) -> Result<String> {
-    not_built("dropbox::parse_rev")
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| value.get("rev")?.as_str().map(str::to_string))
+        .ok_or_else(|| Error::Server("dropbox: no rev in the answer".into()))
 }
 
 /// The real Dropbox, one App folder. Dropbox creates missing parent folders on its own, so
