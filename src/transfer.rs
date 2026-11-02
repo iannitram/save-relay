@@ -8,12 +8,96 @@
 //! which reads as `card: null`, never a broken revision.
 
 use crate::card::Card;
-use crate::error::{not_built, Result};
+use crate::error::{not_built, Error, Result};
 use crate::layout::Layout;
-use crate::remote::Remote;
-use crate::scan::SaveSet;
+use crate::remote::{ensure_dir, Precondition, Remote};
+use crate::scan::{hash_bytes, SaveSet};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, UNIX_EPOCH};
+
+/// The suffix of a file being downloaded, before it is renamed into place.
+const PART: &str = ".save-relay-part";
+
+/// `saves_dir` joined with a `/` save path, segment by segment.
+fn local_path(saves_dir: &Path, path: &str) -> PathBuf {
+    let mut full = saves_dir.to_path_buf();
+    for segment in path.split('/').filter(|s| !s.is_empty()) {
+        full.push(segment);
+    }
+    full
+}
+
+fn io_err(path: &Path, err: std::io::Error) -> Error {
+    Error::Io(format!("{}: {err}", path.display()))
+}
+
+fn upload_files(
+    remote: &dyn Remote,
+    incoming: &str,
+    saves_dir: &Path,
+    set: &SaveSet,
+) -> Result<()> {
+    ensure_dir(remote, incoming)?;
+    for file in &set.files {
+        if let Some((folders, _)) = file.path.rsplit_once('/') {
+            ensure_dir(remote, &format!("{incoming}/{folders}"))?;
+        }
+        let local = local_path(saves_dir, &file.path);
+        let bytes = fs::read(&local).map_err(|e| io_err(&local, e))?;
+        if hash_bytes(&bytes) != file.sha256 {
+            return Err(Error::Io(format!("{} changed while uploading", file.path)));
+        }
+        remote.put(
+            &format!("{incoming}/{}", file.path),
+            &bytes,
+            &Precondition::Any,
+        )?;
+    }
+    let record = serde_json::to_vec(set).map_err(|e| Error::Io(format!("file list: {e}")))?;
+    remote.put(&format!("{incoming}/{RECORD}"), &record, &Precondition::Any)?;
+    Ok(())
+}
+
+/// Download every changed file into a part file; fills `staged` with (part, target).
+fn stage_downloads(
+    remote: &dyn Remote,
+    entry_dir: &str,
+    wanted: &SaveSet,
+    saves_dir: &Path,
+    local: &SaveSet,
+    staged: &mut Vec<(PathBuf, PathBuf)>,
+) -> Result<()> {
+    for file in &wanted.files {
+        if local
+            .files
+            .iter()
+            .any(|l| l.path == file.path && l.sha256 == file.sha256)
+        {
+            continue;
+        }
+        let (bytes, _) = remote.get(&format!("{entry_dir}/{}", file.path))?;
+        if hash_bytes(&bytes) != file.sha256 {
+            return Err(Error::Server(format!("hash mismatch: {}", file.path)));
+        }
+        let target = local_path(saves_dir, &file.path);
+        let mut part_name = target.as_os_str().to_os_string();
+        part_name.push(PART);
+        let part = PathBuf::from(part_name);
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).map_err(|e| io_err(parent, e))?;
+        }
+        staged.push((part.clone(), target));
+        let mut handle = fs::File::create(&part).map_err(|e| io_err(&part, e))?;
+        handle.write_all(&bytes).map_err(|e| io_err(&part, e))?;
+        handle
+            .set_modified(UNIX_EPOCH + Duration::from_secs(file.mtime))
+            .map_err(|e| io_err(&part, e))?;
+    }
+    Ok(())
+}
 
 /// The file inside every history entry that lists its save files (a `SaveSet` as JSON), so any
 /// entry can be restored without reading the others. Written into `incoming/<entry>/` before the
@@ -40,7 +124,21 @@ pub fn upload_entry(
     saves_dir: &Path,
     set: &SaveSet,
 ) -> Result<Counts> {
-    not_built("transfer::upload_entry")
+    let incoming = layout.incoming_dir(game, entry);
+    let moved = upload_files(remote, &incoming, saves_dir, set).and_then(|()| {
+        ensure_dir(remote, &layout.history_dir(game))?;
+        remote.move_to(&incoming, &layout.entry_dir(game, entry))
+    });
+    match moved {
+        Ok(()) => Ok(Counts {
+            uploaded: set.files.len() as u32,
+            ..Counts::default()
+        }),
+        Err(err) => {
+            let _ = remote.delete(&incoming);
+            Err(err)
+        }
+    }
 }
 
 /// Make `saves_dir` hold exactly `wanted` (the files of history entry `entry`): download each
@@ -58,7 +156,41 @@ pub fn download_entry(
     saves_dir: &Path,
     local: &SaveSet,
 ) -> Result<Counts> {
-    not_built("transfer::download_entry")
+    let entry_dir = layout.entry_dir(game, entry);
+    let mut staged: Vec<(PathBuf, PathBuf)> = Vec::new();
+    if let Err(err) = stage_downloads(remote, &entry_dir, wanted, saves_dir, local, &mut staged) {
+        for (part, _) in &staged {
+            let _ = fs::remove_file(part);
+        }
+        return Err(err);
+    }
+    for (part, target) in &staged {
+        fs::rename(part, target).map_err(|e| io_err(target, e))?;
+    }
+    let mut deleted = 0u32;
+    for old in &local.files {
+        if wanted.files.iter().any(|w| w.path == old.path) {
+            continue;
+        }
+        let path = local_path(saves_dir, &old.path);
+        match fs::remove_file(&path) {
+            Ok(()) => deleted += 1,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(io_err(&path, e)),
+        }
+        let mut folder = path.parent().map(Path::to_path_buf);
+        while let Some(dir) = folder {
+            if dir == saves_dir || !dir.starts_with(saves_dir) || fs::remove_dir(&dir).is_err() {
+                break;
+            }
+            folder = dir.parent().map(Path::to_path_buf);
+        }
+    }
+    Ok(Counts {
+        downloaded: staged.len() as u32,
+        deleted,
+        ..Counts::default()
+    })
 }
 
 /// The file list of history entry `entry` (its `RECORD`). Missing: `Error::NotFound`;
@@ -69,7 +201,9 @@ pub fn read_record(
     game: &str,
     entry: &str,
 ) -> Result<SaveSet> {
-    not_built("transfer::read_record")
+    let (bytes, _) = remote.get(&format!("{}/{RECORD}", layout.entry_dir(game, entry)))?;
+    serde_json::from_slice(&bytes)
+        .map_err(|e| Error::StateInvalid(format!("{entry}/{RECORD}: {e}")))
 }
 
 /// Write `card` as `history/<entry>/` + `card::CARD_FILE`, and the picture first when given
