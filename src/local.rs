@@ -13,12 +13,13 @@
 //! Every write goes to `<file>.tmp` first and is renamed over the file, so a crash never leaves
 //! half a record.
 
-use crate::error::{not_built, Result};
+use crate::error::{not_built, Error, Result};
 use crate::manifest::Manifest;
 use crate::pending::PendingChoice;
 use crate::platform::AppDirs;
 use crate::state::LastSynced;
 use serde::{Deserialize, Serialize};
+use std::fs;
 use std::path::PathBuf;
 
 /// The config format this build reads and writes.
@@ -71,32 +72,46 @@ impl LocalStore {
 
     /// `None` when there is no config file yet. Unreadable JSON is `Error::StateInvalid`.
     pub fn load_config(&self) -> Result<Option<Config>> {
-        not_built("local::LocalStore::load_config")
+        read_json(&self.dirs.config.join("config.json"))
     }
 
     /// Creates the folder as needed.
     pub fn save_config(&self, config: &Config) -> Result<()> {
-        not_built("local::LocalStore::save_config")
+        write_json(&self.dirs.config.join("config.json"), config)
     }
 
     /// `None` when this machine never synced `game`.
     pub fn load_last(&self, game: &str) -> Result<Option<LastSynced>> {
-        not_built("local::LocalStore::load_last")
+        read_json(&self.dirs.data.join("last").join(format!("{game}.json")))
     }
 
     /// Saved under `last.game`.
     pub fn save_last(&self, last: &LastSynced) -> Result<()> {
-        not_built("local::LocalStore::save_last")
+        write_json(
+            &self
+                .dirs
+                .data
+                .join("last")
+                .join(format!("{}.json", last.game)),
+            last,
+        )
     }
 
     /// `None` when `game` was never seen here.
     pub fn load_game(&self, game: &str) -> Result<Option<GameRecord>> {
-        not_built("local::LocalStore::load_game")
+        read_json(&self.dirs.data.join("games").join(format!("{game}.json")))
     }
 
     /// Saved under `record.manifest.id`.
     pub fn save_game(&self, record: &GameRecord) -> Result<()> {
-        not_built("local::LocalStore::save_game")
+        write_json(
+            &self
+                .dirs
+                .data
+                .join("games")
+                .join(format!("{}.json", record.manifest.id)),
+            record,
+        )
     }
 
     /// Every game id with a `games/<game>.json`, sorted (`where`, the panel).
@@ -138,4 +153,33 @@ impl LocalStore {
     pub fn clear_session(&self, game: &str) -> Result<()> {
         not_built("local::LocalStore::clear_session")
     }
+}
+
+fn read_json<T: for<'de> Deserialize<'de>>(path: &std::path::Path) -> Result<Option<T>> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(Error::from(error)),
+    };
+    serde_json::from_str(&text)
+        .map(Some)
+        .map_err(|error| Error::StateInvalid(error.to_string()))
+}
+
+fn write_json<T: Serialize>(path: &std::path::Path, value: &T) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| Error::Io("local file has no parent folder".into()))?;
+    fs::create_dir_all(parent)?;
+    let temp = path.with_extension("json.tmp");
+    let mut text = serde_json::to_string_pretty(value)
+        .map_err(|error| Error::StateInvalid(error.to_string()))?;
+    text.push('\n');
+    fs::write(&temp, text)?;
+    #[cfg(windows)]
+    if path.exists() {
+        fs::remove_file(path)?;
+    }
+    fs::rename(temp, path)?;
+    Ok(())
 }
