@@ -9,7 +9,7 @@
 //! For a wrapped game the picture is Steam's own screenshot (`steam::pick_screenshot`).
 //! Pure.
 
-use crate::error::{not_built, Result};
+use crate::error::Result;
 use serde::{Deserialize, Serialize};
 
 /// The card format this build reads and writes.
@@ -57,12 +57,24 @@ impl Card {
     /// most `MAX_PLACE_CHARS`, `picture` one of the two `PictureKind::file_name`s. Any failure
     /// is `Error::StateInvalid` (the caller shows such a card as none).
     pub fn from_json(text: &str) -> Result<Card> {
-        not_built("card::Card::from_json")
+        let card: Card = serde_json::from_str(text)
+            .map_err(|e| crate::Error::StateInvalid(format!("card: {e}")))?;
+        if card.format != FORMAT
+            || card.device.is_empty()
+            || crate::stamp::parse_rfc3339(&card.time).is_none()
+            || card.place.as_deref().is_some_and(|place| place.chars().count() > MAX_PLACE_CHARS)
+            || card.picture.as_deref().is_some_and(|picture| {
+                picture != PictureKind::Jpeg.file_name() && picture != PictureKind::Png.file_name()
+            })
+        {
+            return Err(crate::Error::StateInvalid("card: invalid card fields".to_string()));
+        }
+        Ok(card)
     }
 
     /// Compact JSON on one line, fields in declaration order, no trailing newline.
     pub fn to_json(&self) -> String {
-        crate::not_built!("card::Card::to_json")
+        serde_json::to_string(self).expect("serializing a card cannot fail")
     }
 }
 
@@ -79,7 +91,16 @@ pub struct Sidecar {
 /// Read a sidecar. A sidecar never fails a push: bad JSON, or a `picture` path that is
 /// absolute or has a `..` segment, gives `Err(note)` with one short line for `message`.
 pub fn parse_sidecar(text: &str) -> std::result::Result<Sidecar, String> {
-    crate::not_built!("card::parse_sidecar")
+    let sidecar: Sidecar = serde_json::from_str(text)
+        .map_err(|e| format!("sidecar left out: {e}"))?;
+    if let Some(picture) = sidecar.picture.as_deref() {
+        if picture.starts_with('/') || picture.contains('\\') || picture.contains(':')
+            || picture.split('/').any(|segment| segment == "..")
+        {
+            return Err(format!("sidecar left out: picture path {picture} is not inside the saves folder"));
+        }
+    }
+    Ok(sidecar)
 }
 
 /// A picture format, known by its first bytes.
@@ -113,25 +134,38 @@ impl PictureKind {
 /// picture is never an error: anything else is `Err(note)` ("picture left out: not JPEG or
 /// PNG", "picture left out: over 512 KiB").
 pub fn check_picture(bytes: &[u8]) -> std::result::Result<PictureKind, String> {
-    crate::not_built!("card::check_picture")
+    let kind = if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        PictureKind::Jpeg
+    } else if bytes.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {
+        PictureKind::Png
+    } else {
+        return Err("picture left out: not JPEG or PNG".to_string());
+    };
+    if bytes.len() > MAX_PICTURE_BYTES {
+        return Err("picture left out: over 512 KiB".to_string());
+    }
+    Ok(kind)
 }
 
 /// A place name as stored: trimmed, inner runs of whitespace (newlines too) as one space,
 /// cut to `MAX_PLACE_CHARS` characters; empty becomes `None`.
 pub fn clean_place(text: &str) -> Option<String> {
-    crate::not_built!("card::clean_place")
+    let cleaned = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let place = cleaned.chars().take(MAX_PLACE_CHARS).collect::<String>();
+    (!place.is_empty()).then_some(place)
 }
 
 /// The session's playtime: `now - start`, or `None` when there is no start, the start is
 /// after `now`, or the difference is over `MAX_PLAYTIME_SECS`.
 pub fn playtime(start: Option<u64>, now: u64) -> Option<u64> {
-    crate::not_built!("card::playtime")
+    let elapsed = now.checked_sub(start?)?;
+    (elapsed <= MAX_PLAYTIME_SECS).then_some(elapsed)
 }
 
 /// True for a save-set path any of whose `/` segments starts with `RESERVED_PREFIX`
 /// (`scan` leaves these out, so a sidecar or a part file is never a save).
 pub fn is_reserved(path: &str) -> bool {
-    crate::not_built!("card::is_reserved")
+    path.split('/').any(|segment| segment.starts_with(RESERVED_PREFIX))
 }
 
 /// The card a push writes: `FORMAT`, `device`, `time = stamp::rfc3339(now)`,
@@ -144,5 +178,12 @@ pub fn for_push(
     place: Option<&str>,
     picture: Option<PictureKind>,
 ) -> Card {
-    crate::not_built!("card::for_push")
+    Card {
+        format: FORMAT,
+        device: device.to_string(),
+        time: crate::stamp::rfc3339(now),
+        playtime_secs: playtime(session_start, now),
+        place: place.and_then(clean_place),
+        picture: picture.map(|kind| kind.file_name().to_string()),
+    }
 }
