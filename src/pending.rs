@@ -8,7 +8,7 @@
 
 use crate::api::{Held, Side};
 use crate::card::Card;
-use crate::error::{not_built, Result};
+use crate::error::{Error, Result};
 use crate::local::LocalStore;
 use crate::stamp::Clock;
 use serde::{Deserialize, Serialize};
@@ -72,7 +72,11 @@ impl Answer {
     /// True when the answer fits the kind: `KeepServer`/`KeepLocal` a conflict,
     /// `PlayAnyway`/`Wait` a held game.
     pub fn fits(self, kind: ChoiceKind) -> bool {
-        crate::not_built!("pending::Answer::fits")
+        matches!(
+            (self, kind),
+            (Answer::KeepServer | Answer::KeepLocal, ChoiceKind::Conflict)
+                | (Answer::PlayAnyway | Answer::Wait, ChoiceKind::Held)
+        )
     }
 }
 
@@ -103,12 +107,35 @@ impl PendingChoice {
     /// Parse and check: `format == FORMAT`, `game` not empty, `time` RFC 3339, an `answer`
     /// that `fits` the kind. Any failure is `Error::StateInvalid`.
     pub fn from_json(text: &str) -> Result<PendingChoice> {
-        not_built("pending::PendingChoice::from_json")
+        let choice: PendingChoice =
+            serde_json::from_str(text).map_err(|error| Error::StateInvalid(error.to_string()))?;
+        if choice.format != FORMAT {
+            return Err(Error::StateInvalid(format!(
+                "unsupported format {}; expected {FORMAT}",
+                choice.format
+            )));
+        }
+        if choice.game.is_empty() {
+            return Err(Error::StateInvalid("game must not be empty".into()));
+        }
+        if crate::stamp::parse_rfc3339(&choice.time).is_none() {
+            return Err(Error::StateInvalid("time must be RFC 3339 UTC".into()));
+        }
+        if choice
+            .answer
+            .is_some_and(|answer| !answer.fits(choice.kind))
+        {
+            return Err(Error::StateInvalid("answer does not fit the choice".into()));
+        }
+        Ok(choice)
     }
 
     /// Pretty JSON, fields in declaration order, ending in one newline.
     pub fn to_json(&self) -> String {
-        crate::not_built!("pending::PendingChoice::to_json")
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(self).expect("pending choice serialization cannot fail")
+        )
     }
 }
 
@@ -116,7 +143,22 @@ impl PendingChoice {
 /// `Error::NoPendingChoice`), refuse an answer that does not `fit` it (`Error::Usage` naming
 /// both), write it with the answer set, and return it.
 pub fn answer(store: &LocalStore, game: &str, answer: Answer) -> Result<PendingChoice> {
-    not_built("pending::answer")
+    let mut choice = store
+        .load_pending(game)?
+        .ok_or_else(|| Error::NoPendingChoice(game.into()))?;
+    if !answer.fits(choice.kind) {
+        let kind = match choice.kind {
+            ChoiceKind::Conflict => "conflict",
+            ChoiceKind::Held => "held",
+        };
+        return Err(Error::Usage(format!(
+            "{} does not answer a {kind} choice",
+            answer.key()
+        )));
+    }
+    choice.answer = Some(answer);
+    store.save_pending(&choice)?;
+    Ok(choice)
 }
 
 /// Wait for an answer to the game's pending choice: read it every `POLL_SECS` (through
@@ -129,5 +171,17 @@ pub fn wait_for_answer(
     now: Clock,
     sleep: &dyn Fn(u64),
 ) -> Result<Option<Answer>> {
-    not_built("pending::wait_for_answer")
+    let start = now();
+    loop {
+        let Some(choice) = store.load_pending(game)? else {
+            return Ok(None);
+        };
+        if let Some(answer) = choice.answer {
+            return Ok(Some(answer));
+        }
+        if now().saturating_sub(start) >= wait_secs {
+            return Ok(None);
+        }
+        sleep(POLL_SECS);
+    }
 }
