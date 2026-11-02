@@ -110,7 +110,7 @@ In a saves folder, every name starting `.save-relay-` is reserved and never part
 |---|---|---|---|---|
 | `src/error.rs` | present | `Error` with a stable `code()` per variant (the `--json` error codes, including `reauth_needed`, `sign_in_failed`, `save_location_unclear`, `steam_not_found`, `steam_running`, `no_pending_choice`), `NotBuilt`, `Result` | used by all | all |
 | `src/platform.rs` | present | `Platform` (linux, windows, mac, android, ios); `PathVars` (home, data, config, documents) from environment variables through a lookup function; `AppDirs` (`<config>/save-relay`, `<data>/save-relay`) | `manifest`, `local`, `cli` | M6, M7 |
-| `src/manifest.rs` | stub | `Manifest` JSON (format, id, name, saves template per platform, include, exclude), validation, `{home}`/`{data}`/`{config}`/`{documents}` expansion | `platform`; read by `scan`, `sync`, `cli` | M7 |
+| `src/manifest.rs` | present | `Manifest` JSON (format, id, name, saves template per platform, include, exclude), validation, `{home}`/`{data}`/`{config}`/`{documents}` expansion | `platform`; read by `scan`, `sync`, `cli` | M7 |
 | `src/glob.rs` | present | `matches(pattern, path)` with `*`, `?`, `**`; `selected(include, exclude, path)` | used by `scan` | M7 |
 | `src/scan.rs` | present | `FileEntry` (path, size, mtime, sha256), `SaveSet`, `hash_bytes`, `scan(dir, include, exclude)` | `glob`; used by `plan`, `transfer`, `sync` | M1, M2, M3 |
 | `src/stamp.rs` | present | UTC text: RFC 3339 (`2026-10-31T19:51:00Z`) and entry stamps (`20261031T195100Z`), both ways | used by `layout`, `state`, `sync` | M2, M4 |
