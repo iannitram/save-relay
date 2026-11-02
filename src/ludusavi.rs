@@ -312,6 +312,7 @@ pub fn translate(
         saves: BTreeMap::from([(facts.platform, folder.clone())]),
         include,
         exclude: Vec::new(),
+        saves_from: None,
     };
     manifest.validate()?;
     Ok(Located {

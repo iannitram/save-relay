@@ -27,9 +27,12 @@
 //! ```
 
 use crate::error::{Error, Result};
+use crate::local::LocalStore;
+use crate::manifest::Manifest;
 use crate::pending::Answer;
+use crate::platform::{PathVars, Platform};
 use crate::service::Service;
-use crate::sync::Resolve;
+use crate::sync::{Game, Resolve};
 use std::io::{Read, Write};
 use std::path::PathBuf;
 
@@ -43,6 +46,51 @@ pub struct GameArg {
     pub id: String,
     pub manifest: Option<PathBuf>,
     pub saves_dir: Option<PathBuf>,
+}
+
+impl GameArg {
+    /// The manifest and saves folder this command works on, read without writing anything, so
+    /// a refusal comes before any server call or file write. The manifest is `--manifest` (its
+    /// id must equal `id`) or the one remembered here (`Error::GameUnknown` when neither). The
+    /// folder is `--saves-dir` verbatim; else, for a `saves_from` game, `Error::Usage` naming
+    /// `--saves-dir` (never a remembered or guessed folder, #48); else the remembered
+    /// `--saves-dir`, else the manifest's template for `platform`.
+    pub fn load(&self, store: &LocalStore, platform: Platform, vars: &PathVars) -> Result<Game> {
+        let record = store.load_game(&self.id)?;
+        let manifest = match &self.manifest {
+            Some(path) => {
+                let text = std::fs::read_to_string(path).map_err(|error| {
+                    Error::Io(format!("cannot read manifest {}: {error}", path.display()))
+                })?;
+                let manifest = Manifest::from_json(&text)?;
+                if manifest.id != self.id {
+                    return Err(Error::Usage(format!(
+                        "--manifest is for '{}', not '{}'",
+                        manifest.id, self.id
+                    )));
+                }
+                manifest
+            }
+            None => match &record {
+                Some(record) => record.manifest.clone(),
+                None => return Err(Error::GameUnknown(self.id.clone())),
+            },
+        };
+        let saves_dir = match &self.saves_dir {
+            Some(folder) => folder.clone(),
+            None if manifest.saves_from.is_some() => {
+                return Err(crate::manifest::saves_dir_required(&manifest.id))
+            }
+            None => match record.and_then(|record| record.saves_dir) {
+                Some(folder) => folder,
+                None => manifest.saves_dir(platform, vars)?,
+            },
+        };
+        Ok(Game {
+            manifest,
+            saves_dir,
+        })
+    }
 }
 
 /// How `setup` signs in to Google Drive or Dropbox (`oauth`).

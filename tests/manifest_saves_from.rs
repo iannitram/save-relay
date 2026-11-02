@@ -1,3 +1,4 @@
+use save_relay::api::exit_code;
 use save_relay::cli::{parse, Command, GameArg};
 use save_relay::local::{GameRecord, LocalStore};
 use save_relay::manifest::Manifest;
@@ -119,6 +120,18 @@ fn command_args(command: &str, manifest: &Path) -> Vec<String> {
     args
 }
 
+fn game_of(args: &[String]) -> GameArg {
+    match parse(args).unwrap().command {
+        Command::Pull { game, .. }
+        | Command::Push { game, .. }
+        | Command::Status { game }
+        | Command::Restore { game, .. } => game,
+        other => panic!("{other:?}"),
+    }
+}
+
+// `cli::run` is #22's; these check the refusal it will print, at the `GameArg::load` it calls
+// first. The binary-level check (stdout, `--json` envelope) belongs with #22.
 #[test]
 fn all_four_commands_refuse_without_saves_dir_before_writing() {
     let fixture = Fixture::new("refusal");
@@ -130,21 +143,15 @@ fn all_four_commands_refuse_without_saves_dir_before_writing() {
             if json {
                 args.push("--json".into());
             }
-            let output = std::process::Command::new(env!("CARGO_BIN_EXE_save-relay"))
-                .args(args)
-                .current_dir(&fixture.0)
-                .output()
-                .unwrap();
-            assert_eq!(output.status.code(), Some(2), "{command}: {output:?}");
-            let text = String::from_utf8(output.stdout).unwrap();
-            assert!(text.contains("--saves-dir"), "{command}: {text}");
-            if json {
-                assert_eq!(text.lines().count(), 1);
-                let envelope: serde_json::Value = serde_json::from_str(&text).unwrap();
-                assert_eq!(envelope["ok"], false);
-                assert_eq!(envelope["command"], command);
-                assert_eq!(envelope["error"]["code"], "usage");
-            }
+            let error = game_of(&args)
+                .load(&fixture.store(), Platform::Mac, &fixture.vars())
+                .unwrap_err();
+            assert!(
+                matches!(&error, Error::Usage(message) if message.contains("--saves-dir")),
+                "{command}: {error:?}"
+            );
+            assert_eq!(error.code(), "usage", "{command}");
+            assert_eq!(exit_code(&error), 2, "{command}");
             assert_eq!(snapshot(&fixture.0), before);
         }
     }
@@ -158,15 +165,7 @@ fn all_four_commands_use_the_explicit_folder_verbatim() {
     for command in ["pull", "push", "status", "restore"] {
         let mut args = command_args(command, &path);
         args.extend(["--saves-dir".into(), folder.to_str().unwrap().into()]);
-        let parsed = parse(&args).unwrap();
-        let game = match parsed.command {
-            Command::Pull { game, .. }
-            | Command::Push { game, .. }
-            | Command::Status { game }
-            | Command::Restore { game, .. } => game,
-            other => panic!("{other:?}"),
-        };
-        let loaded = game
+        let loaded = game_of(&args)
             .load(&fixture.store(), Platform::Mac, &fixture.vars())
             .unwrap();
         assert_eq!(loaded.saves_dir, folder);
