@@ -121,22 +121,57 @@ impl LocalStore {
 
     /// `None` when no choice is pending for `game`. Unreadable is `Error::StateInvalid`.
     pub fn load_pending(&self, game: &str) -> Result<Option<PendingChoice>> {
-        not_built("local::LocalStore::load_pending")
+        let path = self.dirs.data.join("pending").join(format!("{game}.json"));
+        let text = match fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(Error::StateInvalid(error.to_string())),
+        };
+        PendingChoice::from_json(&text).map(Some)
     }
 
     /// Saved under `choice.game`, replacing any earlier one.
     pub fn save_pending(&self, choice: &PendingChoice) -> Result<()> {
-        not_built("local::LocalStore::save_pending")
+        write_json(
+            &self
+                .dirs
+                .data
+                .join("pending")
+                .join(format!("{}.json", choice.game)),
+            choice,
+        )
     }
 
     /// Removes `pending/<game>.json`; none there is fine.
     pub fn clear_pending(&self, game: &str) -> Result<()> {
-        not_built("local::LocalStore::clear_pending")
+        match fs::remove_file(self.dirs.data.join("pending").join(format!("{game}.json"))) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        }
     }
 
     /// Every pending choice on this machine, by game id (the panel's list).
     pub fn list_pending(&self) -> Result<Vec<PendingChoice>> {
-        not_built("local::LocalStore::list_pending")
+        let entries = match fs::read_dir(self.dirs.data.join("pending")) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error.into()),
+        };
+        let mut choices = Vec::new();
+        for entry in entries {
+            let path = entry?.path();
+            if path
+                .extension()
+                .is_some_and(|extension| extension == "json")
+            {
+                let text = fs::read_to_string(path)
+                    .map_err(|error| Error::StateInvalid(error.to_string()))?;
+                choices.push(PendingChoice::from_json(&text)?);
+            }
+        }
+        choices.sort_by(|a, b| a.game.cmp(&b.game));
+        Ok(choices)
     }
 
     /// `None` when no `pull` ran since the last push.
