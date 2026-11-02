@@ -1,0 +1,1 @@
+{"ok":true,"command":"setup","data":{"service":"dropbox","url":"https://www.dropbox.com/oauth2/authorize?client_id=save-relay&response_type=code","code":null,"expires_at":"2026-10-31T20:21:00Z","message":"Open the page, allow Save Relay, then run setup --service dropbox --finish and type the code it shows."}}

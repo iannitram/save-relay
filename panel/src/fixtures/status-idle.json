@@ -1,0 +1,1 @@
+{"ok":true,"command":"status","data":{"game":"hollow-knight","service":"dropbox","reachable":true,"would":"noop","server":{"device":"steam-deck","time":"2026-10-31T19:51:00Z","revision":7},"local":{"device":"steam-deck","time":"2026-10-31T19:51:00Z","revision":7},"last_synced_revision":7,"local_changed":false,"message":"In sync.","held":null,"pending":null}}
