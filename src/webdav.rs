@@ -3,7 +3,7 @@
 //! `http::Transport` (the real one is behind the `http` feature), so the core builds without a
 //! network stack. Its overwrite guard is the server's own `If-Match`.
 
-use crate::error::{not_built, Error, Result};
+use crate::error::{Error, Result};
 use crate::remote::RemoteEntry;
 use quick_xml::events::Event;
 use quick_xml::name::ResolveResult;
@@ -15,18 +15,39 @@ use quick_xml::reader::NsReader;
 /// (`https://example.org/nextcloud`). It must start with `http://` or `https://`, else
 /// `Error::Usage`. The user name is percent-encoded like a path segment (`encode_segment`).
 pub fn files_url(server: &str, user: &str) -> Result<String> {
-    not_built("webdav::files_url")
+    if !server.starts_with("http://") && !server.starts_with("https://") {
+        return Err(Error::Usage(
+            "the WebDAV server must start with http:// or https://".into(),
+        ));
+    }
+    Ok(format!(
+        "{}/remote.php/dav/files/{}/",
+        server.trim_end_matches('/'),
+        encode_segment(user)
+    ))
 }
 
 /// Percent-encode one path segment: keep `A-Z a-z 0-9 - . _ ~`, encode every other byte of the
 /// UTF-8 as `%XX` (uppercase hex). `"Uncharted 1"` -> `"Uncharted%201"`.
 pub fn encode_segment(segment: &str) -> String {
-    crate::not_built!("webdav::encode_segment")
+    let mut encoded = String::with_capacity(segment.len());
+    for byte in segment.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            use std::fmt::Write;
+            write!(encoded, "%{byte:02X}").expect("writing to a String cannot fail");
+        }
+    }
+    encoded
 }
 
 /// `encode_segment` on each `/`-separated segment, joined with `/`.
 pub fn encode_path(path: &str) -> String {
-    crate::not_built!("webdav::encode_path")
+    path.split('/')
+        .map(encode_segment)
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// Parse a `PROPFIND` (Depth: 1) `207 Multi-Status` body into the children of the folder whose
