@@ -100,7 +100,33 @@ pub fn random_bytes() -> Result<[u8; 32]> {
 /// `A-Z a-z 0-9 - . _ ~`, every other UTF-8 byte as `%XX` (uppercase hex; a space is `%20`).
 /// `[("a", "b c"), ("x", "1&2")]` -> `"a=b%20c&x=1%262"`.
 pub fn form_encode(pairs: &[(&str, &str)]) -> String {
-    crate::not_built!("oauth::form_encode")
+    fn push_encoded(out: &mut String, s: &str) {
+        for &b in s.as_bytes() {
+            match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                    out.push(b as char);
+                }
+                _ => {
+                    let high = char::from_digit((b >> 4) as u32, 16).unwrap();
+                    let low = char::from_digit((b & 0x0f) as u32, 16).unwrap();
+                    out.push('%');
+                    out.push(high.to_ascii_uppercase());
+                    out.push(low.to_ascii_uppercase());
+                }
+            }
+        }
+    }
+
+    let mut out = String::new();
+    for (i, (key, value)) in pairs.iter().enumerate() {
+        if i > 0 {
+            out.push('&');
+        }
+        push_encoded(&mut out, key);
+        out.push('=');
+        push_encoded(&mut out, value);
+    }
+    out
 }
 
 /// The sign-in URL: `<authorize_url>?` + `form_encode` of, in this order, `client_id`,
@@ -114,7 +140,18 @@ pub fn authorize_url(
     challenge: &str,
     state: &str,
 ) -> String {
-    crate::not_built!("oauth::authorize_url")
+    let mut pairs: Vec<(&str, &str)> = Vec::new();
+    pairs.push(("client_id", client_id));
+    if !redirect_uri.is_empty() {
+        pairs.push(("redirect_uri", redirect_uri));
+    }
+    pairs.push(("response_type", "code"));
+    pairs.push(("scope", provider.scope));
+    pairs.push(("code_challenge", challenge));
+    pairs.push(("code_challenge_method", "S256"));
+    pairs.push(("state", state));
+    pairs.extend(provider.extra.iter().copied());
+    format!("{}?{}", provider.authorize_url, form_encode(&pairs))
 }
 
 /// The code from the loopback redirect's request target (`"/?code=..&state=..&scope=.."`;
@@ -123,7 +160,77 @@ pub fn authorize_url(
 /// refused: `error=access_denied`) is `Error::SignInFailed("<error value>")`, checked before
 /// the state. No `code` is `Error::SignInFailed("no code in the answer")`.
 pub fn parse_redirect(target: &str, want_state: &str) -> Result<String> {
-    not_built("oauth::parse_redirect")
+    fn hex(b: u8) -> Option<u8> {
+        match b {
+            b'0'..=b'9' => Some(b - b'0'),
+            b'a'..=b'f' => Some(b - b'a' + 10),
+            b'A'..=b'F' => Some(b - b'A' + 10),
+            _ => None,
+        }
+    }
+
+    fn decode(s: &str) -> String {
+        let bytes = s.as_bytes();
+        let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+        let mut i = 0;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'+' => {
+                    out.push(b' ');
+                    i += 1;
+                }
+                b'%' if i + 2 < bytes.len() => match (hex(bytes[i + 1]), hex(bytes[i + 2])) {
+                    (Some(high), Some(low)) => {
+                        out.push(high * 16 + low);
+                        i += 3;
+                    }
+                    _ => {
+                        out.push(b'%');
+                        i += 1;
+                    }
+                },
+                b => {
+                    out.push(b);
+                    i += 1;
+                }
+            }
+        }
+        String::from_utf8_lossy(&out).into_owned()
+    }
+
+    let query = target.split_once('?').map(|(_, q)| q).unwrap_or("");
+    let mut code: Option<String> = None;
+    let mut state: Option<String> = None;
+    let mut error: Option<String> = None;
+    for pair in query.split('&').filter(|p| !p.is_empty()) {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        let key = decode(key);
+        let value = decode(value);
+        match key.as_str() {
+            "code" => code = Some(value),
+            "state" => state = Some(value),
+            "error" => error = Some(value),
+            _ => {}
+        }
+    }
+
+    if let Some(error) = error {
+        return Err(crate::error::Error::SignInFailed(error));
+    }
+    match state {
+        Some(state) if state == want_state => {}
+        _ => {
+            return Err(crate::error::Error::SignInFailed(
+                "the answer did not match this sign-in".into(),
+            ));
+        }
+    }
+    match code {
+        Some(code) => Ok(code),
+        None => Err(crate::error::Error::SignInFailed(
+            "no code in the answer".into(),
+        )),
+    }
 }
 
 /// Tokens from a token endpoint. `Debug` shows `***` for both secrets.
