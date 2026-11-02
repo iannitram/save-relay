@@ -9,9 +9,11 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
     "isolatedModules": true,
     "skipLibCheck": true,
     "noEmit": true,
+    "resolveJsonModule": true,
     "rootDir": ".."
   },
   "include": ["src", "../panel/src"],
