@@ -31,30 +31,52 @@ impl Service {
 
     /// The key used in `--service`, the config and `--json`: "nextcloud", "gdrive", "dropbox".
     pub fn key(self) -> &'static str {
-        crate::not_built!("service::Service::key")
+        match self {
+            Service::Nextcloud => "nextcloud",
+            Service::Gdrive => "gdrive",
+            Service::Dropbox => "dropbox",
+        }
     }
 
     /// The name shown to a person: "Nextcloud", "Google Drive", "Dropbox".
     pub fn label(self) -> &'static str {
-        crate::not_built!("service::Service::label")
+        match self {
+            Service::Nextcloud => "Nextcloud",
+            Service::Gdrive => "Google Drive",
+            Service::Dropbox => "Dropbox",
+        }
     }
 
     /// The service for a `--service` value: exactly a key above. Anything else is
     /// `Error::Usage("unknown service '<text>': use nextcloud, gdrive or dropbox")`.
     pub fn parse(text: &str) -> Result<Service> {
-        not_built("service::Service::parse")
+        match text {
+            "nextcloud" => Ok(Service::Nextcloud),
+            "gdrive" => Ok(Service::Gdrive),
+            "dropbox" => Ok(Service::Dropbox),
+            _ => Err(crate::Error::Usage(format!(
+                "unknown service '{text}': use nextcloud, gdrive or dropbox"
+            ))),
+        }
     }
 
     /// The service a config's `server` field names: `http://` or `https://` at the start is
     /// Nextcloud; exactly `gdrive` or `dropbox` is that service; anything else is
     /// `Error::StateInvalid("config: unknown server '<server>'")`.
     pub fn from_server(server: &str) -> Result<Service> {
-        not_built("service::Service::from_server")
+        match server {
+            s if s.starts_with("http://") || s.starts_with("https://") => Ok(Service::Nextcloud),
+            "gdrive" => Ok(Service::Gdrive),
+            "dropbox" => Ok(Service::Dropbox),
+            _ => Err(crate::Error::StateInvalid(format!(
+                "config: unknown server '{server}'"
+            ))),
+        }
     }
 
     /// Signs in through the browser (Google Drive, Dropbox) rather than with an app password.
     pub fn uses_oauth(self) -> bool {
-        crate::not_built!("service::Service::uses_oauth")
+        matches!(self, Service::Gdrive | Service::Dropbox)
     }
 }
 
@@ -63,7 +85,15 @@ impl Service {
 /// `"gdrive:me@example.org"`. Nextcloud keeps an app password under `creds::account` instead,
 /// so `Service::Nextcloud` is `Error::Usage`; an empty `user` is `Error::Usage` too.
 pub fn token_account(service: Service, user: &str) -> Result<String> {
-    not_built("service::token_account")
+    if service == Service::Nextcloud {
+        return Err(crate::Error::Usage(
+            "Nextcloud uses an app password, not a refresh token".into(),
+        ));
+    }
+    if user.is_empty() {
+        return Err(crate::Error::Usage("user must not be empty".into()));
+    }
+    Ok(format!("{}:{user}", service.key()))
 }
 
 /// Open the service the config names, as a `Remote`: `webdav::WebDav` with the app password,
