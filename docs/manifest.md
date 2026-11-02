@@ -42,7 +42,7 @@ The following placeholders are supported:
 - Home: `%USERPROFILE%`
 - Data: `%LOCALAPPDATA%`
 - Config: `%APPDATA%`
-- Documents: `~/Documents`
+- Documents: `%USERPROFILE%\Documents`
 
 ### macOS
 - Home: `$HOME`
