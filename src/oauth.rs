@@ -588,6 +588,9 @@ pub fn sign_in_browser_timeout(
             }
         };
 
+        // Some platforms (BSD, macOS) hand out accepted sockets in the listener's non-blocking
+        // mode, which would make the request read below fail before the browser has sent it.
+        let _ = stream.set_nonblocking(false);
         let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
         let mut reader = std::io::BufReader::new(&mut stream);
         let mut request_line = String::new();
@@ -628,7 +631,10 @@ pub fn sign_in_browser_timeout(
         ("client_id", client.id),
     ];
     if provider.service == Service::Gdrive {
-        pairs.push(("client_secret", client.secret.unwrap_or("")));
+        // Like the device flow, send the secret only when one is registered (never `client_secret=`).
+        if let Some(secret) = client.secret.filter(|s| !s.is_empty()) {
+            pairs.push(("client_secret", secret));
+        }
     }
 
     let body = form_encode(&pairs);
