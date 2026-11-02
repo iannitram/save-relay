@@ -249,7 +249,9 @@ fn hex_value(byte: u8) -> Option<u8> {
 /// 404 is `Error::NotFound`; 409 on PUT/MKCOL/MOVE/COPY is `Error::NotFound(parent)`.
 /// The password is never logged or put in an error message.
 pub struct WebDav {
-    _private: (),
+    files_url: String,
+    auth: String,
+    transport: std::sync::Arc<dyn crate::http::Transport>,
 }
 
 impl WebDav {
@@ -261,17 +263,125 @@ impl WebDav {
         password: crate::creds::Secret,
         transport: std::sync::Arc<dyn crate::http::Transport>,
     ) -> WebDav {
-        WebDav { _private: () }
+        WebDav {
+            files_url: files_url.to_string(),
+            auth: "Basic ".to_string()
+                + &Self::b64(format!("{}:{}", user, password.expose()).as_bytes()),
+            transport,
+        }
+    }
+
+    fn b64(bytes: &[u8]) -> String {
+        const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut result = String::new();
+        let mut i = 0;
+
+        while i < bytes.len() {
+            let mut bits = 0u32;
+            let mut bit_count = 0;
+
+            // Take up to 3 bytes (224 bits) and shift them into the bits variable
+            for j in 0..3 {
+                if i + j < bytes.len() {
+                    bits |= (bytes[i + j] as u32) << (16 - j * 8);
+                    bit_count += 8;
+                }
+            }
+
+            // Process 4 characters at a time
+            for j in 0..4 {
+                if bit_count >= (j * 6) {
+                    let index = (bits >> (18 - j * 6)) & 0x3F;
+                    result.push(ALPHABET[index as usize] as char);
+                } else {
+                    result.push('=');
+                }
+            }
+
+            i += 3;
+        }
+
+        result
+    }
+
+    fn url(&self, path: &str) -> String {
+        let encoded = encode_path(path);
+        format!("{}{}", self.files_url, encoded)
+    }
+
+    fn send(
+        &self,
+        method: &str,
+        path: &str,
+        headers: &[(&str, String)],
+        body: Vec<u8>,
+        ok: &[u16],
+    ) -> Result<crate::http::Response> {
+        let url = self.url(path);
+        let mut request = crate::http::Request::new(method, &url);
+        request = request.header("Authorization", &self.auth);
+        for (name, value) in headers {
+            request = request.header(name, value);
+        }
+        if !body.is_empty() {
+            request = request.body(body);
+        }
+        let response = self.transport.send(&request)?;
+        if ok.contains(&response.status) {
+            Ok(response)
+        } else {
+            match response.status {
+                404 => Err(Error::NotFound(path.to_string())),
+                409 => {
+                    // For GET requests, a 409 means the specific file doesn't exist, so return parent
+                    if method == "GET" {
+                        let last_slash = path.rfind('/');
+                        if let Some(pos) = last_slash {
+                            Err(Error::NotFound(path[..pos].to_string()))
+                        } else {
+                            Err(Error::NotFound("".to_string()))
+                        }
+                    } else {
+                        Err(Error::NotFound(path.to_string()))
+                    }
+                }
+                401 | 403 => Err(Error::AuthFailed),
+                _ => Err(Error::Server(format!(
+                    "{} {}: {}",
+                    method, path, response.status
+                ))),
+            }
+        }
     }
 }
 
 impl crate::remote::Remote for WebDav {
     fn list(&self, dir: &str) -> Result<Vec<RemoteEntry>> {
-        crate::error::not_built("webdav::WebDav::list")
+        let response = self.send("PROPFIND", dir, &[("Depth", "1".into())], vec![], &[207])?;
+        // The href should be the path portion of the request URL (without the scheme and host)
+        let url = self.url(dir);
+        let href = if let Some(pos) = url.find("/remote.php/dav/files/") {
+            // Extract everything from /remote.php/dav/files/ onwards
+            &url[pos..]
+        } else {
+            // Fallback to just the path part
+            let path_start = url.rfind('/').map(|i| i + 1).unwrap_or(0);
+            &url[path_start..]
+        };
+
+        let entries = parse_propfind(&response.text(), href)?;
+        Ok(entries)
     }
+
     fn get(&self, path: &str) -> Result<(Vec<u8>, String)> {
-        crate::error::not_built("webdav::WebDav::get")
+        let response = self.send("GET", path, &[], vec![], &[200])?;
+        let etag = response
+            .header_value("ETag")
+            .ok_or_else(|| Error::Server(format!("GET {}: no ETag", path)))?
+            .to_string();
+        Ok((response.body, etag))
     }
+
     fn put(&self, path: &str, bytes: &[u8], pre: &crate::remote::Precondition) -> Result<String> {
         crate::error::not_built("webdav::WebDav::put")
     }
