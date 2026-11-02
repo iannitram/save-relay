@@ -123,5 +123,11 @@ pub fn decide_with_mark(
     last: Option<&LastSynced>,
     server: &ServerView,
 ) -> Decision {
-    crate::not_built!("plan::decide_with_mark")
+    if *server == ServerView::Unreachable {
+        Decision::Offline
+    } else if intent == Intent::Launch && !anyway && matches!(hold, Hold::Elsewhere { .. }) {
+        Decision::Held
+    } else {
+        decide(intent, local, last, server)
+    }
 }

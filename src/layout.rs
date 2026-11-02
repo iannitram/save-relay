@@ -52,7 +52,7 @@ impl Layout {
 
     /// `<root>/<game>/playing.json` (`presence::FILE`)
     pub fn playing_path(&self, game: &str) -> String {
-        format!("{}/playing.json", self.game_dir(game))
+        format!("{}/{}", self.game_dir(game), crate::presence::FILE)
     }
 
     /// `<root>/<game>/history`
