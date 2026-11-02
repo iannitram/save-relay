@@ -68,7 +68,41 @@ pub fn decide(
     last: Option<&LastSynced>,
     server: &ServerView,
 ) -> Decision {
-    crate::not_built!("plan::decide")
+    match server {
+        ServerView::Unreachable => Decision::Offline,
+        ServerView::Empty => {
+            if local.is_empty() {
+                Decision::Noop
+            } else {
+                Decision::Push
+            }
+        }
+        ServerView::At { revision, files } => match last {
+            None => {
+                if local.same_content(files) {
+                    Decision::Adopt
+                } else if local.is_empty() {
+                    Decision::Pull
+                } else {
+                    Decision::Conflict
+                }
+            }
+            Some(last) => {
+                let local_changed = !local.same_content(&last.save_set());
+                let server_changed = *revision != last.revision;
+                match (local_changed, server_changed) {
+                    (false, false) => Decision::Noop,
+                    (true, false) => Decision::Push,
+                    (false, true) => match intent {
+                        Intent::Launch => Decision::Pull,
+                        Intent::Exit => Decision::Noop,
+                    },
+                    (true, true) if local.same_content(files) => Decision::Adopt,
+                    (true, true) => Decision::Conflict,
+                }
+            }
+        },
+    }
 }
 
 /// `decide` with the open-elsewhere mark (M11), one row added after `Unreachable`:
