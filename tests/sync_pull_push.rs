@@ -4,6 +4,7 @@ use save_relay::local::LocalStore;
 use save_relay::manifest::Manifest;
 use save_relay::plan::Intent;
 use save_relay::platform::AppDirs;
+use save_relay::presence;
 use save_relay::remote::{MemoryRemote, Precondition, Remote, RemoteEntry};
 use save_relay::scan::{hash_bytes, scan, SaveSet};
 use save_relay::stamp;
@@ -180,6 +181,8 @@ fn snapshot(remote: &MemoryRemote) -> Vec<(String, Vec<u8>)> {
     remote
         .file_paths()
         .into_iter()
+        // A launch's pull writes the open-elsewhere mark (M11); these rows check the saves and state.
+        .filter(|path| !path.ends_with(&format!("/{}", presence::FILE)))
         .map(|path| {
             let bytes = remote.read(&path).unwrap();
             (path, bytes)
