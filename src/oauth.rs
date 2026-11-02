@@ -271,13 +271,63 @@ pub struct Tokens {
 ///    when left out; `refresh_token` when present);
 /// 5. anything else: `Error::Server("token endpoint: <status>")`.
 pub fn parse_token_response(service: Service, status: u16, body: &str, now: u64) -> Result<Tokens> {
-    not_built("oauth::parse_token_response")
+    let server_error = || crate::Error::Server(format!("token endpoint: {status}"));
+    if (500..=599).contains(&status) {
+        return Err(server_error());
+    }
+    let answer: serde_json::Value = serde_json::from_str(body).map_err(|_| server_error())?;
+    match answer.get("error").and_then(serde_json::Value::as_str) {
+        Some("invalid_grant") => {
+            return Err(crate::Error::ReauthNeeded(service_label(service).into()));
+        }
+        Some(error) => {
+            let message = match answer
+                .get("error_description")
+                .and_then(serde_json::Value::as_str)
+            {
+                Some(description) => format!("{error}: {description}"),
+                None => error.to_string(),
+            };
+            return Err(crate::Error::SignInFailed(message));
+        }
+        None => {}
+    }
+    if status == 200 {
+        if let Some(access) = answer
+            .get("access_token")
+            .and_then(serde_json::Value::as_str)
+        {
+            let expires_in = answer
+                .get("expires_in")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(3600);
+            let refresh = answer
+                .get("refresh_token")
+                .and_then(serde_json::Value::as_str)
+                .map(Secret::new);
+            return Ok(Tokens {
+                access: Secret::new(access),
+                expires_at: now.saturating_add(expires_in),
+                refresh,
+            });
+        }
+    }
+    Err(server_error())
+}
+
+/// The name a service is shown by, for a message about its sign-in.
+fn service_label(service: Service) -> &'static str {
+    match service {
+        Service::Gdrive => "Google Drive",
+        Service::Dropbox => "Dropbox",
+        Service::Nextcloud => "Nextcloud",
+    }
 }
 
 /// True when an access token expiring at `expires_at` should be refreshed at `now`:
 /// `now + REFRESH_MARGIN >= expires_at`.
 pub fn needs_refresh(expires_at: u64, now: u64) -> bool {
-    crate::not_built!("oauth::needs_refresh")
+    now.saturating_add(REFRESH_MARGIN) >= expires_at
 }
 
 /// Access tokens for one service, refreshed from the stored refresh token as needed.
