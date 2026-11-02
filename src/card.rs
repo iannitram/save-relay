@@ -62,12 +62,17 @@ impl Card {
         if card.format != FORMAT
             || card.device.is_empty()
             || crate::stamp::parse_rfc3339(&card.time).is_none()
-            || card.place.as_deref().is_some_and(|place| place.chars().count() > MAX_PLACE_CHARS)
+            || card
+                .place
+                .as_deref()
+                .is_some_and(|place| place.chars().count() > MAX_PLACE_CHARS)
             || card.picture.as_deref().is_some_and(|picture| {
                 picture != PictureKind::Jpeg.file_name() && picture != PictureKind::Png.file_name()
             })
         {
-            return Err(crate::Error::StateInvalid("card: invalid card fields".to_string()));
+            return Err(crate::Error::StateInvalid(
+                "card: invalid card fields".to_string(),
+            ));
         }
         Ok(card)
     }
@@ -91,13 +96,17 @@ pub struct Sidecar {
 /// Read a sidecar. A sidecar never fails a push: bad JSON, or a `picture` path that is
 /// absolute or has a `..` segment, gives `Err(note)` with one short line for `message`.
 pub fn parse_sidecar(text: &str) -> std::result::Result<Sidecar, String> {
-    let sidecar: Sidecar = serde_json::from_str(text)
-        .map_err(|e| format!("sidecar left out: {e}"))?;
+    let sidecar: Sidecar =
+        serde_json::from_str(text).map_err(|e| format!("sidecar left out: {e}"))?;
     if let Some(picture) = sidecar.picture.as_deref() {
-        if picture.starts_with('/') || picture.contains('\\') || picture.contains(':')
+        if picture.starts_with('/')
+            || picture.contains('\\')
+            || picture.contains(':')
             || picture.split('/').any(|segment| segment == "..")
         {
-            return Err(format!("sidecar left out: picture path {picture} is not inside the saves folder"));
+            return Err(format!(
+                "sidecar left out: picture path {picture} is not inside the saves folder"
+            ));
         }
     }
     Ok(sidecar)
@@ -165,7 +174,8 @@ pub fn playtime(start: Option<u64>, now: u64) -> Option<u64> {
 /// True for a save-set path any of whose `/` segments starts with `RESERVED_PREFIX`
 /// (`scan` leaves these out, so a sidecar or a part file is never a save).
 pub fn is_reserved(path: &str) -> bool {
-    path.split('/').any(|segment| segment.starts_with(RESERVED_PREFIX))
+    path.split('/')
+        .any(|segment| segment.starts_with(RESERVED_PREFIX))
 }
 
 /// The card a push writes: `FORMAT`, `device`, `time = stamp::rfc3339(now)`,
