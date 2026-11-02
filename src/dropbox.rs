@@ -23,14 +23,30 @@ pub const CONTENT: &str = "https://content.dropboxapi.com/2";
 /// A `Remote` path as a Dropbox path: `""` -> `""` (the App folder's root, as `list_folder`
 /// wants it); `"a/b c"` -> `"/a/b c"`.
 pub fn api_path(path: &str) -> String {
-    crate::not_built!("dropbox::api_path")
+    if path.is_empty() {
+        String::new()
+    } else {
+        format!("/{path}")
+    }
 }
 
 /// `value` as compact JSON safe for an HTTP header (`Dropbox-API-Arg`): every character
 /// above U+007F written as `\uXXXX` (lowercase hex; two escapes, a UTF-16 pair, above U+FFFF),
 /// so the header is ASCII and parses back to the same value.
 pub fn header_json(value: &serde_json::Value) -> String {
-    crate::not_built!("dropbox::header_json")
+    let text = value.to_string();
+    let mut out = String::with_capacity(text.len());
+    let mut units = [0u16; 2];
+    for ch in text.chars() {
+        if ch.is_ascii() {
+            out.push(ch);
+        } else {
+            for unit in ch.encode_utf16(&mut units) {
+                out.push_str(&format!("\\u{unit:04x}"));
+            }
+        }
+    }
+    out
 }
 
 /// The `Dropbox-API-Arg` of an upload, through `header_json`:
@@ -38,7 +54,19 @@ pub fn header_json(value: &serde_json::Value) -> String {
 /// "strict_conflict": true}` where `M` is `"overwrite"` for `Precondition::Any`, `"add"` for
 /// `Absent`, `{".tag": "update", "update": <rev>}` for `Match(rev)`.
 pub fn upload_arg(path: &str, pre: &Precondition) -> String {
-    crate::not_built!("dropbox::upload_arg")
+    let mode = match pre {
+        Precondition::Any => serde_json::json!("overwrite"),
+        Precondition::Absent => serde_json::json!("add"),
+        Precondition::Match(rev) => serde_json::json!({".tag": "update", "update": rev}),
+    };
+    let value = serde_json::json!({
+        "path": api_path(path),
+        "mode": mode,
+        "autorename": false,
+        "mute": true,
+        "strict_conflict": true,
+    });
+    header_json(&value)
 }
 
 /// Which `Remote` call an answer belongs to.
@@ -86,7 +114,48 @@ pub enum Outcome {
 /// Rows are checked top to bottom; the first that fits wins. A body that is not JSON counts
 /// as an empty summary.
 pub fn classify(op: Op, status: u16, body: &str, path: &str) -> Outcome {
-    crate::not_built!("dropbox::classify")
+    let summary = serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| {
+            v.get("error_summary")
+                .and_then(|s| s.as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_default();
+    match status {
+        200 => return Outcome::Ok,
+        401 => return Outcome::Refresh,
+        429 | 500..=599 => return Outcome::Retry,
+        409 => {}
+        _ => {}
+    }
+    if status == 409 {
+        if summary.starts_with("path/conflict/folder") && op == Op::Mkcol {
+            return Outcome::Ok;
+        }
+        if summary.starts_with("path/conflict") && op == Op::Put {
+            return Outcome::Err(Error::Changed);
+        }
+        if summary.starts_with("path/conflict") && op == Op::Mkcol {
+            return Outcome::Err(Error::Server(format!("a file is there: {path}")));
+        }
+        if summary.starts_with("to/conflict") && matches!(op, Op::Copy | Op::Move) {
+            return Outcome::Err(Error::Server(format!("exists: {summary}")));
+        }
+        if summary.starts_with("path/not_found")
+            || summary.starts_with("path_lookup/not_found")
+            || summary.starts_with("from_lookup/not_found")
+        {
+            return Outcome::Err(Error::NotFound(path.into()));
+        }
+        if matches!(op, Op::Get | Op::List)
+            && (summary.starts_with("path/not_file") || summary.starts_with("path/not_folder"))
+        {
+            return Outcome::Err(Error::NotFound(path.into()));
+        }
+    }
+    let what = if summary.is_empty() { body } else { &summary };
+    Outcome::Err(Error::Server(format!("dropbox {status}: {what}")))
 }
 
 /// One page of `files/list_folder` (or `/continue`).
