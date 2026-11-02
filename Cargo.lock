@@ -344,6 +344,7 @@ dependencies = [
 name = "save-relay"
 version = "0.0.0"
 dependencies = [
+ "getrandom",
  "quick-xml",
  "serde",
  "serde_json",
