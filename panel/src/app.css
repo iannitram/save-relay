@@ -1,5 +1,159 @@
-/* The desktop page's own styles; the views are styled by their issues. */
+/* The panel's styles: sized for 1280x800 and a controller; text is 18px or more. */
 :root {
-  color-scheme: light dark;
+  color-scheme: dark;
   font-family: system-ui, sans-serif;
+  font-size: 18px;
+  --bg: #14181f;
+  --panel: #1f2631;
+  --text: #f1f4f8;
+  --muted: #a9b4c4;
+  --accent: #6cb4ff;
+}
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+.screen {
+  box-sizing: border-box;
+  max-width: 1280px;
+  min-height: 800px;
+  margin: 0 auto;
+  padding: 32px 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+header {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+h1 {
+  margin: 0;
+  font-size: 36px;
+}
+h2 {
+  margin: 0 0 8px;
+  font-size: 22px;
+  color: var(--muted);
+}
+p {
+  margin: 4px 0;
+}
+.big {
+  font-size: 24px;
+}
+.meta {
+  color: var(--muted);
+}
+.btn {
+  font: inherit;
+  font-size: 22px;
+  min-height: 64px;
+  padding: 8px 28px;
+  color: var(--text);
+  background: var(--panel);
+  border: 2px solid #3a4558;
+  border-radius: 10px;
+  cursor: pointer;
+}
+/* Focus is the one thing a controller shows: a thick, high-contrast ring. `data-focused` is
+   set by the focus scope (focus.ts) so the ring shows from the first load, not only after a key
+   press; a mouse click does not set it. */
+.btn:focus-visible,
+.btn[data-focused] {
+  outline: 5px solid var(--accent);
+  outline-offset: 3px;
+  background: #2a3647;
+}
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  text-align: left;
+}
+.row .name {
+  font-weight: 600;
+  min-width: 220px;
+}
+.row .meta {
+  flex: 1;
+  font-size: 18px;
+}
+.badge {
+  padding: 4px 14px;
+  border-radius: 999px;
+  background: #5b4a14;
+  color: #ffe08a;
+  font-size: 18px;
+}
+footer {
+  display: flex;
+  gap: 16px;
+  margin-top: auto;
+}
+.cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+}
+.card {
+  background: var(--panel);
+  border-radius: 12px;
+  padding: 20px 24px;
+}
+.entry {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  background: var(--panel);
+  border-radius: 12px;
+  padding: 12px 16px;
+}
+.entry .text {
+  flex: 1;
+}
+.picture {
+  width: 160px;
+  height: 90px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: #2b3340;
+}
+.error {
+  background: #5a1d1d;
+  padding: 12px 16px;
+  border-radius: 8px;
+}
+.notice {
+  background: #1d4a2a;
+  padding: 12px 16px;
+  border-radius: 8px;
+}
+.signin {
+  display: flex;
+  gap: 40px;
+  align-items: flex-start;
+}
+.qr {
+  width: 360px;
+  height: 360px;
+  flex: none;
+}
+.code {
+  font-size: 32px;
+  letter-spacing: 0.1em;
+}
+.url {
+  word-break: break-all;
 }

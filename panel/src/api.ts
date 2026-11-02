@@ -111,6 +111,49 @@ export interface WhereData {
   games: WhereGame[];
 }
 
+export interface RestoreData {
+  game: string;
+  entry: string;
+  revision: number;
+  new_entry: string;
+  backup: string | null;
+  counts: Counts;
+  message: string;
+}
+
+/** `data` of `setup --no-browser`: show `url` as a QR code and `code` as text. */
+export interface SignInPrompt {
+  service: string;
+  url: string;
+  code: string | null;
+  expires_at: string;
+  message: string;
+}
+
+export type WhichSource = "manifest" | "ludusavi";
+
+export interface WhichData {
+  app_id: number;
+  game: string;
+  name: string;
+  saves_dir: string;
+  include: string[];
+  source: WhichSource;
+  message: string;
+}
+
+export interface AnswerData {
+  game: string;
+  kind: ChoiceKind;
+  answer: Answer;
+  message: string;
+}
+
+export interface PictureData {
+  path: string;
+  bytes: number;
+}
+
 export interface ErrorBody {
   code: string;
   message: string;
