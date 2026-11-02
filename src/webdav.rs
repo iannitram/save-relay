@@ -332,19 +332,11 @@ impl WebDav {
         } else {
             match response.status {
                 404 => Err(Error::NotFound(path.to_string())),
-                409 => {
-                    // For GET requests, a 409 means the specific file doesn't exist, so return parent
-                    if method == "GET" {
-                        let last_slash = path.rfind('/');
-                        if let Some(pos) = last_slash {
-                            Err(Error::NotFound(path[..pos].to_string()))
-                        } else {
-                            Err(Error::NotFound("".to_string()))
-                        }
-                    } else {
-                        Err(Error::NotFound(path.to_string()))
-                    }
-                }
+                409 => match path.rfind('/') {
+                    Some(pos) => Err(Error::NotFound(path[..pos].to_string())),
+                    None => Err(Error::NotFound(String::new())),
+                },
+                412 if method == "PUT" => Err(Error::Changed),
                 401 | 403 => Err(Error::AuthFailed),
                 _ => Err(Error::Server(format!(
                     "{} {}: {}",
@@ -383,10 +375,20 @@ impl crate::remote::Remote for WebDav {
     }
 
     fn put(&self, path: &str, bytes: &[u8], pre: &crate::remote::Precondition) -> Result<String> {
-        crate::error::not_built("webdav::WebDav::put")
+        let headers: Vec<(&str, String)> = match pre {
+            crate::remote::Precondition::Any => vec![],
+            crate::remote::Precondition::Match(etag) => vec![("If-Match", etag.clone())],
+            crate::remote::Precondition::Absent => vec![("If-None-Match", "*".to_string())],
+        };
+        let response = self.send("PUT", path, &headers, bytes.to_vec(), &[200, 201, 204])?;
+        response
+            .header_value("ETag")
+            .map(|etag| etag.to_string())
+            .ok_or_else(|| Error::Server(format!("PUT {path}: no ETag")))
     }
     fn mkcol(&self, dir: &str) -> Result<()> {
-        crate::error::not_built("webdav::WebDav::mkcol")
+        self.send("MKCOL", dir, &[], vec![], &[201, 405])?;
+        Ok(())
     }
     fn copy(&self, from: &str, to: &str) -> Result<()> {
         crate::error::not_built("webdav::WebDav::copy")
