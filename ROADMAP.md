@@ -53,29 +53,30 @@ From `SPEC.md` (re-approved 2026-11-01) to 1.0: Uncharted on the AMD handheld, t
 | F45 | Choosing and setting up a service | `docs/services.md` | M6, M10 | #46 |
 | F46 | Real round trips on Dropbox and Google Drive; Game Mode sign-in (`needs-owner-device`) | `tests/live_services.rs` | M6, M9, M10 | #47 |
 | F47 | Register the app with Google and Dropbox (`needs-owner-device`, the owner's clicks) | `src/clients.rs` | M6, M10 | #36 |
-| F48 | `playing.json` mark: shape, checks, `presence::check` | `presence` (pure) | M11 | #50 |
-| F49 | Plan row for `Held` (`decide_with_mark`); `Action::Held`, exit 6; `layout::playing_path` | `plan`, `api`, `layout` | M11 | #51 |
-| F50 | Write and clear the mark in `pull`/`push`; `--anyway`; `held` in the data and `status` | `sync` | M11 | #52 |
-| F51 | `save-relay where` | `sync::where_open`, `cli` | M11 | #53 |
-| F52 | Parse `wrap`, `which`, `install-wrap`, `answer`, `where`, `picture`, `panel`, `pull --anyway` | `cli::parse` | M11-M15 | #54 |
-| F53 | KeyValues (VDF) reader and writer | `steam::vdf` (pure) | M12, M13 | #55 |
-| F54 | Steam facts: folders per OS, libraries, an app's library, user ids, screenshot pick | `steam` | M12-M14 | #56 |
-| F55 | ludusavi entry to our manifest: placeholders, `when`, save tags, Proton prefix, refuse unclear | `ludusavi::translate` (pure) | M13 | #57 |
-| F56 | ludusavi data: download with ETag, weekly refresh, cache, Steam index; `which` | `ludusavi::Cache` | M13 | #58 |
-| F57 | Pending choices: file shape, `answer`, the 120-second wait | `pending`, `local` | M12 | #59 |
-| F58 | `wrap`: pull, the game as a child, push, the child's exit code, pending choices | `wrap` | M12 | #60 |
-| F59 | `install-wrap`: `LaunchOptions` in `localconfig.vdf`, backup, Steam-running check, `--remove` | `steam::launch` | M13 | #61 |
-| F60 | Save card: shape, sidecar, picture check, playtime rule | `card` (pure) | M14 | #62 |
-| F61 | Cards travel with entries: `put_card`/`read_card`, the session file, `server_card`/`local_card`, `HistoryEntry.card`, `picture`; `scan` and `transfer` skip `.save-relay-*` | `transfer`, `sync`, `local`, `scan` | M14 | #63 |
-| F62 | Panel front end: views, `Bridge`, TypeScript types with contract fixtures, QR code, controller focus | `panel/` | M15 | #64 |
-| F63 | `save-relay panel`: loopback server, token, embedded front end, `/api/*` | `panel` (Rust) | M15 | #65 |
-| F64 | Decky plugin: `plugin.json`, Python backend over `--json`, quick access entry | `decky/` | M15 | #66 |
-| F65 | M11-M14 integration tests: two simulated machines, a wrapped fixture program, fixture ludusavi data, a fixture sidecar | `tests/` | M11-M14 | #67 |
-| F66 | Docs: wrap, which, install-wrap and Proton; the panel; the sidecar in the manifest guide | `docs/wrap.md`, `docs/panel.md`, `docs/manifest.md` | M12-M15 | #68 |
-| F67 | Device checks: suspend hand-off on a handheld, wrap and install-wrap on a PC and a handheld, the panel in Game Mode (`needs-owner-device`) | — | M11-M15 | #69 |
-| F68 | Design pass on the panel (stage 8, `design-pass`) | `panel/`, `decky/` | M15 | #70 |
+| F48 | `playing.json` mark: shape, checks, `presence::check` | `presence` (pure) | M11 | #53 |
+| F49 | Plan row for `Held` (`decide_with_mark`); `Action::Held`, exit 6; `layout::playing_path` | `plan`, `api`, `layout` | M11 | #54 |
+| F50 | Write and clear the mark in `pull`/`push`; `--anyway`; `held` in the data and `status` | `sync` | M11 | #55 |
+| F51 | `save-relay where` | `sync::where_open`, `cli` | M11 | #56 |
+| F52 | Parse `wrap`, `which`, `install-wrap`, `answer`, `where`, `picture`, `panel`, `pull --anyway` | `cli::parse` | M11-M15 | #57 |
+| F53 | KeyValues (VDF) reader and writer | `steam::vdf` (pure) | M12, M13 | #58 |
+| F54 | Steam facts: folders per OS, libraries, an app's library, user ids, screenshot pick | `steam` | M12-M14 | #59 |
+| F55 | ludusavi entry to our manifest: placeholders, `when`, save tags, Proton prefix, refuse unclear | `ludusavi::translate` (pure) | M13 | #60 |
+| F56 | ludusavi data: download with ETag, weekly refresh, cache, Steam index; `which` | `ludusavi::Cache` | M13 | #61 |
+| F57 | Pending choices: file shape, `answer`, the 120-second wait | `pending`, `local` | M12 | #62 |
+| F58 | `wrap`: pull, the game as a child, push, the child's exit code, pending choices | `wrap` | M12 | #63 |
+| F59 | `install-wrap`: `LaunchOptions` in `localconfig.vdf`, backup, Steam-running check, `--remove` | `steam::launch` | M13 | #64 |
+| F60 | Save card: shape, sidecar, picture check, playtime rule | `card` (pure) | M14 | #65 |
+| F61 | Cards travel with entries: `put_card`/`read_card`, the session file, `server_card`/`local_card`, `HistoryEntry.card`, `picture`; `scan` and `transfer` skip `.save-relay-*` | `transfer`, `sync`, `local`, `scan` | M14 | #66 |
+| F62 | Panel front end: views, `Bridge`, TypeScript types with contract fixtures, QR code, controller focus | `panel/` | M15 | #67 |
+| F63 | `save-relay panel`: loopback server, token, embedded front end, `/api/*` | `panel` (Rust) | M15 | #68 |
+| F64 | Decky plugin: `plugin.json`, Python backend over `--json`, quick access entry | `decky/` | M15 | #69 |
+| F65 | M11-M14 integration tests: two simulated machines, a wrapped fixture program, fixture ludusavi data, a fixture sidecar | `tests/` | M11-M14 | #70 |
+| F66 | Docs: wrap, which, install-wrap and Proton; the panel; the sidecar in the manifest guide | `docs/wrap.md`, `docs/panel.md`, `docs/manifest.md` | M12-M15 | #71 |
+| F67 | Device checks: suspend hand-off on a handheld, wrap and install-wrap on a PC and a handheld, the panel in Game Mode (`needs-owner-device`) | — | M11-M15 | #72 |
+| F68 | Design pass on the panel (stage 8, `design-pass`) | `panel/`, `decky/` | M15 | #73 |
+| F69 | Manifest "saves_from": "launcher" (TotK) | manifest, cli | M7 | #48 |
 
-Every Must has an issue: M1 (F07, F11, F19, F20, F23, F43), M2 (F02, F03, F20, F23, F43), M3 (F07, F19, F20, F23, F43), M4 (F08, F21, F23, F43), M5 (F07, F12, F20, F23, F43), M6 (F13, F14, F18, F22, F27-F30, F35, F37, F42, F44-F47), M7 (F01, F05, F23, F25), M8 (F09, F10, F22, F24, F26, F44), M9 (F12, F27, F31-F34, F36, F38-F41, F43, F46), M10 (F28, F29, F33, F40-F42, F44-F47), M11 (F48-F52, F65, F67), M12 (F52-F54, F57, F58, F65-F67), M13 (F52-F56, F59, F65-F67), M14 (F52, F54, F60, F61, F65-F67), M15 (F52, F62-F64, F66-F68).
+Every Must has an issue: M1 (F07, F11, F19, F20, F23, F43), M2 (F02, F03, F20, F23, F43), M3 (F07, F19, F20, F23, F43), M4 (F08, F21, F23, F43), M5 (F07, F12, F20, F23, F43), M6 (F13, F14, F18, F22, F27-F30, F35, F37, F42, F44-F47), M7 (F01, F05, F23, F25, F69), M8 (F09, F10, F22, F24, F26, F44), M9 (F12, F27, F31-F34, F36, F38-F41, F43, F46), M10 (F28, F29, F33, F40-F42, F44-F47), M11 (F48-F52, F65, F67), M12 (F52-F54, F57, F58, F65-F67), M13 (F52-F56, F59, F65-F67), M14 (F52, F54, F60, F61, F65-F67), M15 (F52, F62-F64, F66-F68).
 
 ## Mac, PC and Linux (R04)
 
@@ -130,7 +131,7 @@ Every Must has an issue: M1 (F07, F11, F19, F20, F23, F43), M2 (F02, F03, F20, F
    - **6d, together:** F43 the M9 suite against every backend (after F20, F21), F44 setup and status for every service (after F22).
    - **6e, the owner's part:** F47 registering the app (any time; nothing else waits on it until F46), then F46 the real round trips and Game Mode sign-in on a PC and a handheld (`needs-owner-device`). F46 is where Drive's 409-on-a-used-id, which the guard rests on, is checked for real.
 7. **The open-elsewhere mark, wrap, save cards and the panel** (F48-F68, M11-M15; `docs/adr/0003-baton-wrap-cards-panel.md`), in parallel lanes like stage 6:
-   - **7a, pure parts, Easy:** free now F48 (the mark), F53 (VDF), F57 (pending choices, pure part), F60 (the card); then F55 (ludusavi translation, Medium) after #5, F49 after #3, #7, #9, and F52 (parsing) after #10.
+   - **7a, pure parts:** F53 (VDF, Medium) free now; Easy F48 (the mark) and F60 (the card) after #2 (`stamp`), F49 after #3, #7, #9; Medium F57 (pending choices) after #2, #14, F55 (ludusavi translation) after #5, and F52 (parsing) after #10. F52, F53 and F57 were planned Easy and filed Medium (their tests run past the Easy limit).
    - **7b, Steam and the data, Medium:** F54 (Steam facts, after F53 and #4), F56 (the ludusavi data, after #37, F54, F55).
    - **7c, in the engine, Medium:** F50 (the mark in `pull`/`push`, after #20, F48, F49), F51 (`where`, after F50 and #22), F61 (cards with entries, after #19, #20, #21, F60).
    - **7d, wrap, Hard:** F58 `wrap` (after #20, F50, F52, F56, F57), F59 `install-wrap` (after F53, F54).
@@ -138,8 +139,10 @@ Every Must has an issue: M1 (F07, F11, F19, F20, F23, F43), M2 (F02, F03, F20, F
    - **7f, together:** F65 the integration tests (after F50, F58, F61), F66 the docs (after F58, F63).
    - **7g, the owner's part:** F67 the device checks (`needs-owner-device`, after all of the above), F68 the design pass (stage 8).
 8. **Design pass** (R04, before the 1.0 acceptance; F68): **no longer skipped**, because save-relay now has a screen: the panel (M15), in Game Mode and in the browser. The pass checks its views (the games list, the card timeline, restore, the conflict and held choices, pending choices, the QR sign-in) against the design system all my apps share, at 1280x800 with a controller only, and its findings become `design-pass` issues. The prompts a port's launcher draws (the conflict and held choices, the service choice and the sign-in code) still get their look in that port's own design pass; the wording from here (the `message` lines and the prompt text in `docs/code-map.md` § API shape) is fixed by the API shape and reviewed with F22, F44 and F62.
-9. **1.0 acceptance** (F26), last: uncharted_pc's launcher calls the released binary around Play (uncharted_pc #163); a save made on each of the three PCs loads on the others (`needs-owner-device`).
+9. **1.0 acceptance** (F26, and F67 for M11-M15), last: uncharted_pc's launcher calls the released binary around Play (uncharted_pc #163); a save made on each of the three PCs loads on the others (`needs-owner-device`).
 
 ## After 1.0
+
+#49 (F70: Android and iOS library builds with a C interface, for game ports that embed save-relay; TotK) is after-1.0.
 
 Android and iOS bindings (with the game ports' 2.0), with sign-in through the platform's browser session (the panel's views can follow them there); signed macOS release; moving saves from one service to another (a Won't for 1.0: switching starts fresh); more services (OneDrive, S3) behind the same `Remote`; upload only changed files (server-side COPY of unchanged ones from the previous entry); Nextcloud chunked upload for large save sets; a `save-relay forget <game>`; pruning old conflict backups separately from pushes; saves kept in the Windows registry for wrapped games (ludusavi's registry entries); wrapping games from launchers other than Steam.
