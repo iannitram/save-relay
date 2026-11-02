@@ -11,7 +11,7 @@
 //! never blocks on its own. It is advice, not a lock: the M3 and M9 checks still guard
 //! `state.json`. Pure.
 
-use crate::error::{not_built, Result};
+use crate::error::Result;
 use serde::{Deserialize, Serialize};
 
 /// The mark format this build reads and writes.
@@ -36,12 +36,39 @@ impl Mark {
     /// Parse and check: `format == FORMAT` (a newer one says "made by a newer save-relay"),
     /// `device` not empty, `since` parses as RFC 3339. Any failure is `Error::StateInvalid`.
     pub fn from_json(text: &str) -> Result<Mark> {
-        not_built("presence::Mark::from_json")
+        let mark = serde_json::from_str::<Mark>(text)
+            .map_err(|e| crate::Error::StateInvalid(format!("playing.json: {e}")))?;
+
+        if mark.format > FORMAT {
+            return Err(crate::Error::StateInvalid(format!(
+                "playing.json: format {} was made by a newer save-relay",
+                mark.format
+            )));
+        }
+        if mark.format != FORMAT {
+            return Err(crate::Error::StateInvalid(format!(
+                "playing.json: unknown format {}",
+                mark.format
+            )));
+        }
+        if mark.device.is_empty() {
+            return Err(crate::Error::StateInvalid(
+                "playing.json: no device".to_string(),
+            ));
+        }
+        if crate::stamp::parse_rfc3339(&mark.since).is_none() {
+            return Err(crate::Error::StateInvalid(format!(
+                "playing.json: since is not RFC 3339: {}",
+                mark.since
+            )));
+        }
+
+        Ok(mark)
     }
 
     /// Compact JSON on one line, fields in declaration order, no trailing newline.
     pub fn to_json(&self) -> String {
-        crate::not_built!("presence::Mark::to_json")
+        serde_json::to_string(self).expect("serializing a Mark cannot fail")
     }
 }
 
@@ -59,5 +86,12 @@ pub enum Hold {
 /// `None` is `Free`; a mark whose `device` equals `this_device` is `Mine`; any other is
 /// `Elsewhere` with that mark's device and `since`.
 pub fn check(mark: Option<&Mark>, this_device: &str) -> Hold {
-    crate::not_built!("presence::check")
+    match mark {
+        None => Hold::Free,
+        Some(mark) if mark.device == this_device => Hold::Mine,
+        Some(mark) => Hold::Elsewhere {
+            device: mark.device.clone(),
+            since: mark.since.clone(),
+        },
+    }
 }
