@@ -156,7 +156,7 @@ In a saves folder, every name starting `.save-relay-` is reserved and never part
 | `docs/wrap.md`, `docs/panel.md` | planned | wrap, which, install-wrap and Proton; the panel in Game Mode and the browser (F66) | | M12-M15 |
 | `.github/workflows/check.yml` | present | fmt, clippy (default and no features), build, test on Linux, Windows, macOS; a `frontend` job on Linux: pnpm install, typecheck, vitest, build, then `cargo build --features panel-dist` | | M8, M15 |
 | `.github/workflows/release.yml` | planned | on a `v*` tag: Linux x86_64 and Windows x86_64 binaries (and macOS, unsigned) attached to the release, for launchers to bundle | | M8 |
-| `docs/manifest.md` | planned | the manifest format for port maintainers | | M7 |
+| `docs/manifest.md` | present | the manifest format for port maintainers | | M7 |
 
 ## API shape
 
