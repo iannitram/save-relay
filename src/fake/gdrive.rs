@@ -583,10 +583,10 @@ impl Inner {
         None
     }
 
-    /// True when `id` is `folder` or lies below it, following parents upward from `id`.
-    fn is_at_or_below(&self, id: &str, folder: &str) -> bool {
+    /// True when one of `ids` is `folder` or lies below it, following parents upward.
+    fn any_at_or_below(&self, ids: &[String], folder: &str) -> bool {
         let mut seen = BTreeSet::new();
-        let mut pending = vec![id.to_string()];
+        let mut pending = ids.to_vec();
         while let Some(current) = pending.pop() {
             if current == folder {
                 return true;
@@ -900,8 +900,7 @@ impl Inner {
         if let Some(response) = self.validate_parents(&node.parents) {
             return response;
         }
-        let inside_itself = node.parents.iter().any(|parent| self.is_at_or_below(parent, id));
-        if inside_itself {
+        if self.any_at_or_below(&node.parents, id) {
             return bad_request("fake drive: a folder cannot move into itself or its subtree");
         }
         if let Some(bytes) = content {
