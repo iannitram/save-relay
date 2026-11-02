@@ -379,3 +379,30 @@ fn folders_reject_unconditional_uploads_and_root_is_idempotent() {
     assert!(matches!(r.put("", b"x", ANY), Err(Error::Server(_))));
     assert!(r.list("g/sub").unwrap().iter().any(|e| e.name == "b.txt"));
 }
+
+#[test]
+fn unsafe_paths_are_refused_before_any_request() {
+    let r = sample();
+    let before = r.fake.requests().len();
+    let bads = [
+        "../x",
+        "g/../a.txt",
+        "/g/a.txt",
+        "g//a.txt",
+        "g/./a.txt",
+        "g/",
+        "g\\a.txt",
+    ];
+    for bad in bads {
+        let refused = Error::NotFound(bad.into());
+        assert_eq!(r.list(bad), Err(refused.clone()), "{bad}");
+        assert_eq!(r.get(bad).unwrap_err(), refused, "{bad}");
+        assert_eq!(r.put(bad, b"x", ANY), Err(refused.clone()), "{bad}");
+        assert_eq!(r.mkcol(bad), Err(refused.clone()), "{bad}");
+        assert_eq!(r.delete(bad), Err(refused.clone()), "{bad}");
+        assert_eq!(r.copy(bad, "g/ok"), Err(refused.clone()), "{bad}");
+        assert_eq!(r.move_to("g/a.txt", bad), Err(refused), "{bad}");
+    }
+    assert_eq!(r.fake.requests().len(), before);
+    assert_eq!(r.read("g/a.txt").unwrap(), b"A");
+}

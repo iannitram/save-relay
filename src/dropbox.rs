@@ -32,6 +32,23 @@ pub fn api_path(path: &str) -> String {
     }
 }
 
+/// A `Remote` path checked the way `Manifest::validate` checks a pattern, before any request
+/// is sent: no `\`, and no empty, `.` or `..` segment (so no leading or trailing `/`). `""`, the
+/// App folder's root, is allowed. Anything else is `Error::NotFound(path)`.
+fn checked(path: &str) -> Result<()> {
+    if path.is_empty() {
+        return Ok(());
+    }
+    if path.contains('\\')
+        || path
+            .split('/')
+            .any(|segment| matches!(segment, "" | "." | ".."))
+    {
+        return Err(Error::NotFound(path.into()));
+    }
+    Ok(())
+}
+
 /// `value` as compact JSON safe for an HTTP header (`Dropbox-API-Arg`): every character
 /// above U+007F written as `\uXXXX` (lowercase hex; two escapes, a UTF-16 pair, above U+FFFF),
 /// so the header is ASCII and parses back to the same value.
@@ -330,6 +347,8 @@ impl Dropbox {
     }
 
     fn relocate(&self, from: &str, to: &str, op: Op) -> Result<()> {
+        checked(from)?;
+        checked(to)?;
         self.parent(to)?;
         let endpoint = if op == Op::Copy {
             "files/copy_v2"
@@ -357,6 +376,7 @@ impl Dropbox {
 
 impl Remote for Dropbox {
     fn list(&self, dir: &str) -> Result<Vec<RemoteEntry>> {
+        checked(dir)?;
         let mut response = self.rpc(
             "files/list_folder",
             json!({"path": api_path(dir)}),
@@ -384,6 +404,7 @@ impl Remote for Dropbox {
         Ok(entries)
     }
     fn get(&self, path: &str) -> Result<(Vec<u8>, String)> {
+        checked(path)?;
         let response = self.send(
             Request::new("POST", &format!("{CONTENT}/files/download")).header(
                 "Dropbox-API-Arg",
@@ -396,6 +417,7 @@ impl Remote for Dropbox {
         Ok((response.body, rev))
     }
     fn put(&self, path: &str, bytes: &[u8], pre: &Precondition) -> Result<String> {
+        checked(path)?;
         if path.is_empty() {
             return Err(Error::Server("cannot write the files root".into()));
         }
@@ -417,6 +439,7 @@ impl Remote for Dropbox {
         }
     }
     fn mkcol(&self, dir: &str) -> Result<()> {
+        checked(dir)?;
         self.parent(dir)?;
         self.rpc(
             "files/create_folder_v2",
@@ -433,6 +456,7 @@ impl Remote for Dropbox {
         self.relocate(from, to, Op::Move)
     }
     fn delete(&self, path: &str) -> Result<()> {
+        checked(path)?;
         self.rpc(
             "files/delete_v2",
             json!({"path": api_path(path)}),
