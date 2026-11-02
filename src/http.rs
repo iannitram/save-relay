@@ -9,6 +9,10 @@
 
 use crate::error::Result;
 use std::fmt;
+#[cfg(feature = "http")]
+use std::io::Read;
+#[cfg(feature = "http")]
+use std::time::Duration;
 
 /// One HTTP request. `Debug` prints `***` for the value of an `Authorization` header, so a
 /// token or password cannot leak through a log line. Built in the skeleton, on purpose.
@@ -124,21 +128,80 @@ pub trait Transport {
 /// 60 s, so a launcher with no network falls back to offline quickly (M5). No retries here:
 /// each backend decides what to retry. Added by its issue (docs/code-map.md).
 #[cfg(feature = "http")]
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct UreqTransport {
-    _private: (),
+    agent: ureq::Agent,
 }
 
 #[cfg(feature = "http")]
 impl UreqTransport {
     pub fn new() -> UreqTransport {
-        UreqTransport::default()
+        UreqTransport {
+            agent: ureq::AgentBuilder::new()
+                .timeout_connect(Duration::from_secs(5))
+                .timeout(Duration::from_secs(60))
+                .redirects(0)
+                .build(),
+        }
+    }
+}
+
+#[cfg(feature = "http")]
+impl Default for UreqTransport {
+    fn default() -> UreqTransport {
+        UreqTransport::new()
     }
 }
 
 #[cfg(feature = "http")]
 impl Transport for UreqTransport {
     fn send(&self, request: &Request) -> Result<Response> {
-        crate::error::not_built("http::UreqTransport::send")
+        let host = host_of(&request.url);
+        let mut outgoing = self.agent.request(&request.method, &request.url);
+        for (name, value) in &request.headers {
+            outgoing = outgoing.set(name, value);
+        }
+
+        let response = match outgoing.send_bytes(&request.body) {
+            Ok(response) => response,
+            Err(ureq::Error::Status(_, response)) => response,
+            Err(ureq::Error::Transport(error)) => {
+                return Err(crate::error::Error::Unreachable(format!(
+                    "{host}: {:?}",
+                    error.kind()
+                )));
+            }
+        };
+
+        let status = response.status();
+        let mut headers = Vec::new();
+        for name in response.headers_names() {
+            for value in response.all(&name) {
+                headers.push((name.clone(), value.to_string()));
+            }
+        }
+        let mut body = Vec::new();
+        response
+            .into_reader()
+            .read_to_end(&mut body)
+            .map_err(|error| {
+                crate::error::Error::Unreachable(format!("{host}: reading the answer: {error}"))
+            })?;
+
+        Ok(Response {
+            status,
+            headers,
+            body,
+        })
     }
+}
+
+/// The host part of `url`, so an error can name the server without ever repeating a header.
+#[cfg(feature = "http")]
+fn host_of(url: &str) -> &str {
+    let rest = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .unwrap_or(url);
+    rest.split(['/', '?', '#']).next().unwrap_or(rest)
 }
