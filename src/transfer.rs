@@ -30,12 +30,15 @@ fn local_path(saves_dir: &Path, path: &str) -> PathBuf {
     full
 }
 
-/// A save path from a record can never lead out of the saves folder: every segment must be a
-/// plain name on this OS (no `..`, `.`, drive prefix, root or `\` separator), so `local_path`
-/// stays under `saves_dir`. Anything else is `Error::StateInvalid`.
+/// A save path from a record can never lead out of the saves folder: it must have at least one
+/// segment (an all-slash path would name the folder itself, whose part file lands beside it),
+/// and every segment must be a plain name on this OS (no `..`, `.`, drive prefix, root or `\`
+/// separator), so `local_path` stays strictly under `saves_dir`. Anything else is
+/// `Error::StateInvalid`.
 fn check_save_path(path: &str) -> Result<()> {
-    let plain = !path.is_empty()
-        && path.split('/').filter(|s| !s.is_empty()).all(|segment| {
+    let mut segments = path.split('/').filter(|s| !s.is_empty()).peekable();
+    let plain = segments.peek().is_some()
+        && segments.all(|segment| {
             let mut parts = Path::new(segment).components();
             matches!(parts.next(), Some(Component::Normal(_))) && parts.next().is_none()
         });

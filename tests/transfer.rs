@@ -73,6 +73,33 @@ impl Remote for FailingPut {
     }
 }
 
+/// A remote that serves `b"x"` at every path, like a server that controls the record too.
+struct AnyGet(MemoryRemote);
+
+impl Remote for AnyGet {
+    fn list(&self, dir: &str) -> Result<Vec<RemoteEntry>> {
+        self.0.list(dir)
+    }
+    fn get(&self, _path: &str) -> Result<(Vec<u8>, String)> {
+        Ok((b"x".to_vec(), "\"x\"".to_string()))
+    }
+    fn put(&self, path: &str, bytes: &[u8], pre: &Precondition) -> Result<String> {
+        self.0.put(path, bytes, pre)
+    }
+    fn mkcol(&self, dir: &str) -> Result<()> {
+        self.0.mkcol(dir)
+    }
+    fn copy(&self, from: &str, to: &str) -> Result<()> {
+        self.0.copy(from, to)
+    }
+    fn move_to(&self, from: &str, to: &str) -> Result<()> {
+        self.0.move_to(from, to)
+    }
+    fn delete(&self, path: &str) -> Result<()> {
+        self.0.delete(path)
+    }
+}
+
 fn upload(remote: &dyn Remote, dir: &Path, set: &SaveSet) -> Result<Counts> {
     upload_entry(remote, &layout(), GAME, ENTRY, dir, set)
 }
@@ -237,25 +264,53 @@ fn download_refuses_paths_that_leave_the_saves_folder() {
     let root = temp("unsafe");
     let dest = root.join("saves");
     fs::create_dir_all(&dest).unwrap();
-    for bad in ["../escape.sav", "slots/../../escape.sav", "./a.sav", ".."] {
-        let mut wanted = SaveSet::default();
-        wanted.files.push(save_relay::scan::FileEntry {
+    // A hostile server answers every GET with the bytes the record names, so only the path
+    // check can stop the download.
+    let remote = AnyGet(remote);
+    let mut bad: Vec<&str> = vec![
+        "../escape.sav",
+        "slots/../../escape.sav",
+        "./a.sav",
+        "..",
+        "",
+        "/",
+        "//",
+    ];
+    if cfg!(windows) {
+        bad.extend([
+            "C:escape.sav",
+            "C:\\escape.sav",
+            "\\escape.sav",
+            "a\\..\\..\\escape.sav",
+        ]);
+    }
+    for bad in bad {
+        let entry = save_relay::scan::FileEntry {
             path: bad.to_string(),
             size: 1,
             mtime: 0,
             sha256: save_relay::scan::hash_bytes(b"x"),
-        });
-        let err = download_entry(
-            &remote,
-            &layout(),
-            GAME,
-            ENTRY,
-            &wanted,
-            &dest,
-            &SaveSet::default(),
-        )
-        .unwrap_err();
-        assert!(matches!(err, Error::StateInvalid(_)), "{bad}: {err:?}");
+        };
+        // As a wanted file (a write) and as a local file (a delete), each on its own.
+        for (wanted, local) in [(vec![entry.clone()], vec![]), (vec![], vec![entry.clone()])] {
+            let wanted = SaveSet { files: wanted };
+            let local = SaveSet { files: local };
+            let err = download_entry(&remote, &layout(), GAME, ENTRY, &wanted, &dest, &local)
+                .unwrap_err();
+            assert!(matches!(err, Error::StateInvalid(_)), "{bad:?}: {err:?}");
+        }
     }
     assert!(!root.join("escape.sav").exists());
+    // Nothing was written beside the saves folder either (an all-slash path names the folder
+    // itself, whose part file would land next to it).
+    let beside: Vec<_> = fs::read_dir(&root)
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(
+        beside,
+        vec![std::ffi::OsString::from("saves")],
+        "{beside:?}"
+    );
+    assert!(dest.exists());
 }
