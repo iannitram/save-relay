@@ -22,8 +22,14 @@ fn round_trip<T: DeserializeOwned + Serialize>(name: &str, data: &Value) {
 /// The exit-code group of an error code (`api::exit_code`'s table), by the fixture's name.
 fn group(code: &str) -> i32 {
     match code {
-        "usage" | "manifest_invalid" | "game_unknown" | "no_such_entry" | "save_location_unclear"
-        | "steam_not_found" | "steam_running" | "no_pending_choice" => 2,
+        "usage"
+        | "manifest_invalid"
+        | "game_unknown"
+        | "no_such_entry"
+        | "save_location_unclear"
+        | "steam_not_found"
+        | "steam_running"
+        | "no_pending_choice" => 2,
         "not_set_up" | "auth_failed" | "credentials" | "reauth_needed" | "sign_in_failed" => 4,
         "server_unreachable" | "server_error" | "state_invalid" | "changed_on_server"
         | "not_found" => 5,
@@ -45,7 +51,11 @@ fn every_fixture_round_trips() {
         let command = envelope["command"].as_str().expect("command").to_string();
         if envelope["ok"] == Value::Bool(false) {
             let error = &envelope["error"];
-            assert_eq!(error.as_object().unwrap().len(), 2, "{name}: error has code and message");
+            assert_eq!(
+                error.as_object().unwrap().len(),
+                2,
+                "{name}: error has code and message"
+            );
             let code = error["code"].as_str().expect("code");
             assert!(error["message"].is_string(), "{name}");
             let want: i32 = match name.as_str() {
@@ -60,7 +70,11 @@ fn every_fixture_round_trips() {
             continue;
         }
         assert_eq!(envelope["ok"], Value::Bool(true), "{name}");
-        assert_eq!(envelope.as_object().unwrap().len(), 3, "{name}: ok, command, data");
+        assert_eq!(
+            envelope.as_object().unwrap().len(),
+            3,
+            "{name}: ok, command, data"
+        );
         let data = &envelope["data"];
         match command.as_str() {
             "pull" | "push" => round_trip::<SyncReport>(&name, data),
