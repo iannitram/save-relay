@@ -24,7 +24,7 @@
 //! YAML is read with the `serde-saphyr` crate (pure Rust, MIT or Apache-2.0), added by its
 //! issue (docs/adr/0003).
 
-use crate::error::{not_built, Result};
+use crate::error::{not_built, Error, Result};
 use crate::http::Transport;
 use crate::manifest::Manifest;
 use crate::platform::{AppDirs, PathVars, Platform};
@@ -156,9 +156,88 @@ pub struct Facts {
 /// The save path templates of `entry` that apply on this machine: tagged `save`, a `when` that
 /// fits (`facts.platform`, or `windows` under Proton; store `steam` or none), every placeholder
 /// known, expanded with `facts`. `/`-separated, glob characters (`*`, `?`, `**`) kept, sorted,
-/// no duplicates.
+/// no duplicates. A path with a `..` segment is dropped.
 pub fn candidates(entry: &Entry, facts: &Facts) -> Vec<String> {
-    crate::not_built!("ludusavi::candidates")
+    named_candidates(entry, facts, None)
+}
+
+fn named_candidates(entry: &Entry, facts: &Facts, name: Option<&str>) -> Vec<String> {
+    let proton = facts.platform == Platform::Linux && facts.proton;
+    let os = if proton {
+        "windows"
+    } else {
+        facts.platform.key()
+    };
+    let proton_home =
+        crate::steam::proton_prefix(&facts.library, facts.app_id).join("drive_c/users/steamuser");
+    let path_text = |path: &Path| path.to_str().map(|text| text.replace('\\', "/"));
+    let mut paths = Vec::new();
+    for (template, rule) in &entry.files {
+        if !rule.tags.iter().any(|tag| tag == "save")
+            || !(rule.when.is_empty()
+                || rule.when.iter().any(|when| {
+                    when.os.as_deref().is_none_or(|value| value == os)
+                        && when.store.as_deref().is_none_or(|value| value == "steam")
+                }))
+        {
+            continue;
+        }
+        let expand = || -> Option<String> {
+            let mut result = String::new();
+            let mut remaining = template.as_str();
+            while let Some(open) = remaining.find('<') {
+                result.push_str(&remaining[..open]);
+                let close = remaining[open..].find('>')? + open;
+                let placeholder = &remaining[open..=close];
+                if !PLACEHOLDERS.contains(&placeholder) {
+                    return None;
+                }
+                let value = match placeholder {
+                    "<home>" => path_text(if proton {
+                        &proton_home
+                    } else {
+                        &facts.vars.home
+                    }),
+                    "<winAppData>" if proton => path_text(&proton_home.join("AppData/Roaming")),
+                    "<winLocalAppData>" if proton => path_text(&proton_home.join("AppData/Local")),
+                    "<winDocuments>" if proton => path_text(&proton_home.join("Documents")),
+                    "<winAppData>" if facts.platform == Platform::Windows => {
+                        path_text(&facts.vars.config)
+                    }
+                    "<winLocalAppData>" if facts.platform == Platform::Windows => {
+                        path_text(&facts.vars.data)
+                    }
+                    "<winDocuments>" if facts.platform == Platform::Windows => {
+                        facts.vars.documents.as_deref().and_then(path_text)
+                    }
+                    "<xdgData>" if facts.platform == Platform::Linux => path_text(&facts.vars.data),
+                    "<xdgConfig>" if facts.platform == Platform::Linux => {
+                        path_text(&facts.vars.config)
+                    }
+                    "<storeUserId>" => facts.user_id.clone(),
+                    "<osUserName>" => {
+                        Some(if proton { "steamuser" } else { &facts.os_user }.to_owned())
+                    }
+                    "<base>" => facts.install_dir.as_deref().and_then(path_text),
+                    "<root>" => path_text(&facts.library),
+                    "<game>" => name.map(str::to_owned),
+                    _ => None,
+                }?;
+                result.push_str(&value);
+                remaining = &remaining[close + 1..];
+            }
+            result.push_str(remaining);
+            let path = result.replace('\\', "/");
+            // A `..` segment would let a saves folder or pattern leave the folder it names.
+            (!path.split('/').any(|segment| segment == "..")).then_some(path)
+        };
+        if let Some(path) = expand() {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    paths
 }
 
 /// A wrapped game as save-relay syncs it: our manifest (id `steam::game_id(app_id)`, the
@@ -181,7 +260,74 @@ pub fn translate(
     exists: &dyn Fn(&Path) -> bool,
     is_dir: &dyn Fn(&Path) -> bool,
 ) -> Result<Located> {
-    not_built("ludusavi::translate")
+    let mut folders: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for candidate in named_candidates(entry, facts, Some(name)) {
+        let (folder, pattern) = if let Some(glob) = candidate.find(['*', '?']) {
+            let split = candidate[..glob].rfind('/').map_or(0, |index| index + 1);
+            (&candidate[..split], candidate[split..].to_owned())
+        } else if is_dir(Path::new(&candidate)) {
+            (candidate.as_str(), "**".to_owned())
+        } else {
+            let split = candidate.rfind('/').map_or(0, |index| index + 1);
+            (&candidate[..split], candidate[split..].to_owned())
+        };
+        // Keep a filesystem root's slash; other trailing slashes do not distinguish folders.
+        let folder = if folder == "/" || folder.ends_with(":/") {
+            folder
+        } else {
+            folder.trim_end_matches('/')
+        };
+        folders.entry(folder.to_owned()).or_default().push(pattern);
+    }
+    let tried = folders.keys().cloned().collect::<Vec<_>>().join(", ");
+    folders.retain(|folder, _| exists(Path::new(folder)));
+    if folders.len() != 1 {
+        let reason = if folders.is_empty() {
+            format!("no existing save folder for {name}; folders tried: {tried}")
+        } else {
+            format!(
+                "multiple existing save folders for {name}: {}",
+                folders.keys().cloned().collect::<Vec<_>>().join(", ")
+            )
+        };
+        return Err(Error::SaveLocationUnclear(reason));
+    }
+    let (folder, mut include) = folders.into_iter().next().expect("one folder");
+    include.sort();
+    include.dedup();
+    // The ludusavi data is external input: refuse a pattern a Windows sync client cannot
+    // create, then run the manifest's own checks (#107): `..`, absolute patterns, and more.
+    if let Some(pattern) = include
+        .iter()
+        .find(|pattern| pattern.split('/').any(windows_reserved_name))
+    {
+        return Err(Error::ManifestInvalid(format!(
+            "include: {pattern:?} uses a name Windows reserves"
+        )));
+    }
+    let manifest = Manifest {
+        format: crate::manifest::FORMAT,
+        id: crate::steam::game_id(facts.app_id),
+        name: name.to_owned(),
+        saves: BTreeMap::from([(facts.platform, folder.clone())]),
+        include,
+        exclude: Vec::new(),
+    };
+    manifest.validate()?;
+    Ok(Located {
+        saves_dir: PathBuf::from(&folder),
+        manifest,
+    })
+}
+
+/// A file or folder name Windows cannot create, with or without an extension (`con`, `nul`,
+/// `com1`, `lpt9`, any case). Glob segments such as `*.sav` are never reserved.
+fn windows_reserved_name(segment: &str) -> bool {
+    let stem = segment.split('.').next().unwrap_or("").to_ascii_lowercase();
+    matches!(stem.as_str(), "con" | "prn" | "aux" | "nul")
+        || (stem.len() == 4
+            && (stem.starts_with("com") || stem.starts_with("lpt"))
+            && stem.as_bytes()[3].is_ascii_digit())
 }
 
 /// The cache under `<data>/save-relay/ludusavi/`.
