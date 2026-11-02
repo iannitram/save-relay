@@ -59,14 +59,18 @@ impl DriveFile {
 /// Quote text for a Drive query string literal: `\` -> `\\`, `'` -> `\'`.
 /// `"it's"` -> `"it\'s"`.
 pub fn escape_q(text: &str) -> String {
-    crate::not_built!("gdrive::escape_q")
+    text.replace('\\', "\\\\").replace('\'', "\\'")
 }
 
 /// The `q` for the children of folder `parent_id`, optionally with one name:
 /// `"'<parent>' in parents and trashed = false"`, plus `" and name = '<name>'"`, both through
 /// `escape_q`.
 pub fn children_query(parent_id: &str, name: Option<&str>) -> String {
-    crate::not_built!("gdrive::children_query")
+    let mut query = format!("'{}' in parents and trashed = false", escape_q(parent_id));
+    if let Some(name) = name {
+        query.push_str(&format!(" and name = '{}'", escape_q(name)));
+    }
+    query
 }
 
 /// One page of `files.list`.
@@ -77,23 +81,93 @@ pub struct FilePage {
     pub next_page: Option<String>,
 }
 
+/// A non-empty run of ASCII digits: `size` and `version` as Drive writes them (no sign).
+fn is_digits(text: &str) -> bool {
+    !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit())
+}
+
+fn parse_drive_file(value: &serde_json::Value) -> Option<DriveFile> {
+    fn number(value: Option<&serde_json::Value>) -> Option<u64> {
+        match value {
+            None => Some(0),
+            Some(serde_json::Value::String(s)) if is_digits(s) => s.parse().ok(),
+            Some(serde_json::Value::Number(n)) => n.as_u64(),
+            _ => None,
+        }
+    }
+
+    let object = value.as_object()?;
+    let id = object.get("id")?.as_str()?.to_owned();
+    let name = object.get("name")?.as_str()?.to_owned();
+    let size = number(object.get("size"))?;
+    let version = number(object.get("version"))?;
+    let mime_type = object.get("mimeType").and_then(serde_json::Value::as_str);
+    let created = object
+        .get("createdTime")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("")
+        .to_owned();
+    let claim = object
+        .get("appProperties")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|properties| properties.get(guard::CLAIM_PROPERTY))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    Some(DriveFile {
+        id,
+        name,
+        is_dir: mime_type == Some(FOLDER_MIME),
+        size,
+        version,
+        created,
+        claim,
+    })
+}
+
 /// Parse a `files.list` answer (`files`, `nextPageToken`). Not JSON, a file without `id` or
 /// `name`, or a `version`/`size` that is not a whole number is
 /// `Error::Server("drive: bad list answer")`.
 pub fn parse_files(body: &str) -> Result<FilePage> {
-    not_built("gdrive::parse_files")
+    fn bad() -> crate::Error {
+        crate::Error::Server("drive: bad list answer".into())
+    }
+
+    let value: serde_json::Value = serde_json::from_str(body).map_err(|_| bad())?;
+    let object = value.as_object().ok_or_else(bad)?;
+    let files = match object.get("files") {
+        None => Vec::new(),
+        Some(value) => value
+            .as_array()
+            .ok_or_else(bad)?
+            .iter()
+            .map(|file| parse_drive_file(file).ok_or_else(bad))
+            .collect::<Result<Vec<_>>>()?,
+    };
+    let next_page = object
+        .get("nextPageToken")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    Ok(FilePage { files, next_page })
 }
 
 /// Parse one file's metadata (the answer of `files.get`, `files.create`, `files.update`),
 /// with the same rules as one entry of `parse_files`; else `Error::Server("drive: bad file answer")`.
 pub fn parse_file(body: &str) -> Result<DriveFile> {
-    not_built("gdrive::parse_file")
+    fn bad() -> crate::Error {
+        crate::Error::Server("drive: bad file answer".into())
+    }
+
+    let value: serde_json::Value = serde_json::from_str(body).map_err(|_| bad())?;
+    parse_drive_file(&value).ok_or_else(bad)
 }
 
 /// The file called `name` among `files`: the oldest by `created`, then by `id` when two have
 /// the same time. `None` when no file has that name.
 pub fn pick<'a>(files: &'a [DriveFile], name: &str) -> Option<&'a DriveFile> {
-    crate::not_built!("gdrive::pick")
+    files
+        .iter()
+        .filter(|file| file.name == name)
+        .min_by(|a, b| (&a.created, &a.id).cmp(&(&b.created, &b.id)))
 }
 
 /// A `multipart/related` upload body: the metadata JSON part, then the content part
@@ -147,5 +221,18 @@ impl Remote for Drive {
     }
     fn delete(&self, path: &str) -> Result<()> {
         not_built("gdrive::Drive::delete")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_file;
+
+    #[test]
+    fn size_and_version_are_digits_only() {
+        assert!(parse_file(r#"{"id":"a","name":"a","size":"+5"}"#).is_err());
+        assert!(parse_file(r#"{"id":"a","name":"a","version":"+5"}"#).is_err());
+        assert!(parse_file(r#"{"id":"a","name":"a","size":""}"#).is_err());
+        assert!(parse_file(r#"{"id":"a","name":"a","size":"5"}"#).is_ok());
     }
 }
