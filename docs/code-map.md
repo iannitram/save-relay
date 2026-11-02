@@ -114,7 +114,7 @@ In a saves folder, every name starting `.save-relay-` is reserved and never part
 | `src/glob.rs` | present | `matches(pattern, path)` with `*`, `?`, `**`; `selected(include, exclude, path)` | used by `scan` | M7 |
 | `src/scan.rs` | present | `FileEntry` (path, size, mtime, sha256), `SaveSet`, `hash_bytes`, `scan(dir, include, exclude)` | `glob`; used by `plan`, `transfer`, `sync` | M1, M2, M3 |
 | `src/stamp.rs` | present | UTC text: RFC 3339 (`2026-10-31T19:51:00Z`) and entry stamps (`20261031T195100Z`), both ways | used by `layout`, `state`, `sync` | M2, M4 |
-| `src/state.rs` | stub (`save_set` present) | `ServerState` (`state.json`) and `LastSynced` JSON with checks | `scan`; used by `plan`, `local`, `sync` | M1-M3 |
+| `src/state.rs` | present | `ServerState` (`state.json`) and `LastSynced` JSON with checks | `scan`; used by `plan`, `local`, `sync` | M1-M3 |
 | `src/layout.rs` | present | `Layout`: every server path (`playing_path` too); `entry_name`, `parse_entry_name`, `device_slug` | `stamp`; used by `retention`, `transfer`, `sync` | M2, M4 |
 | `src/plan.rs` | partly present (`decide` present; `decide_with_mark` still to come, M11) | **pure** `decide(intent, local, last, server) -> Decision` (the table in the file); `decide_with_mark` adds the `Held` row (M11) | `scan`, `state`, `presence`; used by `sync` | M1, M2, M3, M5, M11 |
 | `src/retention.rs` | stub | **pure** `to_drop(entries, keep, current)`; `KEEP = 10` | `layout`; used by `sync` | M4 |
