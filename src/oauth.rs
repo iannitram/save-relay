@@ -75,19 +75,36 @@ pub fn provider(service: Service) -> Option<&'static Provider> {
 
 /// Base64url without padding (RFC 4648 §5): `b"hi?"` -> `"aGk_"`; `[0xfb, 0xff]` -> `"-_8"`.
 pub fn base64url(bytes: &[u8]) -> String {
-    crate::not_built!("oauth::base64url")
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
+        let b2 = chunk.get(2).copied().unwrap_or(0) as u32;
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(ALPHABET[((n >> 18) & 0x3f) as usize] as char);
+        out.push(ALPHABET[((n >> 12) & 0x3f) as usize] as char);
+        if chunk.len() > 1 {
+            out.push(ALPHABET[((n >> 6) & 0x3f) as usize] as char);
+        }
+        if chunk.len() > 2 {
+            out.push(ALPHABET[(n & 0x3f) as usize] as char);
+        }
+    }
+    out
 }
 
 /// A PKCE code verifier from 32 random bytes: their base64url, 43 characters.
 pub fn verifier_from_bytes(bytes: &[u8; 32]) -> String {
-    crate::not_built!("oauth::verifier_from_bytes")
+    base64url(bytes)
 }
 
 /// The PKCE `S256` challenge: base64url of the SHA-256 of the verifier's ASCII. RFC 7636
 /// appendix B: `"dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"` ->
 /// `"E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"`.
 pub fn challenge(verifier: &str) -> String {
-    crate::not_built!("oauth::challenge")
+    use sha2::{Digest, Sha256};
+    base64url(&Sha256::digest(verifier.as_bytes()))
 }
 
 /// 32 bytes from the OS's secure random source (the `getrandom` crate, pure Rust, added by
