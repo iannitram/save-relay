@@ -2,7 +2,7 @@
 //! resolve against. Values come from environment variables through a lookup function, so the
 //! rules are tested on every OS without touching the real environment.
 
-use crate::error::{not_built, Result};
+use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -69,7 +69,55 @@ impl PathVars {
     ///
     /// A required variable that is unset is `Error::Io("<NAME> is not set")`.
     pub fn from_env(platform: Platform, var: &dyn Fn(&str) -> Option<String>) -> Result<PathVars> {
-        not_built("platform::PathVars::from_env")
+        // An empty value counts as unset.
+        let set = |name: &str| var(name).filter(|value| !value.is_empty());
+        let required = |name: &str| {
+            set(name)
+                .map(PathBuf::from)
+                .ok_or_else(|| Error::Io(format!("{name} is not set")))
+        };
+        match platform {
+            Platform::Linux => {
+                let home = required("HOME")?;
+                let data = set("XDG_DATA_HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| home.join(".local/share"));
+                let config = set("XDG_CONFIG_HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| home.join(".config"));
+                Ok(PathVars {
+                    documents: Some(home.join("Documents")),
+                    home,
+                    data,
+                    config,
+                })
+            }
+            Platform::Mac => {
+                let home = required("HOME")?;
+                let support = home.join("Library/Application Support");
+                Ok(PathVars {
+                    documents: Some(home.join("Documents")),
+                    home,
+                    data: support.clone(),
+                    config: support,
+                })
+            }
+            Platform::Windows => {
+                let home = required("USERPROFILE")?;
+                let data = required("LOCALAPPDATA")?;
+                let config = required("APPDATA")?;
+                Ok(PathVars {
+                    documents: Some(home.join("Documents")),
+                    home,
+                    data,
+                    config,
+                })
+            }
+            Platform::Android | Platform::Ios => Err(Error::Usage(format!(
+                "{} has no default folders: the host app supplies them",
+                platform.key()
+            ))),
+        }
     }
 }
 
@@ -85,6 +133,9 @@ pub struct AppDirs {
 impl AppDirs {
     /// `<vars.config>/save-relay` and `<vars.data>/save-relay`.
     pub fn from_vars(vars: &PathVars) -> AppDirs {
-        crate::not_built!("platform::AppDirs::from_vars")
+        AppDirs {
+            config: vars.config.join("save-relay"),
+            data: vars.data.join("save-relay"),
+        }
     }
 }
