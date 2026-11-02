@@ -176,10 +176,6 @@ fn write_json<T: Serialize>(path: &std::path::Path, value: &T) -> Result<()> {
         .map_err(|error| Error::StateInvalid(error.to_string()))?;
     text.push('\n');
     fs::write(&temp, text)?;
-    #[cfg(windows)]
-    if path.exists() {
-        fs::remove_file(path)?;
-    }
     fs::rename(temp, path)?;
     Ok(())
 }
