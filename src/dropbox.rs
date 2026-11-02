@@ -181,14 +181,26 @@ pub fn parse_list(body: &str) -> Result<ListPage> {
     let mut parsed = Vec::new();
     for entry in entries {
         let entry = entry.as_object().ok_or_else(bad)?;
-        let tag = entry.get(".tag").and_then(serde_json::Value::as_str).ok_or_else(bad)?;
-        let name = entry.get("name").and_then(serde_json::Value::as_str).ok_or_else(bad)?;
+        let tag = entry
+            .get(".tag")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(bad)?;
+        let name = entry
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(bad)?;
         match tag {
             "file" => parsed.push(RemoteEntry {
                 name: name.into(),
                 is_dir: false,
-                size: entry.get("size").and_then(serde_json::Value::as_u64).unwrap_or(0),
-                etag: entry.get("rev").and_then(serde_json::Value::as_str).map(str::to_string),
+                size: entry
+                    .get("size")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0),
+                etag: entry
+                    .get("rev")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string),
             }),
             "folder" => parsed.push(RemoteEntry {
                 name: name.into(),
