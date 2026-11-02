@@ -4,7 +4,7 @@ use crate::error::{Error, Result};
 use crate::fake::REFRESH_TOKEN;
 use crate::gdrive::FOLDER_MIME;
 use crate::http::{Request, Response, Transport};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Mutex, MutexGuard};
 

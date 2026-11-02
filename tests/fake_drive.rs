@@ -1,9 +1,9 @@
-use save_relay::Error;
 use save_relay::fake::{FakeDrive, REFRESH_TOKEN};
 use save_relay::gdrive::{API, FOLDER_MIME, UPLOAD};
 use save_relay::http::{Request, Response, Transport};
 use save_relay::oauth::GOOGLE;
-use serde_json::{Value, json};
+use save_relay::Error;
+use serde_json::{json, Value};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -526,14 +526,12 @@ fn version_grows_on_content_name_parents_and_app_properties() {
         )),
         vec!["b.sav"]
     );
-    assert!(
-        names(&list(
-            &fake,
-            &access,
-            &format!("'{g}' in parents and trashed = false")
-        ))
-        .is_empty()
-    );
+    assert!(names(&list(
+        &fake,
+        &access,
+        &format!("'{g}' in parents and trashed = false")
+    ))
+    .is_empty());
 
     let properties = update_json(
         &fake,
@@ -622,11 +620,10 @@ fn the_hook_runs_before_a_request_and_may_send_again() {
     assert_eq!(got.status, 200);
     assert_eq!(json_body(&got)["name"], "slipped.json");
     assert!(slipped.load(Ordering::SeqCst));
-    assert!(
-        fake.requests()
-            .iter()
-            .any(|line| line == &format!("PATCH {API}/files/{id}"))
-    );
+    assert!(fake
+        .requests()
+        .iter()
+        .any(|line| line == &format!("PATCH {API}/files/{id}")));
 
     fake.set_hook(None);
     let after = get_meta(&fake, &access, &id);
@@ -683,12 +680,11 @@ fn offline_is_unreachable_but_file_paths_still_work() {
         .expect_err("offline");
     assert_eq!(error, Error::Unreachable("fake drive is offline".into()));
     assert_eq!(fake.file_paths(), vec!["a.sav"]);
-    assert!(
-        fake.requests()
-            .last()
-            .expect("the offline request")
-            .starts_with("GET ")
-    );
+    assert!(fake
+        .requests()
+        .last()
+        .expect("the offline request")
+        .starts_with("GET "));
 
     fake.set_reachable(true);
     let response = list(&fake, &access, "'root' in parents and trashed = false");
