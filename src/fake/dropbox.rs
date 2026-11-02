@@ -3,7 +3,7 @@
 use crate::error::{Error, Result};
 use crate::fake::REFRESH_TOKEN;
 use crate::http::{Request, Response, Transport};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};

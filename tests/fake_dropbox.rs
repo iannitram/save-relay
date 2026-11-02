@@ -1,8 +1,8 @@
-use save_relay::Error;
-use save_relay::dropbox::{API, header_json};
+use save_relay::dropbox::{header_json, API};
 use save_relay::fake::{FakeDropbox, REFRESH_TOKEN};
 use save_relay::http::{Request, Response, Transport};
-use serde_json::{Value, json};
+use save_relay::Error;
+use serde_json::{json, Value};
 
 const TOKEN: &str = "https://api.dropboxapi.com/oauth2/token";
 const UPLOAD: &str = "https://content.dropboxapi.com/2/files/upload";
