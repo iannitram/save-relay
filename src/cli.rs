@@ -26,7 +26,7 @@
 //! save-relay version | --version | -V
 //! ```
 
-use crate::error::{not_built, Result};
+use crate::error::{Error, Result};
 use crate::pending::Answer;
 use crate::service::Service;
 use crate::sync::Resolve;
@@ -163,19 +163,214 @@ pub struct Args {
 /// `--service`, `--server` or `--user` is `SetupService { service: None, .. }`, except with
 /// `--json`, where it is `Error::Usage` naming `--service` (a launcher must say which).
 pub fn parse(args: &[String]) -> Result<Args> {
-    not_built("cli::parse")
+    if args.iter().any(|arg| arg == "--password") {
+        return Err(Error::Usage(
+            "the password is read from standard input, not from --password".to_string(),
+        ));
+    }
+    let json = args.iter().any(|arg| arg == "--json");
+    let args: Vec<&str> = args
+        .iter()
+        .filter(|arg| arg.as_str() != "--json")
+        .map(String::as_str)
+        .collect();
+    if args.is_empty() {
+        return Ok(Args {
+            command: Command::Help,
+            json,
+        });
+    }
+    let command = match args[0] {
+        "help" | "--help" | "-h" => Command::Help,
+        "version" | "--version" | "-V" => Command::Version,
+        "pull" => {
+            let flags = split(&args[1..], &["--manifest", "--saves-dir", "--resolve"])?;
+            require(&flags.positionals, 1, &["<game>"])?;
+            Command::Pull {
+                game: game_arg(flags.positionals[0], &flags),
+                resolve: resolve(&flags)?,
+            }
+        }
+        "push" => {
+            let flags = split(&args[1..], &["--manifest", "--saves-dir", "--resolve"])?;
+            require(&flags.positionals, 1, &["<game>"])?;
+            Command::Push {
+                game: game_arg(flags.positionals[0], &flags),
+                resolve: resolve(&flags)?,
+            }
+        }
+        "status" => {
+            let flags = split(&args[1..], &["--manifest", "--saves-dir"])?;
+            require(&flags.positionals, 1, &["<game>"])?;
+            Command::Status {
+                game: game_arg(flags.positionals[0], &flags),
+            }
+        }
+        "history" => {
+            let flags = split(&args[1..], &[])?;
+            require(&flags.positionals, 1, &["<game>"])?;
+            Command::History {
+                game: flags.positionals[0].to_string(),
+            }
+        }
+        "restore" => {
+            let flags = split(&args[1..], &["--manifest", "--saves-dir"])?;
+            require(&flags.positionals, 2, &["<game>", "<entry>"])?;
+            Command::Restore {
+                game: game_arg(flags.positionals[0], &flags),
+                entry: flags.positionals[1].to_string(),
+            }
+        }
+        "setup" => {
+            let flags = split(&args[1..], &["--server", "--user", "--device", "--root"])?;
+            require(&flags.positionals, 0, &[])?;
+            let server = match flags.flag("--server") {
+                Some(value) => value.to_string(),
+                None => return missing("--server"),
+            };
+            let user = match flags.flag("--user") {
+                Some(value) => value.to_string(),
+                None => return missing("--user"),
+            };
+            Command::Setup {
+                server,
+                user,
+                device: flags.flag("--device").map(String::from),
+                root: flags.flag("--root").unwrap_or(DEFAULT_ROOT).to_string(),
+            }
+        }
+        other => {
+            return Err(Error::Usage(format!("unknown command '{other}'")));
+        }
+    };
+    Ok(Args { command, json })
+}
+
+struct Flags<'a> {
+    positionals: Vec<&'a str>,
+    values: Vec<(&'a str, &'a str)>,
+}
+
+impl<'a> Flags<'a> {
+    fn flag(&self, name: &str) -> Option<&'a str> {
+        for (flag, value) in &self.values {
+            if *flag == name {
+                return Some(*value);
+            }
+        }
+        None
+    }
+}
+
+fn split<'a>(args: &[&'a str], allowed: &[&str]) -> Result<Flags<'a>> {
+    let mut flags = Flags {
+        positionals: Vec::new(),
+        values: Vec::new(),
+    };
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index];
+        if arg.starts_with('-') && arg != "-" {
+            if !allowed.contains(&arg) {
+                return Err(Error::Usage(format!("unknown flag '{arg}'")));
+            }
+            if flags.values.iter().any(|(name, _)| *name == arg) {
+                return Err(Error::Usage(format!("flag '{arg}' given twice")));
+            }
+            let value = match args.get(index + 1) {
+                Some(value) => *value,
+                None => return Err(Error::Usage(format!("flag '{arg}' needs a value"))),
+            };
+            flags.values.push((arg, value));
+            index += 2;
+        } else {
+            flags.positionals.push(arg);
+            index += 1;
+        }
+    }
+    Ok(flags)
+}
+
+fn require(positionals: &[&str], count: usize, missing: &[&str]) -> Result<()> {
+    if positionals.len() < count {
+        return missing_value(missing[positionals.len()]);
+    }
+    if positionals.len() > count {
+        return Err(Error::Usage(format!(
+            "unexpected argument '{}'",
+            positionals[count]
+        )));
+    }
+    Ok(())
+}
+
+fn missing<T>(what: &str) -> Result<T> {
+    missing_value(what)
+}
+
+fn missing_value<T>(what: &str) -> Result<T> {
+    Err(Error::Usage(format!("missing {what}")))
+}
+
+fn game_arg(id: &str, flags: &Flags<'_>) -> GameArg {
+    GameArg {
+        id: id.to_string(),
+        manifest: flags.flag("--manifest").map(PathBuf::from),
+        saves_dir: flags.flag("--saves-dir").map(PathBuf::from),
+    }
+}
+
+fn resolve(flags: &Flags<'_>) -> Result<Option<Resolve>> {
+    match flags.flag("--resolve") {
+        None => Ok(None),
+        Some("keep-server") => Ok(Some(Resolve::KeepServer)),
+        Some("keep-local") => Ok(Some(Resolve::KeepLocal)),
+        Some(other) => Err(Error::Usage(format!(
+            "unknown --resolve '{other}': use keep-server or keep-local"
+        ))),
+    }
 }
 
 /// The command's name as it appears in the envelope: "pull" (`Pull` and `PullAnyway`), "push",
 /// "status", "history", "restore", "setup" (both setup forms), "wrap", "which",
 /// "install-wrap", "answer", "where", "picture", "panel", "help", "version".
 pub fn command_name(command: &Command) -> &'static str {
-    crate::not_built!("cli::command_name")
+    match command {
+        Command::Pull { .. } | Command::PullAnyway { .. } => "pull",
+        Command::Push { .. } => "push",
+        Command::Status { .. } => "status",
+        Command::History { .. } => "history",
+        Command::Restore { .. } => "restore",
+        Command::Setup { .. } | Command::SetupService { .. } => "setup",
+        Command::Wrap { .. } => "wrap",
+        Command::Which { .. } => "which",
+        Command::InstallWrap { .. } => "install-wrap",
+        Command::Answer { .. } => "answer",
+        Command::Where => "where",
+        Command::Picture { .. } => "picture",
+        Command::Panel { .. } => "panel",
+        Command::Help => "help",
+        Command::Version => "version",
+    }
 }
 
 /// The help text printed by `help`.
 pub fn usage() -> &'static str {
-    crate::not_built!("cli::usage")
+    "save-relay <command> [--json]
+
+Commands:
+  pull    <game> [--manifest <file>] [--saves-dir <dir>] [--resolve keep-server|keep-local]
+  push    <game> [--manifest <file>] [--saves-dir <dir>] [--resolve keep-server|keep-local]
+  status  <game> [--manifest <file>] [--saves-dir <dir>]
+  history <game>
+  restore <game> <entry> [--manifest <file>] [--saves-dir <dir>]
+  setup   --server <url> --user <name> [--device <name>] [--root <folder>]
+          (reads the app password from the first line of standard input)
+  help | --help | -h
+  version | --version | -V
+
+--json prints exactly one envelope line for launchers.
+"
 }
 
 /// Run one command end to end: parse, load the config, the credential store and the game,
