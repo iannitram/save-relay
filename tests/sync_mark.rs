@@ -86,6 +86,15 @@ impl Machine {
         }
     }
 
+    fn session_dyn<'a>(&self, remote: &'a dyn Remote, now: u64) -> Session<'a> {
+        Session {
+            remote,
+            layout: layout(),
+            device: self.device.clone(),
+            now,
+        }
+    }
+
     /// Write the one save file `a.sav` with `content`; an empty string removes it.
     fn save(&self, content: &str) {
         let dir = &self.game.saves_dir;
@@ -379,4 +388,77 @@ fn a_broken_mark_is_no_mark_for_pull_and_push_leaves_it() {
         w.remote.read(&layout().playing_path(GAME)),
         Some(b"not json".to_vec())
     );
+}
+
+/// A server that refuses every write to `playing.json` and passes the rest on.
+struct NoMarkWrites<'a>(&'a MemoryRemote);
+
+impl Remote for NoMarkWrites<'_> {
+    fn list(&self, dir: &str) -> save_relay::error::Result<Vec<save_relay::remote::RemoteEntry>> {
+        self.0.list(dir)
+    }
+    fn get(&self, path: &str) -> save_relay::error::Result<(Vec<u8>, String)> {
+        self.0.get(path)
+    }
+    fn put(
+        &self,
+        path: &str,
+        bytes: &[u8],
+        pre: &Precondition,
+    ) -> save_relay::error::Result<String> {
+        if path.ends_with("/playing.json") {
+            return Err(save_relay::error::Error::Server("mark refused".into()));
+        }
+        self.0.put(path, bytes, pre)
+    }
+    fn mkcol(&self, dir: &str) -> save_relay::error::Result<()> {
+        self.0.mkcol(dir)
+    }
+    fn copy(&self, from: &str, to: &str) -> save_relay::error::Result<()> {
+        self.0.copy(from, to)
+    }
+    fn move_to(&self, from: &str, to: &str) -> save_relay::error::Result<()> {
+        self.0.move_to(from, to)
+    }
+    fn delete(&self, path: &str) -> save_relay::error::Result<()> {
+        if path.ends_with("/playing.json") {
+            return Err(save_relay::error::Error::Server("mark refused".into()));
+        }
+        self.0.delete(path)
+    }
+}
+
+#[test]
+fn a_failed_mark_write_or_clear_is_in_the_message_not_an_error() {
+    let w = World::new();
+    let amd = w.machine(AMD);
+    amd.save("one");
+    amd.push(&w.remote, NOW);
+
+    let bad = NoMarkWrites(&w.remote);
+    let data = pull(
+        &amd.session_dyn(&bad, NOW + 60),
+        &amd.game,
+        &amd.store,
+        None,
+        false,
+    )
+    .unwrap();
+    assert_eq!(data.sync.action, Action::Noop);
+    assert!(data.sync.message.contains("Could not write playing.json"));
+    assert_eq!(mark(&w.remote), None);
+
+    // A mark that exists, cleared through a server that refuses the delete.
+    amd.pull(&w.remote, NOW + 120, None, false);
+    amd.save("two");
+    let data = push(
+        &amd.session_dyn(&bad, NOW + 180),
+        &amd.game,
+        &amd.store,
+        None,
+    )
+    .unwrap();
+    assert_eq!(data.sync.action, Action::Pushed);
+    assert!(data.sync.message.contains("Could not clear playing.json"));
+    assert_eq!(mark(&w.remote), Some(mark_for(AMD, NOW + 120, Some(1))));
 }
