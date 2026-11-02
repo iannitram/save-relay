@@ -20,7 +20,7 @@
 //! Claim files are kept for a day (a later push deletes older ones), so a claim id is never
 //! free again while a slow machine may still hold an etag naming it.
 
-use crate::error::{not_built, Result};
+use crate::error::Result;
 
 /// The `appProperties` key holding a file's claim id for its next write.
 pub const CLAIM_PROPERTY: &str = "save_relay_claim";
@@ -35,14 +35,19 @@ pub const MAX_HOPS: u32 = 3;
 
 /// `"v<version>.<claim>"`: `make_etag(12, "1AbC")` -> `"v12.1AbC"`; an empty claim gives `"v12."`.
 pub fn make_etag(version: u64, claim: &str) -> String {
-    crate::not_built!("gdrive::guard::make_etag")
+    format!("v{version}.{claim}")
 }
 
 /// The inverse of `make_etag`: `"v12.1AbC"` -> `Some((12, "1AbC"))`, `"v12."` ->
 /// `Some((12, ""))`. Anything else (no `v`, no `.`, a version that is not a whole number) is
 /// `None`. The claim is everything after the first `.`.
 pub fn parse_etag(etag: &str) -> Option<(u64, String)> {
-    crate::not_built!("gdrive::guard::parse_etag")
+    let rest = etag.strip_prefix('v')?;
+    let (version, claim) = rest.split_once('.')?;
+    if version.is_empty() || !version.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    Some((version.parse().ok()?, claim.to_owned()))
 }
 
 /// The answer to a claim's `files.create`.
@@ -86,7 +91,20 @@ pub enum Step {
 ///
 /// Rows are checked top to bottom; the first that fits wins. Pure.
 pub fn decide(expected: u64, now_version: u64, claim: &Claim, held_secs: u64, hops: u32) -> Step {
-    crate::not_built!("gdrive::guard::decide")
+    if now_version != expected {
+        return Step::Changed;
+    }
+
+    match claim {
+        Claim::Won if held_secs < SLOW_SECS => Step::Write,
+        Claim::Won => Step::TooSlow,
+        Claim::Taken { age_secs, .. } if *age_secs < LEASE_SECS => Step::Changed,
+        Claim::Taken { next: None, .. } => Step::Changed,
+        Claim::Taken { .. } if hops >= MAX_HOPS => Step::Changed,
+        Claim::Taken {
+            next: Some(next), ..
+        } => Step::Break(next.clone()),
+    }
 }
 
 /// Step 5: the metadata read after the upload must show the version the upload answered
@@ -98,5 +116,11 @@ pub fn check_written(
     seen_version: u64,
     seen_claim: Option<&str>,
 ) -> Result<()> {
-    not_built("gdrive::guard::check_written")
+    if seen_version == written_version && seen_claim == Some(written_claim) {
+        Ok(())
+    } else {
+        Err(crate::Error::Server(format!(
+            "drive: state changed during the write (version {seen_version}): run again"
+        )))
+    }
 }
