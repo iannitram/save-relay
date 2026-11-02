@@ -187,6 +187,9 @@ fn no_error_text_shows_the_password() {
         let error = webdav.get("a/b").unwrap_err();
         let text = format!("{error} {error:?}");
         assert!(!text.contains("s3cret"), "status {status}: {text}");
-        assert!(!text.contains("YWxleDpzM2NyZXQ="), "status {status}: {text}");
+        assert!(
+            !text.contains("YWxleDpzM2NyZXQ="),
+            "status {status}: {text}"
+        );
     }
 }
