@@ -245,8 +245,9 @@ fn hex_value(byte: u8) -> Option<u8> {
 }
 
 /// The real server, over any `Transport`. Every request carries Basic auth; 401/403 is `Error::AuthFailed`; a
-/// connection, DNS, TLS or timeout failure is `Error::Unreachable`; 412 is `Error::Changed`;
-/// 404 is `Error::NotFound`; 409 on PUT/MKCOL/MOVE/COPY is `Error::NotFound(parent)`.
+/// connection, DNS, TLS or timeout failure is `Error::Unreachable`; 412 on PUT is `Error::Changed`
+/// (on COPY/MOVE it is `Error::Server("exists")`); 404 is `Error::NotFound`; 409 on
+/// PUT/MKCOL/MOVE/COPY is `Error::NotFound(parent)`.
 /// The password is never logged or put in an error message.
 pub struct WebDav {
     files_url: String,
@@ -309,13 +310,12 @@ impl WebDav {
         format!("{}{}", self.files_url, encoded)
     }
 
-    fn send(
+    fn request(
         &self,
         method: &str,
         path: &str,
         headers: &[(&str, String)],
         body: Vec<u8>,
-        ok: &[u16],
     ) -> Result<crate::http::Response> {
         let url = self.url(path);
         let mut request = crate::http::Request::new(method, &url);
@@ -326,7 +326,40 @@ impl WebDav {
         if !body.is_empty() {
             request = request.body(body);
         }
-        let response = self.transport.send(&request)?;
+        self.transport.send(&request)
+    }
+
+    /// COPY or MOVE `from` to `to` with `Overwrite: F`. Only the answers that differ from the
+    /// common mapping in `send` are special here: 412 (the destination exists) and 409 (the
+    /// parent of the destination is missing).
+    fn transfer(&self, method: &str, from: &str, to: &str) -> Result<()> {
+        let headers = [
+            ("Destination", self.url(to)),
+            ("Overwrite", "F".to_string()),
+        ];
+        let response = self.request(method, from, &headers, vec![])?;
+        match response.status {
+            201 | 204 => Ok(()),
+            412 => Err(Error::Server("exists".into())),
+            409 => Err(Error::NotFound(match to.rfind('/') {
+                Some(pos) => to[..pos].to_string(),
+                None => String::new(),
+            })),
+            404 => Err(Error::NotFound(from.to_string())),
+            401 | 403 => Err(Error::AuthFailed),
+            status => Err(Error::Server(format!("{} {}: {}", method, from, status))),
+        }
+    }
+
+    fn send(
+        &self,
+        method: &str,
+        path: &str,
+        headers: &[(&str, String)],
+        body: Vec<u8>,
+        ok: &[u16],
+    ) -> Result<crate::http::Response> {
+        let response = self.request(method, path, headers, body)?;
         if ok.contains(&response.status) {
             Ok(response)
         } else {
@@ -391,12 +424,13 @@ impl crate::remote::Remote for WebDav {
         Ok(())
     }
     fn copy(&self, from: &str, to: &str) -> Result<()> {
-        crate::error::not_built("webdav::WebDav::copy")
+        self.transfer("COPY", from, to)
     }
     fn move_to(&self, from: &str, to: &str) -> Result<()> {
-        crate::error::not_built("webdav::WebDav::move_to")
+        self.transfer("MOVE", from, to)
     }
     fn delete(&self, path: &str) -> Result<()> {
-        crate::error::not_built("webdav::WebDav::delete")
+        self.send("DELETE", path, &[], vec![], &[200, 204])?;
+        Ok(())
     }
 }
