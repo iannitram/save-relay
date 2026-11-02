@@ -44,7 +44,10 @@ pub fn encode_segment(segment: &str) -> String {
 
 /// `encode_segment` on each `/`-separated segment, joined with `/`.
 pub fn encode_path(path: &str) -> String {
-    path.split('/').map(encode_segment).collect::<Vec<_>>().join("/")
+    path.split('/')
+        .map(encode_segment)
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// Parse a `PROPFIND` (Depth: 1) `207 Multi-Status` body into the children of the folder whose
