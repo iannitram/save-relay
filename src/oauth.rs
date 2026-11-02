@@ -16,12 +16,16 @@
 
 use crate::clients::Client;
 use crate::creds::Secret;
-use crate::error::{not_built, Result};
+use crate::error::Result;
 use crate::http::{Request, Transport};
 use crate::service::Service;
 use crate::stamp::Clock;
+use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::io::{BufRead, Write};
+use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 /// Refresh an access token this many seconds before it expires.
 pub const REFRESH_MARGIN: u64 = 60;
@@ -111,7 +115,10 @@ pub fn challenge(verifier: &str) -> String {
 /// 32 bytes from the OS's secure random source (the `getrandom` crate, pure Rust, added by
 /// its issue). Failure is `Error::SignInFailed("no secure random source")`.
 pub fn random_bytes() -> Result<[u8; 32]> {
-    not_built("oauth::random_bytes")
+    let mut bytes = [0u8; 32];
+    getrandom::getrandom(&mut bytes)
+        .map_err(|_| crate::error::Error::SignInFailed("no secure random source".into()))?;
+    Ok(bytes)
 }
 
 /// `application/x-www-form-urlencoded` pairs joined with `&`, in the given order: keep
@@ -452,13 +459,41 @@ pub struct Pending {
     pub secret: Secret,
 }
 
+#[derive(Serialize, Deserialize)]
+struct PendingRecord {
+    service: Service,
+    url: String,
+    user_code: Option<String>,
+    expires_at: u64,
+    interval: u64,
+    secret: String,
+}
+
 impl Pending {
     pub fn to_secret(&self) -> Secret {
-        crate::not_built!("oauth::Pending::to_secret")
+        let record = PendingRecord {
+            service: self.service,
+            url: self.url.clone(),
+            user_code: self.user_code.clone(),
+            expires_at: self.expires_at,
+            interval: self.interval,
+            secret: self.secret.expose().to_string(),
+        };
+        let json = serde_json::to_string(&record).expect("pending sign-in serializes to JSON");
+        Secret::new(json)
     }
 
     pub fn from_secret(secret: &Secret) -> Result<Pending> {
-        not_built("oauth::Pending::from_secret")
+        let record: PendingRecord = serde_json::from_str(secret.expose())
+            .map_err(|e| crate::error::Error::Credentials(format!("invalid pending secret: {e}")))?;
+        Ok(Pending {
+            service: record.service,
+            url: record.url,
+            user_code: record.user_code,
+            expires_at: record.expires_at,
+            interval: record.interval,
+            secret: Secret::new(record.secret),
+        })
     }
 }
 
@@ -473,7 +508,136 @@ pub fn sign_in_browser(
     open: &dyn Fn(&str) -> Result<()>,
     now: Clock,
 ) -> Result<Tokens> {
-    not_built("oauth::sign_in_browser")
+    sign_in_browser_timeout(
+        provider,
+        client,
+        transport,
+        open,
+        now,
+        Duration::from_secs(SIGN_IN_TIMEOUT),
+    )
+}
+
+/// A version of `sign_in_browser` taking an explicit redirect timeout (for tests).
+pub fn sign_in_browser_timeout(
+    provider: &'static Provider,
+    client: Client,
+    transport: &dyn Transport,
+    open: &dyn Fn(&str) -> Result<()>,
+    now: Clock,
+    timeout: Duration,
+) -> Result<Tokens> {
+    let (listener, redirect_uri) = match provider.service {
+        Service::Gdrive => {
+            let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| {
+                crate::error::Error::SignInFailed(format!("could not bind loopback socket: {e}"))
+            })?;
+            let port = listener
+                .local_addr()
+                .map_err(|e| {
+                    crate::error::Error::SignInFailed(format!("could not get local address: {e}"))
+                })?
+                .port();
+            (listener, format!("http://127.0.0.1:{port}/"))
+        }
+        Service::Dropbox => {
+            let listener = TcpListener::bind("127.0.0.1:53710").map_err(|_| {
+                crate::error::Error::SignInFailed(
+                    "port 53710 is in use: use --no-browser".into(),
+                )
+            })?;
+            (listener, crate::clients::DROPBOX_REDIRECT.to_string())
+        }
+        Service::Nextcloud => {
+            return Err(crate::error::Error::Usage(
+                "Nextcloud does not use OAuth".into(),
+            ));
+        }
+    };
+
+    listener.set_nonblocking(true).map_err(|e| {
+        crate::error::Error::SignInFailed(format!("could not set nonblocking socket: {e}"))
+    })?;
+
+    let rand = random_bytes()?;
+    let verifier = verifier_from_bytes(&rand);
+    let state_bytes = random_bytes()?;
+    let state = base64url(&state_bytes);
+    let ch = challenge(&verifier);
+    let auth_url = authorize_url(provider, client.id, &redirect_uri, &ch, &state);
+
+    open(&auth_url)?;
+
+    let start = std::time::Instant::now();
+    let code = loop {
+        let (mut stream, _) = loop {
+            match listener.accept() {
+                Ok(pair) => break pair,
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    if start.elapsed() >= timeout {
+                        return Err(crate::error::Error::SignInFailed(
+                            "timed out waiting for sign-in in browser".into(),
+                        ));
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(e) => {
+                    return Err(crate::error::Error::SignInFailed(format!(
+                        "listener accept failed: {e}"
+                    )));
+                }
+            }
+        };
+
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+        let mut reader = std::io::BufReader::new(&mut stream);
+        let mut request_line = String::new();
+        if reader.read_line(&mut request_line).is_err() || request_line.is_empty() {
+            continue;
+        }
+
+        let parts: Vec<&str> = request_line.split_whitespace().collect();
+        if parts.len() < 2 {
+            continue;
+        }
+        let target = parts[1];
+        if target.starts_with("/favicon.ico") {
+            let resp = b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            let _ = stream.write_all(resp);
+            let _ = stream.flush();
+            continue;
+        }
+
+        let html = "<!DOCTYPE html><html><body><p>Signed in to save-relay. You can close this tab.</p></body></html>";
+        let resp = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            html.len(),
+            html
+        );
+        let _ = stream.write_all(resp.as_bytes());
+        let _ = stream.flush();
+
+        let code = parse_redirect(target, &state)?;
+        break code;
+    };
+
+    let mut pairs = vec![
+        ("grant_type", "authorization_code"),
+        ("code", &code),
+        ("redirect_uri", &redirect_uri),
+        ("code_verifier", &verifier),
+        ("client_id", client.id),
+    ];
+    if provider.service == Service::Gdrive {
+        pairs.push(("client_secret", client.secret.unwrap_or("")));
+    }
+
+    let body = form_encode(&pairs);
+    let req = Request::new("POST", provider.token_url)
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body(body.into_bytes());
+    let resp = transport.send(&req)?;
+    parse_token_response(provider.service, resp.status, &resp.text(), (now)())
 }
 
 /// Start a sign-in with no browser on this machine: Dropbox's code flow (the URL with no
@@ -485,7 +649,93 @@ pub fn start_code(
     transport: &dyn Transport,
     now: u64,
 ) -> Result<Pending> {
-    not_built("oauth::start_code")
+    match provider.service {
+        Service::Dropbox => {
+            let rand = random_bytes()?;
+            let verifier = verifier_from_bytes(&rand);
+            let state_bytes = random_bytes()?;
+            let state = base64url(&state_bytes);
+            let ch = challenge(&verifier);
+            let url = authorize_url(provider, client.id, "", &ch, &state);
+            Ok(Pending {
+                service: Service::Dropbox,
+                url,
+                user_code: None,
+                expires_at: now.saturating_add(SIGN_IN_TIMEOUT),
+                interval: 0,
+                secret: Secret::new(verifier),
+            })
+        }
+        Service::Gdrive => {
+            let device_url = provider.device_url.ok_or_else(|| {
+                crate::error::Error::Usage("Google provider missing device_url".into())
+            })?;
+            let body = form_encode(&[
+                ("client_id", client.id),
+                ("scope", provider.scope),
+            ]);
+            let req = Request::new("POST", device_url)
+                .header("Content-Type", "application/x-www-form-urlencoded")
+                .body(body.into_bytes());
+            let resp = transport.send(&req)?;
+            let status = resp.status;
+            let text = resp.text();
+            if (500..=599).contains(&status) {
+                return Err(crate::error::Error::Server(format!("device endpoint: {status}")));
+            }
+            let val: serde_json::Value = serde_json::from_str(&text)
+                .map_err(|_| crate::error::Error::Server(format!("device endpoint: {status}")))?;
+            if status != 200 {
+                let err = val
+                    .get("error")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown error");
+                let msg = match val.get("error_description").and_then(serde_json::Value::as_str) {
+                    Some(desc) => format!("{err}: {desc}"),
+                    None => err.to_string(),
+                };
+                return Err(crate::error::Error::SignInFailed(msg));
+            }
+            let device_code = val
+                .get("device_code")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| {
+                    crate::error::Error::Server("device endpoint: missing device_code".into())
+                })?;
+            let user_code = val
+                .get("user_code")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| {
+                    crate::error::Error::Server("device endpoint: missing user_code".into())
+                })?;
+            let url = val
+                .get("verification_url")
+                .or_else(|| val.get("verification_uri"))
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| {
+                    crate::error::Error::Server("device endpoint: missing verification_url".into())
+                })?;
+            let expires_in = val
+                .get("expires_in")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(1800);
+            let interval = val
+                .get("interval")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(5);
+            Ok(Pending {
+                service: Service::Gdrive,
+                url: url.to_string(),
+                user_code: Some(user_code.to_string()),
+                expires_at: now.saturating_add(expires_in),
+                interval,
+                secret: Secret::new(device_code),
+            })
+        }
+        Service::Nextcloud => {
+            Err(crate::error::Error::Usage("Nextcloud does not use OAuth".into()))
+        }
+    }
 }
 
 /// Finish a `Pending` sign-in: Dropbox exchanges `typed_code` (the first line of standard
@@ -500,19 +750,167 @@ pub fn finish_code(
     transport: &dyn Transport,
     now: Clock,
 ) -> Result<Tokens> {
-    not_built("oauth::finish_code")
+    finish_code_with_sleep(provider, client, pending, typed_code, transport, now, &|secs| {
+        if secs > 0 {
+            std::thread::sleep(Duration::from_secs(secs));
+        }
+    })
+}
+
+/// A version of `finish_code` taking an explicit sleep callback (for tests).
+pub fn finish_code_with_sleep(
+    provider: &'static Provider,
+    client: Client,
+    pending: &Pending,
+    typed_code: Option<&str>,
+    transport: &dyn Transport,
+    now: Clock,
+    sleep: &dyn Fn(u64),
+) -> Result<Tokens> {
+    match pending.service {
+        Service::Dropbox => {
+            let code = typed_code
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| crate::error::Error::SignInFailed("no code provided".into()))?;
+
+            if (now)() >= pending.expires_at {
+                return Err(crate::error::Error::SignInFailed(
+                    "the code expired: run setup again".into(),
+                ));
+            }
+
+            let pairs = vec![
+                ("grant_type", "authorization_code"),
+                ("code", code),
+                ("client_id", client.id),
+                ("code_verifier", pending.secret.expose()),
+            ];
+
+            let body = form_encode(&pairs);
+            let request = Request::new("POST", provider.token_url)
+                .header("Content-Type", "application/x-www-form-urlencoded")
+                .body(body.into_bytes());
+
+            let response = transport.send(&request)?;
+            parse_token_response(Service::Dropbox, response.status, &response.text(), (now)())
+        }
+        Service::Gdrive => {
+            let mut interval = pending.interval;
+            loop {
+                if (now)() >= pending.expires_at {
+                    return Err(crate::error::Error::SignInFailed(
+                        "the code expired: run setup again".into(),
+                    ));
+                }
+
+                let mut pairs = vec![
+                    ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+                    ("device_code", pending.secret.expose()),
+                    ("client_id", client.id),
+                ];
+                if let Some(secret) = client.secret {
+                    if !secret.is_empty() {
+                        pairs.push(("client_secret", secret));
+                    }
+                }
+
+                let body = form_encode(&pairs);
+                let request = Request::new("POST", provider.token_url)
+                    .header("Content-Type", "application/x-www-form-urlencoded")
+                    .body(body.into_bytes());
+
+                let response = transport.send(&request)?;
+                let status = response.status;
+                let text = response.text();
+
+                if (500..=599).contains(&status) {
+                    return Err(crate::error::Error::Server(format!("token endpoint: {status}")));
+                }
+
+                if status == 200 {
+                    return parse_token_response(Service::Gdrive, status, &text, (now)());
+                }
+
+                let answer: serde_json::Value = serde_json::from_str(&text)
+                    .map_err(|_| crate::error::Error::Server(format!("token endpoint: {status}")))?;
+
+                match answer.get("error").and_then(serde_json::Value::as_str) {
+                    Some("authorization_pending") => {
+                        sleep(interval);
+                    }
+                    Some("slow_down") => {
+                        interval = interval.saturating_add(5);
+                        sleep(interval);
+                    }
+                    Some("access_denied") => {
+                        return Err(crate::error::Error::SignInFailed("access_denied".into()));
+                    }
+                    Some("expired_token") => {
+                        return Err(crate::error::Error::SignInFailed(
+                            "the code expired: run setup again".into(),
+                        ));
+                    }
+                    Some(err) => {
+                        let message = match answer.get("error_description").and_then(serde_json::Value::as_str) {
+                            Some(desc) => format!("{err}: {desc}"),
+                            None => err.to_string(),
+                        };
+                        return Err(crate::error::Error::SignInFailed(message));
+                    }
+                    None => {
+                        return Err(crate::error::Error::Server(format!("token endpoint: {status}")));
+                    }
+                }
+            }
+        }
+        Service::Nextcloud => {
+            Err(crate::error::Error::Usage("Nextcloud does not use OAuth".into()))
+        }
+    }
 }
 
 /// True when this looks like Steam's Game Mode on Linux (`XDG_CURRENT_DESKTOP` is
 /// `gamescope`, or `SteamGamepadUI` is set), read through `var` like `platform::PathVars`.
 /// There a desktop browser may never appear, so setup defaults to the code flows.
 pub fn in_game_mode(var: &dyn Fn(&str) -> Option<String>) -> bool {
-    crate::not_built!("oauth::in_game_mode")
+    if let Some(desktop) = var("XDG_CURRENT_DESKTOP") {
+        if desktop == "gamescope" {
+            return true;
+        }
+    }
+    if let Some(ui) = var("SteamGamepadUI") {
+        if !ui.is_empty() {
+            return true;
+        }
+    }
+    false
 }
 
 /// Open `url` in the system browser: `xdg-open` on Linux, `rundll32 url.dll,FileProtocolHandler`
 /// on Windows (no `cmd` quoting of `&`), `open` on macOS. Failing to start one is
 /// `Error::SignInFailed("could not open a browser: use --no-browser")`.
 pub fn open_browser(url: &str) -> Result<()> {
-    not_built("oauth::open_browser")
+    #[cfg(target_os = "windows")]
+    let mut cmd = {
+        let mut c = std::process::Command::new("rundll32");
+        c.args(["url.dll,FileProtocolHandler", url]);
+        c
+    };
+    #[cfg(target_os = "macos")]
+    let mut cmd = {
+        let mut c = std::process::Command::new("open");
+        c.arg(url);
+        c
+    };
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let mut cmd = {
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(url);
+        c
+    };
+
+    cmd.spawn()
+        .map(|_| ())
+        .map_err(|_| crate::error::Error::SignInFailed("could not open a browser: use --no-browser".into()))
 }
