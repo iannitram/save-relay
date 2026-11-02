@@ -6,8 +6,10 @@
 //! Linux, Credential Manager on Windows, Keychain on macOS) is behind the `keyring` feature;
 //! `MemoryStore` is for tests; a mobile build brings its own `CredentialStore`.
 
-use crate::error::{not_built, Result};
+use crate::error::{Error, Result};
+use std::collections::HashMap;
 use std::fmt;
+use std::sync::Mutex;
 
 /// The service name every stored password is filed under.
 pub const SERVICE: &str = "save-relay";
@@ -56,13 +58,24 @@ pub trait CredentialStore {
 /// kept, from the server URL: `account("https://Cloud.Example.org:8443/nc", "me")` ->
 /// `"me@cloud.example.org:8443"`. A URL without `http://` or `https://` is `Error::Usage`.
 pub fn account(server: &str, user: &str) -> Result<String> {
-    not_built("creds::account")
+    let host = server
+        .strip_prefix("https://")
+        .or_else(|| server.strip_prefix("http://"))
+        .ok_or_else(|| Error::Usage("server URL must start with http:// or https://".into()))?
+        .split('/')
+        .next()
+        .unwrap_or_default()
+        .to_lowercase();
+    if host.is_empty() {
+        return Err(Error::Usage("server URL must include a host".into()));
+    }
+    Ok(format!("{user}@{host}"))
 }
 
 /// Passwords in a map, for tests. Interior mutability, used through `&self`.
 #[derive(Debug, Default)]
 pub struct MemoryStore {
-    _private: (),
+    secrets: Mutex<HashMap<String, Secret>>,
 }
 
 impl MemoryStore {
@@ -73,13 +86,26 @@ impl MemoryStore {
 
 impl CredentialStore for MemoryStore {
     fn get(&self, account: &str) -> Result<Option<Secret>> {
-        not_built("creds::MemoryStore::get")
+        Ok(self
+            .secrets
+            .lock()
+            .map_err(|_| Error::Credentials("memory store lock poisoned".into()))?
+            .get(account)
+            .cloned())
     }
     fn set(&self, account: &str, secret: &Secret) -> Result<()> {
-        not_built("creds::MemoryStore::set")
+        self.secrets
+            .lock()
+            .map_err(|_| Error::Credentials("memory store lock poisoned".into()))?
+            .insert(account.to_owned(), secret.clone());
+        Ok(())
     }
     fn delete(&self, account: &str) -> Result<()> {
-        not_built("creds::MemoryStore::delete")
+        self.secrets
+            .lock()
+            .map_err(|_| Error::Credentials("memory store lock poisoned".into()))?
+            .remove(account);
+        Ok(())
     }
     fn kind(&self) -> &'static str {
         "memory"
