@@ -43,6 +43,12 @@ impl ServerState {
         if state.entry.is_empty() {
             return Err(Error::StateInvalid("entry must not be empty".into()));
         }
+        if !is_entry_name(&state.entry) {
+            return Err(Error::StateInvalid(format!(
+                "entry '{}' is not <stamp>-<device>",
+                state.entry
+            )));
+        }
         Ok(state)
     }
 
@@ -144,4 +150,17 @@ fn check_common(format: u32, game: &str, time: &str, files: &[FileEntry]) -> Res
         }
     }
     Ok(())
+}
+
+/// `<stamp>-<device>` (the `layout::entry_name` form) with a device of `a-z`, `0-9` and `-` only,
+/// so the entry is one plain path segment and cannot climb out of the history folder.
+fn is_entry_name(entry: &str) -> bool {
+    if !entry.is_ascii() || entry.len() <= 17 || entry.as_bytes()[16] != b'-' {
+        return false;
+    }
+    let (stamp, device) = (&entry[..16], &entry[17..]);
+    crate::stamp::parse_entry_stamp(stamp).is_some()
+        && device
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
