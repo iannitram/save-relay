@@ -293,6 +293,16 @@ fn rate_limits_use_retry_after_then_exponential_backoff() {
 }
 
 #[test]
+fn retry_after_is_capped() {
+    let (r, _, waits) = injected(vec![
+        Response::new(429, "").header("Retry-After", "86400"),
+        Response::new(429, "").header("Retry-After", "60"),
+    ]);
+    assert!(r.list("").unwrap().is_empty());
+    assert_eq!(*waits.lock().unwrap(), [60, 60].map(Duration::from_secs));
+}
+
+#[test]
 fn retries_stop_and_errors_do_not_echo_tokens() {
     let (r, t, waits) = injected(vec![Response::new(429, "fake-access-1"); 4]);
     let error = r.list("").unwrap_err();

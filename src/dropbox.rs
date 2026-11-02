@@ -17,6 +17,10 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::Duration;
 
+/// The longest a single retry waits, whatever `Retry-After` says: a buggy or hostile
+/// server cannot stall a sync for hours.
+const MAX_RETRY_WAIT_SECS: u64 = 60;
+
 /// RPC endpoints (`files/list_folder`, `files/create_folder_v2`, ...).
 pub const API: &str = "https://api.dropboxapi.com/2";
 /// Content endpoints (`files/upload`, `files/download`).
@@ -107,7 +111,7 @@ pub enum Outcome {
     Ok,
     /// Get a new access token (`TokenSource::invalidate`) and send once more.
     Refresh,
-    /// Wait (the `Retry-After` header, else 1 s, 2 s, 4 s) and send again, at most 3 times;
+    /// Wait (the `Retry-After` header, else 1 s, 2 s, 4 s; never over 60 s) and send again, at most 3 times;
     /// then `Error::Server`.
     Retry,
     Err(Error),
@@ -301,7 +305,8 @@ impl Dropbox {
                     let seconds = response
                         .header_value("Retry-After")
                         .and_then(|s| s.parse::<u64>().ok())
-                        .unwrap_or(1 << retries);
+                        .unwrap_or(1 << retries)
+                        .min(MAX_RETRY_WAIT_SECS);
                     (self.sleep)(Duration::from_secs(seconds));
                     retries += 1;
                 }
