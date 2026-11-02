@@ -32,7 +32,7 @@ pub fn rfc3339(unix: u64) -> String {
 
 /// The inverse of `rfc3339`; only that exact form (`YYYY-MM-DDTHH:MM:SSZ`), else `None`.
 pub fn parse_rfc3339(text: &str) -> Option<u64> {
-    if text.len() != 20 || !text.ends_with('Z') {
+    if !text.is_ascii() || text.len() != 20 || !text.ends_with('Z') {
         return None;
     }
 
@@ -56,12 +56,15 @@ pub fn parse_rfc3339(text: &str) -> Option<u64> {
         return None;
     }
 
-    let year = text[0..4].parse::<u32>().ok()?;
-    let month = text[5..7].parse::<u32>().ok()?;
-    let day = text[8..10].parse::<u32>().ok()?;
-    let hour = text[11..13].parse::<u32>().ok()?;
-    let minute = text[14..16].parse::<u32>().ok()?;
-    let second = text[17..19].parse::<u32>().ok()?;
+    let year = digits(&text[0..4])?;
+    let month = digits(&text[5..7])?;
+    let day = digits(&text[8..10])?;
+    let hour = digits(&text[11..13])?;
+    let minute = digits(&text[14..16])?;
+    let second = digits(&text[17..19])?;
+    if year < 1970 {
+        return None;
+    }
 
     // Validate ranges
     if !(1..=12).contains(&month)
@@ -110,7 +113,7 @@ pub fn entry_stamp(unix: u64) -> String {
 
 /// The inverse of `entry_stamp`; only that exact form (16 characters), else `None`.
 pub fn parse_entry_stamp(text: &str) -> Option<u64> {
-    if text.len() != 16 {
+    if !text.is_ascii() || text.len() != 16 {
         return None;
     }
 
@@ -128,12 +131,15 @@ pub fn parse_entry_stamp(text: &str) -> Option<u64> {
         return None;
     }
 
-    let year = text[0..4].parse::<u32>().ok()?;
-    let month = text[4..6].parse::<u32>().ok()?;
-    let day = text[6..8].parse::<u32>().ok()?;
-    let hour = text[9..11].parse::<u32>().ok()?;
-    let minute = text[11..13].parse::<u32>().ok()?;
-    let second = text[13..15].parse::<u32>().ok()?;
+    let year = digits(&text[0..4])?;
+    let month = digits(&text[4..6])?;
+    let day = digits(&text[6..8])?;
+    let hour = digits(&text[9..11])?;
+    let minute = digits(&text[11..13])?;
+    let second = digits(&text[13..15])?;
+    if year < 1970 {
+        return None;
+    }
 
     // Make sure it's uppercase Z (not lowercase z)
     if text.chars().nth(15) != Some('Z') {
@@ -160,6 +166,14 @@ pub fn parse_entry_stamp(text: &str) -> Option<u64> {
         days * 86400u64 + hour as u64 * 3600u64 + minute as u64 * 60u64 + second as u64;
 
     Some(seconds_since_epoch)
+}
+
+// A field that must be all ASCII digits. `str::parse` also accepts a leading `+`, which the forms reject.
+fn digits(text: &str) -> Option<u32> {
+    if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    text.parse::<u32>().ok()
 }
 
 // Helper function to convert days since Unix epoch (1970-01-01) to year/month/day
