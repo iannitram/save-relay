@@ -706,6 +706,9 @@ pub fn restore(s: &Session, game: &Game, store: &LocalStore, entry: &str) -> Res
     let backup = if local_changed(&local, last.as_ref()) {
         let name = fresh_entry(s.now, &s.device, &taken);
         counts = transfer::upload_entry(s.remote, &s.layout, id, &name, &game.saves_dir, &local)?;
+        let mut found = found_in(&game.saves_dir);
+        let card = card_of(s, &found, None);
+        write_card(s, id, &name, &card, &mut found);
         taken.push(name.clone());
         Some(name)
     } else {

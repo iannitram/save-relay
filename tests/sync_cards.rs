@@ -460,6 +460,27 @@ fn a_pull_never_fetches_or_replaces_a_reserved_name_in_the_server_list() {
 }
 
 #[test]
+fn a_restore_backup_of_unsynced_local_changes_carries_a_card() {
+    let f = Fixture::new();
+    f.write("a.sav", b"first");
+    f.push_at(NOW);
+    let first = history(&f.session(DEVICE, NOW + 5), GAME)
+        .unwrap()
+        .entries
+        .remove(0)
+        .entry;
+    f.write("a.sav", b"unsynced");
+
+    let data = restore(&f.session(DEVICE, NOW + 10), &f.game, &f.store, &first).unwrap();
+
+    let backup = data.backup.expect("unsynced local changes are backed up");
+    let rows = history(&f.session(DEVICE, NOW + 20), GAME).unwrap().entries;
+    let row = rows.iter().find(|row| row.entry == backup).unwrap();
+    let card = row.card.as_ref().expect("the backup entry has a card");
+    assert_eq!(card.device, DEVICE);
+}
+
+#[test]
 fn a_restore_never_fetches_or_replaces_a_reserved_name_and_leaves_it_out_of_the_state() {
     let f = Fixture::new();
     let entry = plant_reserved(&f);
