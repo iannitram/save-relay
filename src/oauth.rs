@@ -339,13 +339,16 @@ pub fn needs_refresh(expires_at: u64, now: u64) -> bool {
 }
 
 /// Access tokens for one service, refreshed from the stored refresh token as needed.
-/// Interior mutability (a `Mutex`), used through `&self` by a backend.
+/// Interior mutability (a `Mutex`), used through `&self` by a backend. A clone shares the state
+/// (the cached access token and any rotated refresh token), so a command can keep one clone to
+/// read `rotated()` after a backend took the other.
+#[derive(Clone)]
 pub struct TokenSource {
     provider: &'static Provider,
     client: Client,
     transport: Arc<dyn Transport>,
     clock: Clock,
-    state: Mutex<State>,
+    state: Arc<Mutex<State>>,
 }
 
 #[derive(Debug)]
@@ -377,11 +380,11 @@ impl TokenSource {
             client,
             transport,
             clock,
-            state: Mutex::new(State {
+            state: Arc::new(Mutex::new(State {
                 cached: None,
                 refresh,
                 rotated: None,
-            }),
+            })),
         }
     }
 

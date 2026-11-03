@@ -26,17 +26,20 @@
 //! save-relay version | --version | -V
 //! ```
 
-use crate::api::{self, Action, HistoryData, SetupData, Side, SyncReport, WhereData};
+use crate::api::{self, Action, HistoryData, SetupData, Side, SignInPrompt, SyncReport, WhereData};
+use crate::clients::{self, Client, ClientSet};
 use crate::creds::{self, CredentialStore, Secret};
 use crate::error::{Error, NotBuilt, Result};
+use crate::http::{Request, Response, Transport};
 use crate::layout::{self, Layout};
 use crate::local::{self, Config, GameRecord, LocalStore};
 use crate::manifest::Manifest;
+use crate::oauth::{self, Pending, TokenSource, Tokens};
 use crate::pending::Answer;
 use crate::platform::{AppDirs, PathVars, Platform};
 use crate::remote::{self, Precondition, Remote, RemoteEntry};
-use crate::service::Service;
-use crate::stamp;
+use crate::service::{self, Service};
+use crate::stamp::{self, Clock};
 use crate::sync::{self, Game, Resolve, Session};
 use crate::webdav;
 #[cfg(feature = "http")]
@@ -44,6 +47,7 @@ use crate::webdav::WebDav;
 use serde::Serialize;
 use std::io::{Read, Write};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// The default server folder that holds every game.
 pub const DEFAULT_ROOT: &str = "save-relay";
@@ -713,6 +717,8 @@ Commands:
   panel   [--port <n>] [--no-open]
   setup   --server <url> --user <name> [--device <name>] [--root <folder>]
           (reads the app password from the first line of standard input)
+  setup   --service gdrive|dropbox [--no-browser | --finish] [--device <name>] [--root <folder>]
+          (signs in through the browser; --finish reads Dropbox's code from standard input)
   help | --help | -h
   version | --version | -V
 
@@ -724,7 +730,7 @@ Commands:
 // Running a command
 // ---------------------------------------------------------------------------------------
 
-/// The service every command here talks to until the other two are wired in (F44).
+/// The service key of the Nextcloud setup (`SetupData::service`).
 const NEXTCLOUD: &str = "nextcloud";
 
 /// What a command produced: the one envelope line, the text for people, the exit code.
@@ -750,6 +756,18 @@ struct Context<'a> {
     vars: &'a PathVars,
     platform: Platform,
     now: u64,
+    net: &'a Net<'a>,
+}
+
+/// What a command needs from outside that `Context` does not carry: the transport Google Drive
+/// and Dropbox talk through, the browser opener, the app registrations, Game Mode, and the clock
+/// their token expiry is judged by. `run` builds the real one; tests build their own with fakes.
+pub struct Net<'a> {
+    pub transport: Arc<dyn Transport>,
+    pub open_browser: &'a dyn Fn(&str) -> Result<()>,
+    pub clients: ClientSet,
+    pub game_mode: bool,
+    pub clock: Clock,
 }
 
 /// Run one command end to end: parse, load the config, the credential store and the game,
@@ -758,7 +776,8 @@ struct Context<'a> {
 /// arguments is still printed as an envelope (command "unknown" when none was recognised).
 ///
 /// This is the real environment: the platform folders from the process environment, the system
-/// credential store and the real network. `run_with` does the work.
+/// credential store, the real network and browser, and this session's Game Mode. `run_with_net`
+/// does the work.
 pub fn run(args: &[String], stdin: &mut dyn Read, stdout: &mut dyn Write) -> i32 {
     let json = args.iter().any(|arg| arg == "--json");
     let vars = match PathVars::from_env(Platform::current(), &|name| std::env::var(name).ok()) {
@@ -768,9 +787,16 @@ pub fn run(args: &[String], stdin: &mut dyn Read, stdout: &mut dyn Write) -> i32
     let store = LocalStore::new(AppDirs::from_vars(&vars));
     let creds = real_credentials();
     let now = stamp::now();
+    let net = Net {
+        transport: real_transport(),
+        open_browser: &crate::oauth::open_browser,
+        clients: ClientSet::shipped(),
+        game_mode: crate::oauth::in_game_mode(&|name| std::env::var(name).ok()),
+        clock: stamp::now,
+    };
 
     // Only a command that talks to the server needs a connection; the others get a remote
-    // that is never asked.
+    // that is never asked. Google Drive and Dropbox connect inside the command (`with_remote`).
     let parsed = parse(args);
     let connected: Result<(Box<dyn Remote>, Option<String>)> = match &parsed {
         Ok(Args {
@@ -790,9 +816,13 @@ pub fn run(args: &[String], stdin: &mut dyn Read, stdout: &mut dyn Write) -> i32
                 | Command::Where
                 | Command::Picture { .. },
             ..
-        }) => connection(&store, &*creds).and_then(|(config, secret)| {
-            Ok((connect(&config.server, &config.user, secret)?, None))
-        }),
+        }) => match uses_service_tokens(&store) {
+            Ok(true) => Ok((Box::new(NoRemote), None)),
+            Ok(false) => connection(&store, &*creds).and_then(|(config, secret)| {
+                Ok((connect(&config.server, &config.user, secret)?, None))
+            }),
+            Err(error) => Err(error),
+        },
         _ => Ok((Box::new(NoRemote), None)),
     };
     let (remote, password_line) = match connected {
@@ -806,21 +836,25 @@ pub fn run(args: &[String], stdin: &mut dyn Read, stdout: &mut dyn Write) -> i32
         }
     };
     match password_line {
-        // `setup` read its password above; `run_with` reads it again from this one line.
+        // `setup` read its password above; `run_with_net` reads it again from this one line.
         Some(line) => {
             let mut again = std::io::Cursor::new(format!("{line}\n"));
-            run_with(
-                args, &mut again, stdout, &*remote, &*creds, &store, &vars, now,
+            run_with_net(
+                args, &mut again, stdout, &*remote, &*creds, &store, &vars, now, &net,
             )
         }
-        None => run_with(args, stdin, stdout, &*remote, &*creds, &store, &vars, now),
+        None => run_with_net(
+            args, stdin, stdout, &*remote, &*creds, &store, &vars, now, &net,
+        ),
     }
 }
 
 /// `run` with its parts passed in, so `tests/cli_run.rs` drives every command against
 /// `MemoryRemote` and `MemoryStore` with no network and no keyring. `remote` is the server the
 /// command talks to; `creds` holds the app password (`setup` writes it); `store` and `vars`
-/// are this machine's folders; `now` is the clock in seconds since the Unix epoch.
+/// are this machine's folders; `now` is the clock in seconds since the Unix epoch. Google Drive
+/// and Dropbox need a transport and a browser opener too: `run_with_net`, which tests of those
+/// services call with fakes. Here they answer as an offline build would.
 #[allow(clippy::too_many_arguments)]
 pub fn run_with(
     args: &[String],
@@ -832,6 +866,30 @@ pub fn run_with(
     vars: &PathVars,
     now: u64,
 ) -> i32 {
+    let refuse: &dyn Fn(&str) -> Result<()> = &refuse_browser;
+    let net = Net {
+        transport: Arc::new(NoNetwork),
+        open_browser: refuse,
+        clients: ClientSet::shipped(),
+        game_mode: false,
+        clock: stamp::now,
+    };
+    run_with_net(args, stdin, stdout, remote, creds, store, vars, now, &net)
+}
+
+/// `run_with` with the transport, browser opener, registrations and Game Mode passed in.
+#[allow(clippy::too_many_arguments)]
+pub fn run_with_net(
+    args: &[String],
+    stdin: &mut dyn Read,
+    stdout: &mut dyn Write,
+    remote: &dyn Remote,
+    creds: &dyn CredentialStore,
+    store: &LocalStore,
+    vars: &PathVars,
+    now: u64,
+    net: &Net<'_>,
+) -> i32 {
     let parsed = match parse(args) {
         Ok(parsed) => parsed,
         Err(error) => {
@@ -840,6 +898,26 @@ pub fn run_with(
         }
     };
     let name = command_name(&parsed.command);
+    let json = parsed.json;
+    // `setup` with no `--service` asks which one on standard input (text mode; `--json` is refused
+    // at parse time, so a launcher always names it).
+    let command = match parsed.command {
+        Command::SetupService {
+            service: None,
+            device,
+            root,
+            step,
+        } => match choose_service(stdin, stdout) {
+            Ok(service) => Command::SetupService {
+                service: Some(service),
+                device,
+                root,
+                step,
+            },
+            Err(error) => return print_failure(stdout, json, name, &error),
+        },
+        other => other,
+    };
     let context = Context {
         remote,
         creds,
@@ -847,14 +925,15 @@ pub fn run_with(
         vars,
         platform: Platform::current(),
         now,
+        net,
     };
-    match execute(parsed.command, stdin, &context) {
+    match execute(command, stdin, &context) {
         Ok(done) => {
-            let shown = if parsed.json { &done.json } else { &done.text };
+            let shown = if json { &done.json } else { &done.text };
             let _ = writeln!(stdout, "{}", shown.trim_end());
             done.code
         }
-        Err(error) => print_failure(stdout, parsed.json, name, &error),
+        Err(error) => print_failure(stdout, json, name, &error),
     }
 }
 
@@ -920,6 +999,17 @@ fn execute(command: Command, stdin: &mut dyn Read, cx: &Context) -> Result<Outco
             device,
             root,
         } => setup(&server, &user, device.as_deref(), &root, stdin, cx),
+        Command::SetupService {
+            service,
+            device,
+            root,
+            step,
+        } => match service {
+            Some(service) => setup_service(service, device.as_deref(), &root, step, stdin, cx),
+            None => Err(Error::Usage(
+                "choose a service: nextcloud, gdrive or dropbox".into(),
+            )),
+        },
         Command::Pull { game, resolve } => sync_command("pull", &game, resolve, cx),
         Command::Push { game, resolve } => sync_command("push", &game, resolve, cx),
         Command::Status { game } => status(&game, cx),
@@ -927,7 +1017,6 @@ fn execute(command: Command, stdin: &mut dyn Read, cx: &Context) -> Result<Outco
         Command::Restore { game, entry } => restore(&game, &entry, cx),
         // Each of these is filled in by the issue that builds it (docs/code-map.md).
         Command::PullAnyway { .. } => not_built("pull --anyway (F50)"),
-        Command::SetupService { .. } => not_built("setup for Google Drive and Dropbox (F44)"),
         Command::Wrap { .. } => not_built("wrap (F58)"),
         Command::Which { .. } => not_built("which (F56)"),
         Command::InstallWrap { .. } => not_built("install-wrap (F59)"),
@@ -952,9 +1041,55 @@ pub fn connection(store: &LocalStore, creds: &dyn CredentialStore) -> Result<(Co
     Ok((config, secret))
 }
 
-fn session<'a>(config: &Config, cx: &'a Context) -> Result<Session<'a>> {
+/// True when the config names Google Drive or Dropbox: their server is opened from the stored
+/// sign-in (`with_remote`), not from an app password.
+fn uses_service_tokens(store: &LocalStore) -> Result<bool> {
+    match store.load_config()? {
+        Some(config) => Ok(Service::from_server(&config.server)?.uses_oauth()),
+        None => Ok(false),
+    }
+}
+
+/// The server a command works on: the service the config names. Google Drive and Dropbox open
+/// their backend from the stored sign-in (`service::open_with`); any other service is `cx.remote`.
+/// A refresh token the service rotated during the command is stored, even when the command
+/// failed, so the next command still has a valid one.
+fn with_remote<T>(
+    config: &Config,
+    cx: &Context,
+    body: impl FnOnce(&dyn Remote) -> Result<T>,
+) -> Result<T> {
+    if !Service::from_server(&config.server)?.uses_oauth() {
+        return body(cx.remote);
+    }
+    let opened = service::open_with(
+        config,
+        cx.creds,
+        cx.net.transport.clone(),
+        cx.net.clock,
+        &cx.net.clients,
+    )?;
+    let result = body(&*opened.remote);
+    let stored = store_rotated(&opened, config, cx);
+    let value = result?;
+    stored?;
+    Ok(value)
+}
+
+fn store_rotated(opened: &service::Opened, config: &Config, cx: &Context) -> Result<()> {
+    if let Some(tokens) = &opened.tokens {
+        if let Some(rotated) = tokens.rotated() {
+            let account =
+                service::token_account(Service::from_server(&config.server)?, &config.user)?;
+            cx.creds.set(&account, &rotated)?;
+        }
+    }
+    Ok(())
+}
+
+fn session<'a>(config: &Config, remote: &'a dyn Remote, cx: &Context) -> Result<Session<'a>> {
     Ok(Session {
-        remote: cx.remote,
+        remote,
         layout: Layout::new(&config.root)?,
         device: config.device.clone(),
         now: cx.now,
@@ -986,12 +1121,14 @@ fn sync_command(
 ) -> Result<Outcome> {
     let config = load_config(cx)?;
     let game = load_game(arg, cx)?;
-    let s = session(&config, cx)?;
-    let report = if command == "pull" {
-        sync::pull(&s, &game, cx.store, resolve, false)?
-    } else {
-        sync::push(&s, &game, cx.store, resolve)?
-    };
+    let report = with_remote(&config, cx, |remote| {
+        let s = session(&config, remote, cx)?;
+        if command == "pull" {
+            sync::pull(&s, &game, cx.store, resolve, false)
+        } else {
+            sync::push(&s, &game, cx.store, resolve)
+        }
+    })?;
     let text = sync_text(command, &arg.id, &report);
     let code = api::exit_code_for(report.sync.action);
     Ok(outcome(command, &report, text, code))
@@ -1000,10 +1137,13 @@ fn sync_command(
 fn status(arg: &GameArg, cx: &Context) -> Result<Outcome> {
     let config = load_config(cx)?;
     let game = load_game(arg, cx)?;
-    let s = session(&config, cx)?;
-    let mut data = sync::status(&s, &game, cx.store)?;
-    data.service = Service::from_server(&config.server)?.key().to_string();
-    let mut text = data.message.clone();
+    let service = Service::from_server(&config.server)?;
+    let mut data = with_remote(&config, cx, |remote| {
+        let s = session(&config, remote, cx)?;
+        sync::status(&s, &game, cx.store)
+    })?;
+    data.service = service.key().to_string();
+    let mut text = format!("Service: {}\n{}", service.label(), data.message);
     if let Some(server) = &data.server {
         text.push_str(&format!("\nServer: {}", side_text(server)));
     }
@@ -1015,8 +1155,10 @@ fn status(arg: &GameArg, cx: &Context) -> Result<Outcome> {
 
 fn history(game: &str, cx: &Context) -> Result<Outcome> {
     let config = load_config(cx)?;
-    let s = session(&config, cx)?;
-    let data = sync::history(&s, game)?;
+    let data = with_remote(&config, cx, |remote| {
+        let s = session(&config, remote, cx)?;
+        sync::history(&s, game)
+    })?;
     let text = history_text(&data);
     Ok(outcome("history", &data, text, 0))
 }
@@ -1024,8 +1166,10 @@ fn history(game: &str, cx: &Context) -> Result<Outcome> {
 fn restore(arg: &GameArg, entry: &str, cx: &Context) -> Result<Outcome> {
     let config = load_config(cx)?;
     let game = load_game(arg, cx)?;
-    let s = session(&config, cx)?;
-    let data = sync::restore(&s, &game, cx.store, entry)?;
+    let data = with_remote(&config, cx, |remote| {
+        let s = session(&config, remote, cx)?;
+        sync::restore(&s, &game, cx.store, entry)
+    })?;
     let mut text = data.message.clone();
     if let Some(backup) = &data.backup {
         text.push_str(&format!(
@@ -1042,19 +1186,37 @@ fn picture_command(
     cx: &Context,
 ) -> Result<Outcome> {
     let config = load_config(cx)?;
-    let s = session(&config, cx)?;
-    let data = sync::picture(&s, game, entry, out)?;
+    let data = with_remote(&config, cx, |remote| {
+        let s = session(&config, remote, cx)?;
+        sync::picture(&s, game, entry, out)
+    })?;
     let text = format!("Saved the picture of {entry} to {}.", data.path);
     Ok(outcome("picture", &data, text, 0))
 }
 
 fn where_command(cx: &Context) -> Result<Outcome> {
     let config = load_config(cx)?;
-    let s = session(&config, cx)?;
     let games = cx.store.list_games()?;
-    let data = sync::where_open(&s, &games)?;
+    let data = with_remote(&config, cx, |remote| {
+        let s = session(&config, remote, cx)?;
+        sync::where_open(&s, &games)
+    })?;
     let text = where_text(&data);
     Ok(outcome("where", &data, text, 0))
+}
+
+/// Switching service or account starts fresh (docs/adr/0002-storage-backends.md): the credentials
+/// of the config being replaced are deleted, nothing is moved. The same server and user keep what
+/// is stored (a new password or refresh token replaces it).
+fn forget_other_sign_in(cx: &Context, server: &str, user: &str) -> Result<()> {
+    if let Some(old) = cx.store.load_config()? {
+        if old.server != server || old.user != user {
+            for account in service::credential_accounts(&old)? {
+                cx.creds.delete(&account)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// `setup` for Nextcloud: the app password is the first line of `stdin`. The login is checked
@@ -1077,6 +1239,7 @@ fn setup(
 
     cx.remote.list("")?;
     remote::ensure_dir(cx.remote, layout.root())?;
+    forget_other_sign_in(cx, server, user)?;
     cx.creds.set(&account, &Secret::new(password))?;
     let config = Config {
         format: local::FORMAT,
@@ -1102,6 +1265,241 @@ fn setup(
     Ok(outcome("setup", &data, text, 0))
 }
 
+/// `setup --service gdrive|dropbox`, in the three shapes of `SignInStep`: the browser (the
+/// loopback redirect), `--no-browser` (a `SignInPrompt`; the sign-in waits in the credential store)
+/// and `--finish` (completes it; Dropbox's code is the first line of `stdin`). In Game Mode the
+/// browser step becomes the code step. Nothing is set up until the sign-in and the account's
+/// folder both succeed.
+fn setup_service(
+    service: Service,
+    device: Option<&str>,
+    root: &str,
+    step: SignInStep,
+    stdin: &mut dyn Read,
+    cx: &Context,
+) -> Result<Outcome> {
+    let layout = Layout::new(root)?;
+    let device = layout::device_slug(&match device {
+        Some(name) => name.to_string(),
+        None => default_device_name(),
+    });
+    let step = if step == SignInStep::Browser && cx.net.game_mode {
+        SignInStep::Code
+    } else {
+        step
+    };
+    let (client, kind) = sign_in_client(service, step, &cx.net.clients)?;
+    let provider = oauth::provider(service)
+        .ok_or_else(|| Error::Usage("this service does not sign in with OAuth".into()))?;
+    let transport: &dyn Transport = &*cx.net.transport;
+    let clock = cx.net.clock;
+
+    match step {
+        SignInStep::Code => {
+            let pending = oauth::start_code(provider, client, transport, clock())?;
+            cx.creds
+                .set(&service::pending_account(service), &pending.to_secret())?;
+            let data = SignInPrompt {
+                service: service.key().to_string(),
+                url: pending.url.clone(),
+                code: pending.user_code.clone(),
+                expires_at: stamp::rfc3339(pending.expires_at),
+                message: sign_in_message(service, &pending),
+            };
+            let text = data.message.clone();
+            Ok(outcome("setup", &data, text, 0))
+        }
+        SignInStep::Browser => {
+            let tokens =
+                oauth::sign_in_browser(provider, client, transport, cx.net.open_browser, clock)
+                    .map_err(sign_in_refused)?;
+            finish_setup(service, tokens, client, kind, &device, &layout, cx)
+        }
+        SignInStep::Finish => {
+            let account = service::pending_account(service);
+            let secret = cx.creds.get(&account)?.ok_or_else(|| {
+                Error::SignInFailed(
+                    "no sign-in is waiting: run setup with --no-browser first".into(),
+                )
+            })?;
+            let pending = Pending::from_secret(&secret)?;
+            if pending.service != service {
+                return Err(Error::SignInFailed(
+                    "the waiting sign-in is for another service: run setup with --no-browser again"
+                        .into(),
+                ));
+            }
+            let typed = if service == Service::Dropbox {
+                Some(read_code(stdin)?)
+            } else {
+                None
+            };
+            let finished = oauth::finish_code(
+                provider,
+                client,
+                &pending,
+                typed.as_deref(),
+                transport,
+                clock,
+            );
+            // The waiting sign-in is used up whether or not it worked.
+            cx.creds.delete(&account)?;
+            let tokens = finished.map_err(sign_in_refused)?;
+            finish_setup(service, tokens, client, kind, &device, &layout, cx)
+        }
+    }
+}
+
+/// The client a sign-in uses, checked to have an app id, and the kind a Google refresh token is
+/// recorded under (`service::google_client_account`): `desktop` for the browser, `device` for the
+/// code flows. Dropbox has no kind.
+fn sign_in_client(
+    service: Service,
+    step: SignInStep,
+    clients: &ClientSet,
+) -> Result<(Client, &'static str)> {
+    match service {
+        Service::Dropbox => Ok((clients::registered(clients.dropbox, "Dropbox")?, "")),
+        Service::Gdrive if step == SignInStep::Browser => Ok((
+            clients::registered(clients.google_desktop, "Google Drive")?,
+            "desktop",
+        )),
+        Service::Gdrive => Ok((
+            clients::registered(clients.google_device, "Google Drive")?,
+            "device",
+        )),
+        Service::Nextcloud => Err(Error::Usage(
+            "Nextcloud uses an app password, not a sign-in".into(),
+        )),
+    }
+}
+
+/// The words a `SignInPrompt` shows: where to go and what to type, then the `--finish` step.
+fn sign_in_message(service: Service, pending: &Pending) -> String {
+    match (service, &pending.user_code) {
+        (Service::Gdrive, Some(code)) => format!(
+            "On a phone or computer, open {} and enter {code}. Then run setup --service gdrive --finish.",
+            pending.url
+        ),
+        _ => format!(
+            "On a phone or computer, open {} and sign in to Dropbox. Then run setup --service dropbox --finish and type the code Dropbox shows.",
+            pending.url
+        ),
+    }
+}
+
+/// A refused sign-in is `sign_in_failed` (exit 4), not `reauth_needed`: nothing was signed in before.
+fn sign_in_refused(error: Error) -> Error {
+    match error {
+        Error::ReauthNeeded(label) => {
+            Error::SignInFailed(format!("{label} refused the sign-in: start it again"))
+        }
+        other => other,
+    }
+}
+
+/// The last step of a sign-in: the account's e-mail address and its folder, then the refresh
+/// token under `service::token_account` (the newest one, if the service rotated it), the Google
+/// client kind, and the config whose `server` is the service key. Only then is the old sign-in
+/// forgotten, so a failure above leaves the machine as it was.
+fn finish_setup(
+    service: Service,
+    tokens: Tokens,
+    client: Client,
+    kind: &str,
+    device: &str,
+    layout: &Layout,
+    cx: &Context,
+) -> Result<Outcome> {
+    let provider = oauth::provider(service)
+        .ok_or_else(|| Error::Usage("this service does not sign in with OAuth".into()))?;
+    let refresh = tokens.refresh.ok_or_else(|| {
+        Error::SignInFailed(format!(
+            "{} sent no refresh token: start the sign-in again",
+            service.label()
+        ))
+    })?;
+    let transport = cx.net.transport.clone();
+    let source = TokenSource::new(
+        provider,
+        client,
+        refresh.clone(),
+        transport.clone(),
+        cx.net.clock,
+    );
+    let (email, remote) =
+        service::sign_in_account(service, source.clone(), transport, cx.net.clock)?;
+    remote::ensure_dir(&*remote, layout.root())?;
+    let refresh = source.rotated().unwrap_or(refresh);
+
+    forget_other_sign_in(cx, service.key(), &email)?;
+    cx.creds
+        .set(&service::token_account(service, &email)?, &refresh)?;
+    if service == Service::Gdrive {
+        cx.creds
+            .set(&service::google_client_account(&email), &Secret::new(kind))?;
+    }
+    let config = Config {
+        format: local::FORMAT,
+        server: service.key().to_string(),
+        user: email,
+        root: layout.root().to_string(),
+        device: device.to_string(),
+    };
+    cx.store.save_config(&config)?;
+
+    let data = SetupData {
+        service: service.key().to_string(),
+        server: config.server.clone(),
+        user: config.user.clone(),
+        device: config.device.clone(),
+        root: config.root.clone(),
+        credential_store: cx.creds.kind().to_string(),
+    };
+    let text = format!(
+        "Set up: this machine ({}) syncs through {} as {}, in the folder '{}'.\nThe sign-in is kept in the {} credential store.",
+        data.device,
+        service.label(),
+        data.user,
+        data.root,
+        data.credential_store
+    );
+    Ok(outcome("setup", &data, text, 0))
+}
+
+/// `setup` with no `--service`: asks on standard input which service, as `1`, `2`, `3` or the key.
+/// Nextcloud needs its address and user name, so choosing it here is a usage error that says so.
+fn choose_service(stdin: &mut dyn Read, stdout: &mut dyn Write) -> Result<Service> {
+    let _ = write!(
+        stdout,
+        "Where do you keep your saves? [1] Nextcloud  [2] Google Drive  [3] Dropbox: "
+    );
+    let _ = stdout.flush();
+    let answer = read_line(stdin)?;
+    let service = match answer.as_str() {
+        "" => {
+            return Err(Error::Usage(
+                "no service chosen: answer 1, 2 or 3, or nextcloud, gdrive or dropbox".into(),
+            ))
+        }
+        "1" | "nextcloud" => Service::Nextcloud,
+        "2" | "gdrive" => Service::Gdrive,
+        "3" | "dropbox" => Service::Dropbox,
+        other => {
+            return Err(Error::Usage(format!(
+                "unknown service '{other}': answer 1, 2 or 3, or nextcloud, gdrive or dropbox"
+            )))
+        }
+    };
+    if service == Service::Nextcloud {
+        return Err(Error::Usage(
+            "Nextcloud needs its address and user name: run setup --service nextcloud --server <url> --user <name>"
+                .into(),
+        ));
+    }
+    Ok(service)
+}
+
 fn not_built<T>(what: &'static str) -> Result<T> {
     Err(Error::NotBuilt(NotBuilt(what)))
 }
@@ -1115,6 +1513,31 @@ fn default_device_name() -> String {
 
 /// The first line of `stdin` without its line ending. Empty is `Error::Usage`.
 fn read_first_line(stdin: &mut dyn Read) -> Result<String> {
+    let line = read_line(stdin).map_err(|error| match error {
+        Error::Usage(_) => Error::Usage("the app password on standard input is not text".into()),
+        other => other,
+    })?;
+    if line.is_empty() {
+        return Err(Error::Usage(
+            "the app password must be the first line of standard input".into(),
+        ));
+    }
+    Ok(line)
+}
+
+/// The sign-in code of Dropbox's `setup --finish`: the first line of `stdin`. Empty is `Error::Usage`.
+fn read_code(stdin: &mut dyn Read) -> Result<String> {
+    let line = read_line(stdin)?;
+    if line.is_empty() {
+        return Err(Error::Usage(
+            "the code must be the first line of standard input".into(),
+        ));
+    }
+    Ok(line)
+}
+
+/// The first line of `stdin` without its line ending, possibly empty (at end of input too).
+fn read_line(stdin: &mut dyn Read) -> Result<String> {
     let mut line = Vec::new();
     let mut byte = [0u8; 1];
     while line.len() < 4096 {
@@ -1126,15 +1549,9 @@ fn read_first_line(stdin: &mut dyn Read) -> Result<String> {
             Err(error) => return Err(Error::Io(format!("cannot read standard input: {error}"))),
         }
     }
-    let line = String::from_utf8(line)
-        .map_err(|_| Error::Usage("the app password on standard input is not text".into()))?;
-    let line = line.trim_end_matches('\r').to_string();
-    if line.is_empty() {
-        return Err(Error::Usage(
-            "the app password must be the first line of standard input".into(),
-        ));
-    }
-    Ok(line)
+    let line =
+        String::from_utf8(line).map_err(|_| Error::Usage("standard input is not text".into()))?;
+    Ok(line.trim_end_matches('\r').to_string())
 }
 
 // ---- the real parts -------------------------------------------------------------------------
@@ -1198,6 +1615,37 @@ fn real_credentials() -> Box<dyn CredentialStore> {
         Error::Credentials("this build has no credential store".into())
     }
     Box::new(Missing)
+}
+
+/// The transport the real environment uses: ureq, or one that is always unreachable in a build
+/// without network support.
+#[cfg(feature = "http")]
+fn real_transport() -> Arc<dyn Transport> {
+    Arc::new(crate::http::UreqTransport::new())
+}
+
+#[cfg(not(feature = "http"))]
+fn real_transport() -> Arc<dyn Transport> {
+    Arc::new(NoNetwork)
+}
+
+/// The transport of an entry point with no network (`run_with`): every request is unreachable.
+struct NoNetwork;
+
+impl Transport for NoNetwork {
+    fn send(&self, _: &Request) -> Result<Response> {
+        Err(Error::Unreachable(
+            "no network in this build or entry point".into(),
+        ))
+    }
+}
+
+/// The browser opener of an entry point with no browser (`run_with`): it refuses, so a sign-in
+/// that needs one fails cleanly instead of opening anything.
+fn refuse_browser(_: &str) -> Result<()> {
+    Err(Error::SignInFailed(
+        "no browser in this entry point: use --no-browser".into(),
+    ))
 }
 
 #[cfg(feature = "http")]

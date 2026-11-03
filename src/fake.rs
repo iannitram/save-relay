@@ -13,3 +13,9 @@ pub use gdrive::FakeDrive;
 
 /// The refresh token both fakes accept until `revoke`.
 pub const REFRESH_TOKEN: &str = "fake-refresh-token";
+
+/// The code the Dropbox fake accepts for a sign-in's code exchange (what the person types back).
+pub const SIGN_IN_CODE: &str = "fake-sign-in-code";
+
+/// The device code the Drive fake issues for its device flow and accepts when polled.
+pub const DEVICE_CODE: &str = "fake-device-code";
