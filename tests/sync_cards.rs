@@ -8,12 +8,12 @@ use save_relay::layout::{entry_name, Layout};
 use save_relay::local::LocalStore;
 use save_relay::manifest::Manifest;
 use save_relay::platform::AppDirs;
-use save_relay::remote::MemoryRemote;
-use save_relay::scan::scan;
+use save_relay::remote::{MemoryRemote, Precondition, Remote};
+use save_relay::scan::{hash_bytes, scan, FileEntry, SaveSet};
 use save_relay::stamp;
 use save_relay::state::ServerState;
-use save_relay::sync::{history, picture, pull, push, Game, Session};
-use save_relay::transfer::{read_card, read_record, upload_entry};
+use save_relay::sync::{history, picture, pull, push, restore, Game, Session};
+use save_relay::transfer::{read_card, read_record, upload_entry, RECORD};
 use save_relay::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -398,4 +398,110 @@ fn scan_skips_the_sidecar_and_part_files_even_when_the_pattern_would_select_them
 
     let paths: Vec<&str> = set.files.iter().map(|file| file.path.as_str()).collect();
     assert_eq!(paths, ["a.sav", "slot1/b.sav"]);
+}
+
+/// Plant a revision on the server whose state and file list name a reserved file beside a save,
+/// as an older or hostile client could have written it. Returns the entry's name.
+fn plant_reserved(f: &Fixture) -> String {
+    let entry = entry_name(&stamp::entry_stamp(NOW), OTHER);
+    let dir = layout().entry_dir(GAME, &entry);
+    let file = |path: &str, bytes: &[u8]| FileEntry {
+        path: path.into(),
+        size: bytes.len() as u64,
+        mtime: NOW,
+        sha256: hash_bytes(bytes),
+    };
+    let files = vec![
+        file(SIDECAR, b"from the server"),
+        file("a.sav", b"server save"),
+    ];
+    let set = SaveSet {
+        files: files.clone(),
+    };
+    let put = |path: String, bytes: &[u8]| {
+        f.remote.put(&path, bytes, &Precondition::Any).unwrap();
+    };
+    save_relay::remote::ensure_dir(&f.remote, &dir).unwrap();
+    put(format!("{dir}/a.sav"), b"server save");
+    put(format!("{dir}/{SIDECAR}"), b"from the server");
+    put(
+        format!("{dir}/{RECORD}"),
+        &serde_json::to_vec(&set).unwrap(),
+    );
+    let state = ServerState {
+        format: 1,
+        game: GAME.into(),
+        revision: 1,
+        device: OTHER.into(),
+        time: stamp::rfc3339(NOW),
+        entry: entry.clone(),
+        files,
+    };
+    put(layout().state_path(GAME), state.to_json().as_bytes());
+    entry
+}
+
+#[test]
+fn a_pull_never_fetches_or_replaces_a_reserved_name_in_the_server_list() {
+    let f = Fixture::new();
+    plant_reserved(&f);
+    f.write(SIDECAR, b"mine");
+
+    let report = f.pull_at(NOW + 10);
+
+    assert_eq!(report.sync.action, Action::Pulled);
+    assert_eq!(
+        fs::read(f.game.saves_dir.join("a.sav")).unwrap(),
+        b"server save"
+    );
+    assert_eq!(fs::read(f.game.saves_dir.join(SIDECAR)).unwrap(), b"mine");
+    // The next launch sees nothing changed: the reserved name is not part of the last sync.
+    assert_eq!(f.pull_at(NOW + 20).sync.action, Action::Noop);
+}
+
+#[test]
+fn a_restore_never_fetches_or_replaces_a_reserved_name_and_leaves_it_out_of_the_state() {
+    let f = Fixture::new();
+    let entry = plant_reserved(&f);
+    f.write(SIDECAR, b"mine");
+
+    let data = restore(&f.session(DEVICE, NOW + 10), &f.game, &f.store, &entry).unwrap();
+
+    assert_eq!(
+        fs::read(f.game.saves_dir.join("a.sav")).unwrap(),
+        b"server save"
+    );
+    assert_eq!(fs::read(f.game.saves_dir.join(SIDECAR)).unwrap(), b"mine");
+    let paths: Vec<String> = server_state(&f.remote)
+        .files
+        .into_iter()
+        .map(|file| file.path)
+        .collect();
+    assert_eq!(paths, ["a.sav"]);
+    assert_eq!(data.backup, None);
+}
+
+#[test]
+fn an_upload_leaves_a_reserved_name_out_of_the_entry_and_its_file_list() {
+    let f = Fixture::new();
+    f.write("a.sav", b"save");
+    f.write(SIDECAR, b"{}");
+    let selected = scan(&f.game.saves_dir, &["**/*".into()], &[]).unwrap();
+    let mut set = selected.clone();
+    set.files.push(FileEntry {
+        path: SIDECAR.into(),
+        size: 2,
+        mtime: NOW,
+        sha256: hash_bytes(b"{}"),
+    });
+    set.files.sort_by(|a, b| a.path.cmp(&b.path));
+    let entry = entry_name(&stamp::entry_stamp(NOW), DEVICE);
+
+    upload_entry(&f.remote, &layout(), GAME, &entry, &f.game.saves_dir, &set).unwrap();
+
+    let dir = layout().entry_dir(GAME, &entry);
+    assert!(f.remote.read(&format!("{dir}/{SIDECAR}")).is_none());
+    let listed = read_record(&f.remote, &layout(), GAME, &entry).unwrap();
+    let paths: Vec<&str> = listed.files.iter().map(|file| file.path.as_str()).collect();
+    assert_eq!(paths, ["a.sav"]);
 }
