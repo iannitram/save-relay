@@ -12,7 +12,7 @@
 
 use crate::api::{
     Action, Held, HistoryData, HistoryEntry, PictureData, RestoreData, Side, StatusData, SyncData,
-    SyncReport, WhereData,
+    SyncReport, WhereData, WhereGame,
 };
 use crate::error::{not_built, Error, Result};
 use crate::layout::{entry_name, parse_entry_name, Layout};
@@ -631,7 +631,37 @@ pub fn restore(s: &Session, game: &Game, store: &LocalStore, entry: &str) -> Res
 /// `save-relay where` (M11): for each game in `games` (`LocalStore::list_games`), its mark and
 /// the server's current side. A missing or broken mark is no mark. Unreachable is an error.
 pub fn where_open(s: &Session, games: &[String]) -> Result<WhereData> {
-    not_built("sync::where_open")
+    let mut rows = Vec::with_capacity(games.len());
+    for game in games {
+        let held = fetch_mark(s, game)?.map(|mark| Held {
+            device: mark.device,
+            since: mark.since,
+        });
+        let (state, _, reachable) = read_server(s, game)?;
+        if !reachable {
+            return Err(Error::Unreachable(format!(
+                "cannot read where {game} is open"
+            )));
+        }
+        rows.push(WhereGame {
+            game: game.clone(),
+            held,
+            server: state.as_ref().map(server_side),
+        });
+    }
+    Ok(WhereData { games: rows })
+}
+
+/// This game's mark for `where`: no file, or one that is not a valid `Mark`, is `None`. Unlike
+/// `read_mark`, an unreachable server is an error, not "no mark".
+fn fetch_mark(s: &Session, game: &str) -> Result<Option<Mark>> {
+    match s.remote.get(&s.layout.playing_path(game)) {
+        Ok((bytes, _)) => Ok(std::str::from_utf8(&bytes)
+            .ok()
+            .and_then(|text| Mark::from_json(text).ok())),
+        Err(Error::NotFound(_)) => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 /// `save-relay picture <game> <entry> --out <file>` (M14): copy the entry's card picture to

@@ -26,7 +26,7 @@
 //! save-relay version | --version | -V
 //! ```
 
-use crate::api::{self, Action, HistoryData, SetupData, Side, SyncReport};
+use crate::api::{self, Action, HistoryData, SetupData, Side, SyncReport, WhereData};
 use crate::creds::{self, CredentialStore, Secret};
 use crate::error::{Error, NotBuilt, Result};
 use crate::layout::{self, Layout};
@@ -786,7 +786,8 @@ pub fn run(args: &[String], stdin: &mut dyn Read, stdout: &mut dyn Write) -> i32
                 | Command::Push { .. }
                 | Command::Status { .. }
                 | Command::History { .. }
-                | Command::Restore { .. },
+                | Command::Restore { .. }
+                | Command::Where,
             ..
         }) => connection(&store, &*creds).and_then(|(config, secret)| {
             Ok((connect(&config.server, &config.user, secret)?, None))
@@ -930,7 +931,7 @@ fn execute(command: Command, stdin: &mut dyn Read, cx: &Context) -> Result<Outco
         Command::Which { .. } => not_built("which (F56)"),
         Command::InstallWrap { .. } => not_built("install-wrap (F59)"),
         Command::Answer { .. } => not_built("answer (F57)"),
-        Command::Where => not_built("where (F51)"),
+        Command::Where => where_command(cx),
         Command::Picture { .. } => not_built("picture (F61)"),
         Command::Panel { .. } => not_built("panel (F63)"),
     }
@@ -1031,6 +1032,15 @@ fn restore(arg: &GameArg, entry: &str, cx: &Context) -> Result<Outcome> {
         ));
     }
     Ok(outcome("restore", &data, text, 0))
+}
+
+fn where_command(cx: &Context) -> Result<Outcome> {
+    let config = load_config(cx)?;
+    let s = session(&config, cx)?;
+    let games = cx.store.list_games()?;
+    let data = sync::where_open(&s, &games)?;
+    let text = where_text(&data);
+    Ok(outcome("where", &data, text, 0))
 }
 
 /// `setup` for Nextcloud: the app password is the first line of `stdin`. The login is checked
@@ -1236,6 +1246,31 @@ fn sync_text(command: &str, game: &str, report: &SyncReport) -> String {
         server.as_deref().unwrap_or("(nothing)"),
         local.as_deref().unwrap_or("(no saves)"),
     )
+}
+
+/// `where`: one line per game, in the order `where_open` gives them.
+fn where_text(data: &WhereData) -> String {
+    if data.games.is_empty() {
+        return "No games on this machine yet.".to_string();
+    }
+    data.games
+        .iter()
+        .map(|row| {
+            let open = match &row.held {
+                Some(held) => format!("open on {} since {}", held.device, held.since),
+                None => "free".to_string(),
+            };
+            let server = match &row.server {
+                Some(side) => match side.revision {
+                    Some(revision) => format!("server revision {revision} from {}", side.device),
+                    None => format!("server saves from {}", side.device),
+                },
+                None => "nothing pushed".to_string(),
+            };
+            format!("{}: {open}; {server}", row.game)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// `history` as a table, newest first; `*` marks the current entry.

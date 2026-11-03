@@ -691,7 +691,6 @@ fn help_and_version_and_commands_not_built_yet() {
 
     // Each of these arrives with its own issue; until then it says so, exit 1.
     for line in [
-        "where",
         "which 12",
         "answer demo-game wait",
         "panel",
