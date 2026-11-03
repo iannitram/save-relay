@@ -1,7 +1,7 @@
 //! `FakeDrive`: the Drive v3 endpoints `gdrive::Drive` uses, over a file tree in memory.
 
 use crate::error::{Error, Result};
-use crate::fake::REFRESH_TOKEN;
+use crate::fake::{DEVICE_CODE, REFRESH_TOKEN};
 use crate::gdrive::FOLDER_MIME;
 use crate::http::{Request, Response, Transport};
 use serde_json::{json, Value};
@@ -18,6 +18,12 @@ const CLOCK_START: u64 = 1793476260;
 const ACCOUNT_EMAIL: &str = "fake@example.com";
 /// Drive's token endpoint (`oauth::GOOGLE.token_url`).
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
+
+/// Google's device-code endpoint (`oauth::GOOGLE.device_url`).
+const DEVICE_URL: &str = "https://oauth2.googleapis.com/device/code";
+
+/// The code the person types at google.com/device in the fake's device flow.
+const USER_CODE: &str = "ABCD-EFGH";
 /// A file with no `mimeType` in its metadata is treated as this.
 const DEFAULT_MIME: &str = "application/octet-stream";
 /// Days and months for the text forms Drive uses.
@@ -99,6 +105,8 @@ struct Inner {
     hook: Option<Hook>,
     hook_busy: bool,
     hook_generation: u64,
+    /// The `scope` of the last device-code request, as sent.
+    device_scope: Option<String>,
 }
 
 impl Default for Inner {
@@ -120,6 +128,7 @@ impl Default for Inner {
             hook: None,
             hook_busy: false,
             hook_generation: 0,
+            device_scope: None,
         }
     }
 }
@@ -621,6 +630,25 @@ impl Inner {
         }
         let body = String::from_utf8_lossy(&request.body);
         let fields = form_fields(&body);
+        if fields.get("grant_type").map(String::as_str)
+            == Some("urn:ietf:params:oauth:grant-type:device_code")
+        {
+            // The device flow's poll: answered with tokens once the device code is the one issued.
+            if fields.get("device_code").map(String::as_str) != Some(DEVICE_CODE) {
+                return Response::new(400, json!({"error": "access_denied"}).to_string());
+            }
+            let access = self.issue_token();
+            return Response::new(
+                200,
+                json!({
+                    "access_token": access,
+                    "expires_in": TOKEN_LIFETIME,
+                    "refresh_token": REFRESH_TOKEN,
+                    "token_type": "Bearer",
+                })
+                .to_string(),
+            );
+        }
         if fields.get("grant_type").map(String::as_str) != Some("refresh_token") {
             return unsupported_grant();
         }
@@ -634,6 +662,27 @@ impl Inner {
                 "access_token": access,
                 "expires_in": TOKEN_LIFETIME,
                 "token_type": "Bearer",
+            })
+            .to_string(),
+        )
+    }
+
+    /// The device-code request: records its `scope` and issues `DEVICE_CODE` with `USER_CODE`.
+    fn handle_device(&mut self, request: &Request) -> Response {
+        if request.method != "POST" {
+            return method_not_allowed();
+        }
+        let body = String::from_utf8_lossy(&request.body);
+        let fields = form_fields(&body);
+        self.device_scope = fields.get("scope").cloned();
+        Response::new(
+            200,
+            json!({
+                "device_code": DEVICE_CODE,
+                "user_code": USER_CODE,
+                "verification_url": "https://www.google.com/device",
+                "expires_in": 1800,
+                "interval": 5,
             })
             .to_string(),
         )
@@ -1068,6 +1117,9 @@ impl Inner {
         if base == TOKEN_URL {
             return self.handle_token(request);
         }
+        if base == DEVICE_URL {
+            return self.handle_device(request);
+        }
         if let Some(response) = self.auth_error(request) {
             return response;
         }
@@ -1173,6 +1225,11 @@ impl FakeDrive {
     /// with the same path appear once per copy. Works while unreachable.
     pub fn file_paths(&self) -> Vec<String> {
         self.lock().file_paths()
+    }
+
+    /// The `scope` the last device-code request asked for (`None` before any request).
+    pub fn device_scope(&self) -> Option<String> {
+        self.lock().device_scope.clone()
     }
 
     /// `"<METHOD> <url>"` of every request so far, in order (no headers, no tokens).

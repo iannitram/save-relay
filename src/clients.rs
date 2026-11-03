@@ -9,6 +9,8 @@
 //! (`Error::Usage`). A fork can build with its own registration by setting the
 //! `SAVE_RELAY_GOOGLE_*` / `SAVE_RELAY_DROPBOX_APP_KEY` variables at build time.
 
+use crate::error::{Error, Result};
+
 /// A registration: its id, and the secret when the service needs one sent (Google).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Client {
@@ -41,6 +43,37 @@ pub const DROPBOX: Client = Client {
     id: or(option_env!("SAVE_RELAY_DROPBOX_APP_KEY"), ""),
     secret: None,
 };
+
+/// The three registrations as one value, so `cli::Net` can carry them: `shipped()` is the build's
+/// own, and tests pass ids of their own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClientSet {
+    pub google_desktop: Client,
+    pub google_device: Client,
+    pub dropbox: Client,
+}
+
+impl ClientSet {
+    /// The registrations this build was made with (`GOOGLE_DESKTOP`, `GOOGLE_DEVICE`, `DROPBOX`).
+    pub const fn shipped() -> ClientSet {
+        ClientSet {
+            google_desktop: GOOGLE_DESKTOP,
+            google_device: GOOGLE_DEVICE,
+            dropbox: DROPBOX,
+        }
+    }
+}
+
+/// `client` when it has an app id; else `Error::Usage` saying the app is not registered yet, so
+/// `setup` never starts a sign-in it cannot finish. `label` is the service's name.
+pub fn registered(client: Client, label: &str) -> Result<Client> {
+    if client.id.is_empty() {
+        return Err(Error::Usage(format!(
+            "{label} is not registered yet: the save-relay app has no app id in this build"
+        )));
+    }
+    Ok(client)
+}
 
 /// The loopback redirect URI registered for Dropbox. Google desktop clients accept any
 /// `http://127.0.0.1:<port>` and need no registered URI; Dropbox needs this exact one.

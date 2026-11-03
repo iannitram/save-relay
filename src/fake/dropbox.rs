@@ -1,7 +1,7 @@
 //! `FakeDropbox`: the Dropbox endpoints `dropbox::Dropbox` uses, over one App folder in memory.
 
 use crate::error::{Error, Result};
-use crate::fake::REFRESH_TOKEN;
+use crate::fake::{REFRESH_TOKEN, SIGN_IN_CODE};
 use crate::http::{Request, Response, Transport};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -478,6 +478,13 @@ impl Inner {
         }
         let body = String::from_utf8_lossy(&request.body);
         let fields = form_fields(&body);
+        if fields.get("grant_type").map(String::as_str) == Some("authorization_code") {
+            // The sign-in's code exchange: only the code the person typed back is accepted.
+            if fields.get("code").map(String::as_str) != Some(SIGN_IN_CODE) {
+                return invalid_grant();
+            }
+            return self.issue_tokens(true);
+        }
         if fields.get("grant_type").map(String::as_str) != Some("refresh_token") {
             return Response::new(
                 400,
@@ -491,6 +498,11 @@ impl Inner {
         if fields.get("refresh_token").map(String::as_str) != Some(REFRESH_TOKEN) {
             return invalid_grant();
         }
+        self.issue_tokens(false)
+    }
+
+    /// A new access token; with `with_refresh` (a sign-in's code exchange) also the refresh token.
+    fn issue_tokens(&mut self, with_refresh: bool) -> Response {
         let access = format!("fake-access-{}", self.next_token);
         self.next_token += 1;
         self.tokens.insert(
@@ -500,15 +512,15 @@ impl Inner {
                 expired: false,
             },
         );
-        Response::new(
-            200,
-            json!({
-                "access_token": access,
-                "token_type": "bearer",
-                "expires_in": TOKEN_LIFETIME.as_secs(),
-            })
-            .to_string(),
-        )
+        let mut answer = json!({
+            "access_token": access,
+            "token_type": "bearer",
+            "expires_in": TOKEN_LIFETIME.as_secs(),
+        });
+        if with_refresh {
+            answer["refresh_token"] = json!(REFRESH_TOKEN);
+        }
+        Response::new(200, answer.to_string())
     }
 
     fn auth_error(&self, request: &Request) -> Option<Response> {
