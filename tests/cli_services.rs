@@ -6,7 +6,7 @@
 
 use save_relay::cli::{run_with_net, Net};
 use save_relay::clients::{Client, ClientSet};
-use save_relay::creds::{CredentialStore, MemoryStore};
+use save_relay::creds::{CredentialStore, MemoryStore, Secret};
 use save_relay::fake::{FakeDrive, FakeDropbox, DEVICE_CODE, REFRESH_TOKEN, SIGN_IN_CODE};
 use save_relay::http::{Request, Response, Transport};
 use save_relay::local::LocalStore;
@@ -447,6 +447,44 @@ fn drive_device_flow_asks_for_drive_file_only_and_stores_the_refresh_token() {
         "gdrive"
     );
     machine.assert_no_secret_on_disk(&[REFRESH_TOKEN, DEVICE_CODE, "fake-access-"]);
+}
+
+#[test]
+fn a_google_refresh_goes_back_to_the_client_that_issued_the_token() {
+    let (fake, transport) = drive();
+    let machine = Machine::new();
+    machine.json(&transport, "setup --service gdrive --no-browser", "");
+    let (code, envelope) = machine.json(&transport, "setup --service gdrive --finish", "");
+    assert_eq!(code, 0, "{envelope}");
+
+    // Signed in through the device flow: the next command refreshes as the device client.
+    let (code, envelope) =
+        machine.json(&transport, &format!("status {}", machine.game_flags()), "");
+    assert_eq!(code, 0, "{envelope}");
+    assert_eq!(
+        fake.refresh_client_ids().last().map(String::as_str),
+        Some("test-google-device-id")
+    );
+
+    // Recorded as the browser (desktop) client, or not recorded at all: the desktop client.
+    machine
+        .creds
+        .set(&google_client_account(ACCOUNT), &Secret::new("desktop"))
+        .unwrap();
+    machine.json(&transport, &format!("status {}", machine.game_flags()), "");
+    assert_eq!(
+        fake.refresh_client_ids().last().map(String::as_str),
+        Some("test-google-desktop-id")
+    );
+    machine
+        .creds
+        .delete(&google_client_account(ACCOUNT))
+        .unwrap();
+    machine.json(&transport, &format!("status {}", machine.game_flags()), "");
+    assert_eq!(
+        fake.refresh_client_ids().last().map(String::as_str),
+        Some("test-google-desktop-id")
+    );
 }
 
 #[test]

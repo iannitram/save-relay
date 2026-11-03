@@ -107,6 +107,8 @@ struct Inner {
     hook_generation: u64,
     /// The `scope` of the last device-code request, as sent.
     device_scope: Option<String>,
+    /// The `client_id` of every refresh-token request, in order.
+    refresh_client_ids: Vec<String>,
 }
 
 impl Default for Inner {
@@ -129,6 +131,7 @@ impl Default for Inner {
             hook_busy: false,
             hook_generation: 0,
             device_scope: None,
+            refresh_client_ids: Vec::new(),
         }
     }
 }
@@ -652,6 +655,8 @@ impl Inner {
         if fields.get("grant_type").map(String::as_str) != Some("refresh_token") {
             return unsupported_grant();
         }
+        self.refresh_client_ids
+            .push(fields.get("client_id").cloned().unwrap_or_default());
         if fields.get("refresh_token").map(String::as_str) != Some(REFRESH_TOKEN) {
             return invalid_grant();
         }
@@ -1230,6 +1235,12 @@ impl FakeDrive {
     /// The `scope` the last device-code request asked for (`None` before any request).
     pub fn device_scope(&self) -> Option<String> {
         self.lock().device_scope.clone()
+    }
+
+    /// The `client_id` each refresh-token request carried, in order: a Google refresh token only
+    /// works with the client that issued it, so a test can check the right one was sent.
+    pub fn refresh_client_ids(&self) -> Vec<String> {
+        self.lock().refresh_client_ids.clone()
     }
 
     /// `"<METHOD> <url>"` of every request so far, in order (no headers, no tokens).
