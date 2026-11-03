@@ -703,12 +703,16 @@ pub fn restore(s: &Session, game: &Game, store: &LocalStore, entry: &str) -> Res
     let last = store.load_last(id)?;
     let mut taken = listed;
     let mut counts = transfer::Counts::default();
+    // Notes from the backup's card (sidecar, picture, a failed card write); never an error.
+    let mut notes = Vec::new();
     let backup = if local_changed(&local, last.as_ref()) {
         let name = fresh_entry(s.now, &s.device, &taken);
         counts = transfer::upload_entry(s.remote, &s.layout, id, &name, &game.saves_dir, &local)?;
+        // The backup carries this machine's card, as `pull`'s keep-server backup does; no playtime.
         let mut found = found_in(&game.saves_dir);
         let card = card_of(s, &found, None);
         write_card(s, id, &name, &card, &mut found);
+        notes = found.notes;
         taken.push(name.clone());
         Some(name)
     } else {
@@ -765,11 +769,15 @@ pub fn restore(s: &Session, game: &Game, store: &LocalStore, entry: &str) -> Res
     for old in retention::to_drop(&entries, keep, &new_entry) {
         s.remote.delete(&s.layout.entry_dir(id, &old))?;
     }
+    let mut message = format!("Restored {entry} as revision {revision}.");
+    for note in &notes {
+        message = format!("{message} {note}.");
+    }
     Ok(RestoreData {
         game: id.clone(),
         entry: entry.to_string(),
         revision,
-        message: format!("Restored {entry} as revision {revision}."),
+        message,
         new_entry,
         backup,
         counts,

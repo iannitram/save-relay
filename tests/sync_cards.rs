@@ -470,6 +470,11 @@ fn a_restore_backup_of_unsynced_local_changes_carries_a_card() {
         .remove(0)
         .entry;
     f.write("a.sav", b"unsynced");
+    f.write("shots/last.png", PNG);
+    f.write(
+        SIDECAR,
+        br#"{"place":"Chapter 7","picture":"shots/last.png"}"#,
+    );
 
     let data = restore(&f.session(DEVICE, NOW + 10), &f.game, &f.store, &first).unwrap();
 
@@ -477,7 +482,82 @@ fn a_restore_backup_of_unsynced_local_changes_carries_a_card() {
     let rows = history(&f.session(DEVICE, NOW + 20), GAME).unwrap().entries;
     let row = rows.iter().find(|row| row.entry == backup).unwrap();
     let card = row.card.as_ref().expect("the backup entry has a card");
+    // This machine's card of the local saves, as the keep-server backup's: no playtime.
     assert_eq!(card.device, DEVICE);
+    assert_eq!(card.time, stamp::rfc3339(NOW + 10));
+    assert_eq!(card.place.as_deref(), Some("Chapter 7"));
+    assert_eq!(card.picture.as_deref(), Some(PICTURE_PNG));
+    assert_eq!(card.playtime_secs, None);
+    let entry_dir = layout().entry_dir(GAME, &backup);
+    assert_eq!(
+        f.remote.read(&format!("{entry_dir}/{PICTURE_PNG}")),
+        Some(PNG.to_vec())
+    );
+}
+
+#[test]
+fn a_restore_backup_whose_card_write_fails_is_a_note_not_an_error() {
+    let f = Fixture::new();
+    f.write("a.sav", b"first");
+    f.push_at(NOW);
+    let first = history(&f.session(DEVICE, NOW + 5), GAME)
+        .unwrap()
+        .entries
+        .remove(0)
+        .entry;
+    f.write("a.sav", b"unsynced");
+    let refusing = NoCardWrites(&f.remote);
+    let s = Session {
+        remote: &refusing,
+        layout: layout(),
+        device: DEVICE.into(),
+        now: NOW + 10,
+    };
+
+    let data = restore(&s, &f.game, &f.store, &first).unwrap();
+
+    let backup = data.backup.expect("the backup still goes up");
+    assert_eq!(server_state(&f.remote).entry, data.new_entry);
+    assert!(data.message.contains("card left out"), "{}", data.message);
+    assert!(!data.message.contains('\n'));
+    let rows = history(&f.session(DEVICE, NOW + 20), GAME).unwrap().entries;
+    let row = rows.iter().find(|row| row.entry == backup).unwrap();
+    assert_eq!(row.card, None);
+}
+
+/// A server that refuses every card write and passes the rest on.
+struct NoCardWrites<'a>(&'a MemoryRemote);
+
+impl Remote for NoCardWrites<'_> {
+    fn list(&self, dir: &str) -> save_relay::error::Result<Vec<save_relay::remote::RemoteEntry>> {
+        self.0.list(dir)
+    }
+    fn get(&self, path: &str) -> save_relay::error::Result<(Vec<u8>, String)> {
+        self.0.get(path)
+    }
+    fn put(
+        &self,
+        path: &str,
+        bytes: &[u8],
+        pre: &Precondition,
+    ) -> save_relay::error::Result<String> {
+        if path.ends_with(&format!("/{CARD_FILE}")) {
+            return Err(Error::Server("card refused".into()));
+        }
+        self.0.put(path, bytes, pre)
+    }
+    fn mkcol(&self, dir: &str) -> save_relay::error::Result<()> {
+        self.0.mkcol(dir)
+    }
+    fn copy(&self, from: &str, to: &str) -> save_relay::error::Result<()> {
+        self.0.copy(from, to)
+    }
+    fn move_to(&self, from: &str, to: &str) -> save_relay::error::Result<()> {
+        self.0.move_to(from, to)
+    }
+    fn delete(&self, path: &str) -> save_relay::error::Result<()> {
+        self.0.delete(path)
+    }
 }
 
 #[test]
