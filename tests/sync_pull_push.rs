@@ -165,8 +165,13 @@ fn run(
         Intent::Exit => push(session, game, store, resolve)?,
     };
     assert_eq!(report.held, None);
-    assert_eq!(report.server_card, None);
-    assert_eq!(report.local_card, None);
+    // Cards (M14): a push writes one for the entry it makes, so it reports the server's card.
+    if report.sync.action == Action::Pushed {
+        assert!(report.server_card.is_some());
+    }
+    if let Some(card) = &report.local_card {
+        assert_eq!(card.device, DEVICE);
+    }
     assert!(!report.sync.message.is_empty());
     assert!(!report.sync.message.contains('\n'));
     Ok(report.sync)

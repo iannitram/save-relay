@@ -134,7 +134,11 @@ fn history_lists_newest_first_with_the_current_mark() {
     assert_eq!(current, [true, false, false]);
     for row in &data.entries {
         assert_eq!(row.device, DEVICE);
-        assert!(row.card.is_none());
+        // Each of these was pushed, so each carries its card (M14).
+        assert_eq!(
+            row.card.as_ref().map(|card| card.device.as_str()),
+            Some(DEVICE)
+        );
     }
     assert_eq!(data.entries[0].time, stamp::rfc3339(NOW + 200));
     assert_eq!(data.entries[2].time, stamp::rfc3339(NOW));

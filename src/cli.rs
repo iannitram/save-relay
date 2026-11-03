@@ -787,7 +787,8 @@ pub fn run(args: &[String], stdin: &mut dyn Read, stdout: &mut dyn Write) -> i32
                 | Command::Status { .. }
                 | Command::History { .. }
                 | Command::Restore { .. }
-                | Command::Where,
+                | Command::Where
+                | Command::Picture { .. },
             ..
         }) => connection(&store, &*creds).and_then(|(config, secret)| {
             Ok((connect(&config.server, &config.user, secret)?, None))
@@ -932,7 +933,7 @@ fn execute(command: Command, stdin: &mut dyn Read, cx: &Context) -> Result<Outco
         Command::InstallWrap { .. } => not_built("install-wrap (F59)"),
         Command::Answer { .. } => not_built("answer (F57)"),
         Command::Where => where_command(cx),
-        Command::Picture { .. } => not_built("picture (F61)"),
+        Command::Picture { game, entry, out } => picture_command(&game, &entry, &out, cx),
         Command::Panel { .. } => not_built("panel (F63)"),
     }
 }
@@ -1032,6 +1033,19 @@ fn restore(arg: &GameArg, entry: &str, cx: &Context) -> Result<Outcome> {
         ));
     }
     Ok(outcome("restore", &data, text, 0))
+}
+
+fn picture_command(
+    game: &str,
+    entry: &str,
+    out: &std::path::Path,
+    cx: &Context,
+) -> Result<Outcome> {
+    let config = load_config(cx)?;
+    let s = session(&config, cx)?;
+    let data = sync::picture(&s, game, entry, out)?;
+    let text = format!("Saved the picture of {entry} to {}.", data.path);
+    Ok(outcome("picture", &data, text, 0))
 }
 
 fn where_command(cx: &Context) -> Result<Outcome> {

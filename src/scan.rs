@@ -77,7 +77,8 @@ fn hex(digest: impl AsRef<[u8]>) -> String {
 }
 
 /// Walk `dir` and return the files `glob::selected(include, exclude, path)` keeps, sorted by
-/// path. A missing `dir` is an empty set, not an error. Symbolic links are skipped, never
+/// path. A file with a reserved name (`card::is_reserved`: the sidecar, a part file) is never
+/// kept, before the include and exclude patterns are tried. A missing `dir` is an empty set, not an error. Symbolic links are skipped, never
 /// followed. Folders are not entries. Read errors are `Error::Io` naming the file; a `dir` that
 /// is a file is `Error::Io("<dir>: not a folder")`. A pattern with a `..` segment is
 /// `Error::ManifestInvalid`, and no file is read.
@@ -130,7 +131,9 @@ fn scan_directory(
         } else if metadata.is_file() {
             let relative = path.strip_prefix(root).unwrap_or(&path);
             let relative = path_string(relative);
-            if !crate::glob::selected(include, exclude, &relative) {
+            if crate::card::is_reserved(&relative)
+                || !crate::glob::selected(include, exclude, &relative)
+            {
                 continue;
             }
             let sha256 = hash_file(&path)
