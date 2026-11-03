@@ -44,6 +44,8 @@
 
 The ludusavi data is one YAML file of about 17 MB. **serde-saphyr** (2.0, MIT OR Apache-2.0, pure Rust on the saphyr parser, released 2026-10, maintained) is a serde deserializer, so the file reads straight into typed structs and every field save-relay does not use is skipped without building a tree. Its default size budgets may need raising for a file this big; its issue sets them. It is added to `Cargo.toml` by that issue, not by the skeleton.
 
+One licence comes with it that is not plain MIT OR Apache-2.0: serde-saphyr's `deserialize` feature always pulls in `encoding_rs_io`, which pulls in **encoding_rs** (0.8, `(Apache-2.0 OR MIT) AND BSD-3-Clause`). The BSD-3-Clause part covers only the WHATWG encoding data tables (`LICENSE-WHATWG`). It cannot be turned off, and I accepted it on 2026-11-03.
+
 ## Why
 
 - The mark answers the one case M3 cannot see: a machine that has not pushed yet because the game is still open (a suspended handheld). Writing it at `pull` and clearing it at `push` needs no clock and no lease, and asking instead of expiring keeps every decision mine.

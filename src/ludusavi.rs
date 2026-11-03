@@ -24,8 +24,8 @@
 //! YAML is read with the `serde-saphyr` crate (pure Rust, MIT or Apache-2.0), added by its
 //! issue (docs/adr/0003).
 
-use crate::error::{not_built, Error, Result};
-use crate::http::Transport;
+use crate::error::{Error, Result};
+use crate::http::{Request, Transport};
 use crate::manifest::Manifest;
 use crate::platform::{AppDirs, PathVars, Platform};
 use serde::{Deserialize, Serialize};
@@ -38,6 +38,20 @@ pub const MANIFEST_URL: &str =
 
 /// Download a newer copy at most this often (a week).
 pub const REFRESH_SECS: u64 = 7 * 24 * 60 * 60;
+
+/// The format of the cache files this build writes and reads (`meta.json`, `steam-index.json`).
+const CACHE_FORMAT: u32 = 1;
+/// The data as downloaded.
+const DATA_FILE: &str = "manifest.yaml";
+/// The index (`SteamIndex`).
+const INDEX_FILE: &str = "steam-index.json";
+/// The ETag and check time of the copy (`Meta`); written last, so it never claims a copy that
+/// is not on disk.
+const META_FILE: &str = "meta.json";
+/// The parser's node and event budgets for the data (the crate's defaults are far below the
+/// real file's size). Depth, documents and scalar bytes keep the crate's defaults.
+const MAX_NODES: usize = 20_000_000;
+const MAX_EVENTS: usize = 100_000_000;
 
 /// The placeholders an entry's paths may use; any other `<...>` makes that path unusable.
 pub const PLACEHOLDERS: [&str; 11] = [
@@ -120,17 +134,30 @@ pub struct SteamIndex {
 /// `Error::StateInvalid("ludusavi data: ...")`. The file is large (about 20 MB): entries are
 /// read straight into these types, unused fields skipped.
 pub fn parse(text: &str) -> Result<BTreeMap<String, Entry>> {
-    not_built("ludusavi::parse")
+    let mut budget = serde_saphyr::Budget::default();
+    budget.max_nodes = MAX_NODES;
+    budget.max_events = MAX_EVENTS;
+    let mut options = serde_saphyr::Options::default();
+    options.budget = Some(budget);
+    serde_saphyr::from_str_with_options(text, options)
+        .map_err(|error| Error::StateInvalid(format!("ludusavi data: {error}")))
 }
 
 /// App id -> name for every entry with a `steam.id`. Two names with one id: the first by name.
 pub fn steam_index(games: &BTreeMap<String, Entry>) -> BTreeMap<u32, String> {
-    crate::not_built!("ludusavi::steam_index")
+    let mut apps = BTreeMap::new();
+    // `games` is sorted by name, so the first name for an id is the one kept.
+    for (name, entry) in games {
+        if let Some(id) = entry.steam.as_ref().and_then(|steam| steam.id) {
+            apps.entry(id).or_insert_with(|| name.clone());
+        }
+    }
+    apps
 }
 
 /// True when the cache should be downloaded again: never checked, or `checked + REFRESH_SECS <= now`.
 pub fn needs_refresh(checked: Option<u64>, now: u64) -> bool {
-    crate::not_built!("ludusavi::needs_refresh")
+    checked.is_none_or(|checked| checked.saturating_add(REFRESH_SECS) <= now)
 }
 
 /// What this machine knows about the wrapped game, for `translate`.
@@ -344,22 +371,157 @@ impl Cache {
         }
     }
 
+    fn path(&self, file: &str) -> PathBuf {
+        self.dir.join(file)
+    }
+
+    /// The meta file, `None` when missing or unreadable (the next refresh downloads again).
+    fn read_meta(&self) -> Option<Meta> {
+        let text = std::fs::read_to_string(self.path(META_FILE)).ok()?;
+        serde_json::from_str::<Meta>(&text)
+            .ok()
+            .filter(|meta| meta.format == CACHE_FORMAT)
+    }
+
+    fn read_data(&self) -> Result<String> {
+        Ok(std::fs::read_to_string(self.path(DATA_FILE))?)
+    }
+
+    fn write_index(&self, index: &SteamIndex) -> Result<()> {
+        let bytes = serde_json::to_vec(index).map_err(|error| Error::Io(error.to_string()))?;
+        write_atomic(&self.path(INDEX_FILE), &bytes)
+    }
+
+    fn write_meta(&self, meta: &Meta) -> Result<()> {
+        let bytes = serde_json::to_vec(meta).map_err(|error| Error::Io(error.to_string()))?;
+        write_atomic(&self.path(META_FILE), &bytes)
+    }
+
     /// Download the data when `needs_refresh` (or `force`), sending `If-None-Match` with the
     /// cached ETag; 304 only updates `checked`. Writes via temp file and rename, the index too.
     /// Unreachable with a cached copy: `Ok(false)` (the old copy is used); with none:
     /// `Error::Unreachable`. Returns true when a new copy was written.
     pub fn refresh(&self, transport: &dyn Transport, now: u64, force: bool) -> Result<bool> {
-        not_built("ludusavi::Cache::refresh")
+        let meta = self.read_meta();
+        let copy = self.path(DATA_FILE).is_file() && meta.is_some();
+        let index_readable = matches!(self.index(), Ok(Some(_)));
+        let checked = meta.as_ref().map(|meta| meta.checked);
+        if !force && copy && index_readable && !needs_refresh(checked, now) {
+            return Ok(false);
+        }
+
+        let etag = meta
+            .as_ref()
+            .filter(|_| copy)
+            .and_then(|meta| meta.etag.clone());
+        let mut request = Request::new("GET", MANIFEST_URL);
+        if let Some(etag) = &etag {
+            request = request.header("If-None-Match", etag);
+        }
+        // With a copy, a refresh that fails keeps the copy and is retried on the next call.
+        let response = match transport.send(&request) {
+            Ok(response) => response,
+            Err(Error::Unreachable(_)) if copy => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        match response.status {
+            200 => {
+                let text = std::str::from_utf8(&response.body)
+                    .map_err(|_| Error::Server("the ludusavi data is not UTF-8".into()))?;
+                // Checked before anything is replaced: a bad download never becomes the copy.
+                let games = parse(text)?;
+                let new_etag = response.header_value("etag").map(str::to_owned);
+                let index = SteamIndex {
+                    format: CACHE_FORMAT,
+                    etag: new_etag.clone(),
+                    checked: now,
+                    apps: steam_index(&games),
+                };
+                std::fs::create_dir_all(&self.dir)?;
+                write_atomic(&self.path(DATA_FILE), &response.body)?;
+                self.write_index(&index)?;
+                self.write_meta(&Meta {
+                    format: CACHE_FORMAT,
+                    etag: new_etag,
+                    checked: now,
+                })?;
+                Ok(true)
+            }
+            304 if copy => {
+                let mut index = match self.index() {
+                    Ok(Some(index)) => index,
+                    _ => SteamIndex {
+                        format: CACHE_FORMAT,
+                        etag: etag.clone(),
+                        checked: now,
+                        apps: steam_index(&parse(&self.read_data()?)?),
+                    },
+                };
+                index.checked = now;
+                index.etag = etag.clone();
+                self.write_index(&index)?;
+                self.write_meta(&Meta {
+                    format: CACHE_FORMAT,
+                    etag,
+                    checked: now,
+                })?;
+                Ok(false)
+            }
+            _ if copy => Ok(false),
+            status => Err(Error::Server(format!(
+                "HTTP {status} from the ludusavi data address"
+            ))),
+        }
     }
 
     /// The index, `None` when nothing was downloaded yet.
     pub fn index(&self) -> Result<Option<SteamIndex>> {
-        not_built("ludusavi::Cache::index")
+        let text = match std::fs::read_to_string(self.path(INDEX_FILE)) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        serde_json::from_str(&text)
+            .map(Some)
+            .map_err(|error| Error::StateInvalid(format!("steam-index.json: {error}")))
     }
 
     /// The entry for `app_id`: its name from the index, then that entry from the data. No entry
     /// is `Error::SaveLocationUnclear("no entry for Steam app <id> in the ludusavi data")`.
     pub fn lookup(&self, app_id: u32) -> Result<(String, Entry)> {
-        not_built("ludusavi::Cache::lookup")
+        let unclear = || {
+            Error::SaveLocationUnclear(format!(
+                "no entry for Steam app {app_id} in the ludusavi data"
+            ))
+        };
+        let index = self.index()?.ok_or_else(|| {
+            Error::SaveLocationUnclear("no ludusavi data is cached on this machine yet".into())
+        })?;
+        let name = index.apps.get(&app_id).cloned().ok_or_else(unclear)?;
+        let games = parse(&self.read_data()?)?;
+        let entry = games.get(&name).cloned().ok_or_else(|| {
+            Error::StateInvalid(format!(
+                "ludusavi data: the index names {name:?}, but the data has no such entry"
+            ))
+        })?;
+        Ok((name, entry))
     }
+}
+
+/// `meta.json`: the ETag the data was downloaded with and when it was last confirmed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct Meta {
+    format: u32,
+    etag: Option<String>,
+    checked: u64,
+}
+
+/// Write `bytes` to `<path>.tmp`, then rename it over `path`: a crash never leaves half a file.
+fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut temp = path.as_os_str().to_owned();
+    temp.push(".tmp");
+    let temp = PathBuf::from(temp);
+    std::fs::write(&temp, bytes)?;
+    std::fs::rename(&temp, path)?;
+    Ok(())
 }

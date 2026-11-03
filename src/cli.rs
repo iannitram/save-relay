@@ -26,13 +26,17 @@
 //! save-relay version | --version | -V
 //! ```
 
-use crate::api::{self, Action, HistoryData, SetupData, Side, SignInPrompt, SyncReport, WhereData};
+use crate::api::{
+    self, Action, HistoryData, SetupData, Side, SignInPrompt, SyncReport, WhereData, WhichData,
+    WhichSource,
+};
 use crate::clients::{self, Client, ClientSet};
 use crate::creds::{self, CredentialStore, Secret};
 use crate::error::{Error, NotBuilt, Result};
 use crate::http::{Request, Response, Transport};
 use crate::layout::{self, Layout};
 use crate::local::{self, Config, GameRecord, LocalStore};
+use crate::ludusavi::{self, Facts};
 use crate::manifest::Manifest;
 use crate::oauth::{self, Pending, TokenSource, Tokens};
 use crate::pending::Answer;
@@ -40,6 +44,7 @@ use crate::platform::{AppDirs, PathVars, Platform};
 use crate::remote::{self, Precondition, Remote, RemoteEntry};
 use crate::service::{self, Service};
 use crate::stamp::{self, Clock};
+use crate::steam;
 use crate::sync::{self, Game, Resolve, Session};
 use crate::webdav;
 #[cfg(feature = "http")]
@@ -854,7 +859,8 @@ pub fn run(args: &[String], stdin: &mut dyn Read, stdout: &mut dyn Write) -> i32
 /// command talks to; `creds` holds the app password (`setup` writes it); `store` and `vars`
 /// are this machine's folders; `now` is the clock in seconds since the Unix epoch. Google Drive
 /// and Dropbox need a transport and a browser opener too: `run_with_net`, which tests of those
-/// services call with fakes. Here they answer as an offline build would.
+/// services call with fakes. Here they answer as an offline build would, and `which` needs the
+/// ludusavi data already cached.
 #[allow(clippy::too_many_arguments)]
 pub fn run_with(
     args: &[String],
@@ -1018,7 +1024,7 @@ fn execute(command: Command, stdin: &mut dyn Read, cx: &Context) -> Result<Outco
         // Each of these is filled in by the issue that builds it (docs/code-map.md).
         Command::PullAnyway { .. } => not_built("pull --anyway (F50)"),
         Command::Wrap { .. } => not_built("wrap (F58)"),
-        Command::Which { .. } => not_built("which (F56)"),
+        Command::Which { app_id } => which(app_id, cx),
         Command::InstallWrap { .. } => not_built("install-wrap (F59)"),
         Command::Answer { .. } => not_built("answer (F57)"),
         Command::Where => where_command(cx),
@@ -1502,6 +1508,109 @@ fn choose_service(stdin: &mut dyn Read, stdout: &mut dyn Write) -> Result<Servic
 
 fn not_built<T>(what: &'static str) -> Result<T> {
     Err(Error::NotBuilt(NotBuilt(what)))
+}
+
+/// `which <appid>`: where a wrapped Steam game keeps its saves. A manifest of the person's own
+/// for `steam-<appid>` (remembered by `--manifest`) always wins. Otherwise the ludusavi data is
+/// refreshed when a week old (`Cache::refresh`), the game's entry is translated for this
+/// machine (`ludusavi::translate`) and its one clear folder is printed. No clear folder is
+/// `save_location_unclear`.
+fn which(app_id: u32, cx: &Context) -> Result<Outcome> {
+    let game = steam::game_id(app_id);
+    if let Some(record) = cx.store.load_game(&game)? {
+        let saves_dir = match record.saves_dir {
+            Some(dir) => dir,
+            None => record.manifest.saves_dir(cx.platform, cx.vars)?,
+        };
+        let saves_dir = saves_dir.to_string_lossy().replace('\\', "/");
+        let message = format!(
+            "{}: saves are in {saves_dir} (your manifest)",
+            record.manifest.name
+        );
+        let data = WhichData {
+            app_id,
+            game,
+            name: record.manifest.name.clone(),
+            saves_dir,
+            include: record.manifest.include.clone(),
+            source: WhichSource::Manifest,
+            message: message.clone(),
+        };
+        return Ok(which_outcome(&data, message));
+    }
+
+    let cache = ludusavi::Cache::new(&AppDirs::from_vars(cx.vars));
+    cache.refresh(&*cx.net.transport, cx.now, false)?;
+    let (name, entry) = cache.lookup(app_id)?;
+    let facts = steam_facts(app_id, cx)?;
+    let located = ludusavi::translate(
+        &name,
+        &entry,
+        &facts,
+        &|path: &std::path::Path| path.exists(),
+        &|path: &std::path::Path| path.is_dir(),
+    )?;
+    let saves_dir = located.saves_dir.to_string_lossy().replace('\\', "/");
+    let message = format!("{name}: saves are in {saves_dir} (ludusavi data)");
+    let data = WhichData {
+        app_id,
+        game,
+        name,
+        saves_dir,
+        include: located.manifest.include,
+        source: WhichSource::Ludusavi,
+        message: message.clone(),
+    };
+    Ok(which_outcome(&data, message))
+}
+
+/// The text form names the folder and lists the files that count as saves under it.
+fn which_outcome(data: &WhichData, message: String) -> Outcome {
+    let text = format!("{message}\nFiles: {}", data.include.join(", "));
+    outcome("which", data, text, 0)
+}
+
+/// What this machine knows about a wrapped Steam game for `ludusavi::translate`: its Steam
+/// library (`<root>`; the Steam folder when the game is not installed), its install folder
+/// (`<base>`), the one Steam user (`<storeUserId>`), and on Linux whether it runs under Proton
+/// (its prefix exists).
+fn steam_facts(app_id: u32, cx: &Context) -> Result<Facts> {
+    let env = |name: &str| std::env::var(name).ok();
+    let root = steam::find_root(cx.platform, cx.vars, &env)?;
+    let libraries = steam::parse_libraries(&std::fs::read_to_string(
+        root.join("steamapps/libraryfolders.vdf"),
+    )?)?;
+    let library = steam::library_for(&libraries, app_id)
+        .map(|library| library.path.clone())
+        .unwrap_or_else(|| root.clone());
+    let install_dir = std::fs::read_to_string(
+        library
+            .join("steamapps")
+            .join(format!("appmanifest_{app_id}.acf")),
+    )
+    .ok()
+    .and_then(|text| steam::parse_install_dir(&text))
+    .map(|dir| library.join("steamapps/common").join(dir));
+    let mut users = steam::user_ids(&root)?;
+    let user_id = if users.len() == 1 { users.pop() } else { None };
+    let proton = cx.platform == Platform::Linux && steam::proton_prefix(&library, app_id).is_dir();
+    Ok(Facts {
+        platform: cx.platform,
+        vars: cx.vars.clone(),
+        app_id,
+        library,
+        install_dir,
+        user_id,
+        os_user: os_user_name(),
+        proton,
+    })
+}
+
+fn os_user_name() -> String {
+    ["USER", "USERNAME"]
+        .iter()
+        .find_map(|name| std::env::var(name).ok().filter(|value| !value.is_empty()))
+        .unwrap_or_else(|| "user".to_string())
 }
 
 fn default_device_name() -> String {
