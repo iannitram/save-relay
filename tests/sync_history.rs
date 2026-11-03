@@ -134,7 +134,14 @@ fn history_lists_newest_first_with_the_current_mark() {
     assert_eq!(current, [true, false, false]);
     for row in &data.entries {
         assert_eq!(row.device, DEVICE);
-        assert!(row.card.is_none());
+        // Each of these was pushed, so each carries its card (M14): this device, the entry's own
+        // time, and nothing else (no sidecar, no session).
+        let card = row.card.as_ref().expect("a pushed entry has a card");
+        assert_eq!(card.device, DEVICE);
+        assert_eq!(card.time, row.time);
+        assert_eq!(card.playtime_secs, None);
+        assert_eq!(card.place, None);
+        assert_eq!(card.picture, None);
     }
     assert_eq!(data.entries[0].time, stamp::rfc3339(NOW + 200));
     assert_eq!(data.entries[2].time, stamp::rfc3339(NOW));

@@ -7,8 +7,8 @@
 //! and before `state.json` (`put_card`): a crash in between leaves an entry with no card,
 //! which reads as `card: null`, never a broken revision.
 
-use crate::card::Card;
-use crate::error::{not_built, Error, Result};
+use crate::card::{is_reserved, Card, PictureKind, CARD_FILE};
+use crate::error::{Error, Result};
 use crate::layout::Layout;
 use crate::remote::{ensure_dir, Precondition, Remote};
 use crate::scan::{hash_bytes, SaveSet};
@@ -18,8 +18,9 @@ use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH};
 
-/// The suffix of a file being downloaded, before it is renamed into place.
-const PART: &str = ".save-relay-part";
+/// The suffix of a file being downloaded, before it is renamed into place (also the part file
+/// `sync::picture` writes through).
+pub const PART: &str = ".save-relay-part";
 
 /// `saves_dir` joined with a `/` save path, segment by segment.
 fn local_path(saves_dir: &Path, path: &str) -> PathBuf {
@@ -51,6 +52,26 @@ fn check_save_path(path: &str) -> Result<()> {
 
 fn io_err(path: &Path, err: std::io::Error) -> Error {
     Error::Io(format!("{}: {err}", path.display()))
+}
+
+/// `set` without the reserved names (`card::is_reserved`): a sidecar or a part file is never a
+/// save, so an upload leaves it out, and a download neither fetches, replaces nor deletes it.
+pub fn without_reserved(set: &SaveSet) -> SaveSet {
+    SaveSet {
+        files: set
+            .files
+            .iter()
+            .filter(|file| !is_reserved(&file.path))
+            .cloned()
+            .collect(),
+    }
+}
+
+/// The picture kind a file name in a card names, if it is one of the two.
+fn kind_of(name: &str) -> Option<PictureKind> {
+    [PictureKind::Jpeg, PictureKind::Png]
+        .into_iter()
+        .find(|kind| kind.file_name() == name)
 }
 
 fn upload_files(
@@ -134,7 +155,8 @@ pub struct Counts {
 /// Upload every file of `set` from `saves_dir` into `incoming/<entry>/` (creating folders),
 /// then `set` itself as `RECORD`, then move the folder to `history/<entry>/`. On any failure: delete the incoming folder (best effort)
 /// and return the error; `history/` is untouched. A file whose bytes no longer hash to its
-/// `sha256` (the game wrote meanwhile) is `Error::Io`.
+/// `sha256` (the game wrote meanwhile) is `Error::Io`. A reserved name in `set` is left out
+/// (`without_reserved`), so the record lists only saves.
 pub fn upload_entry(
     remote: &dyn Remote,
     layout: &Layout,
@@ -143,8 +165,9 @@ pub fn upload_entry(
     saves_dir: &Path,
     set: &SaveSet,
 ) -> Result<Counts> {
+    let set = without_reserved(set);
     let incoming = layout.incoming_dir(game, entry);
-    let moved = upload_files(remote, &incoming, saves_dir, set).and_then(|()| {
+    let moved = upload_files(remote, &incoming, saves_dir, &set).and_then(|()| {
         ensure_dir(remote, &layout.history_dir(game))?;
         remote.move_to(&incoming, &layout.entry_dir(game, entry))
     });
@@ -175,12 +198,15 @@ pub fn download_entry(
     saves_dir: &Path,
     local: &SaveSet,
 ) -> Result<Counts> {
+    // Reserved names (a sidecar, a part file) are neither fetched nor replaced nor deleted.
+    let wanted = without_reserved(wanted);
+    let local = without_reserved(local);
     for file in wanted.files.iter().chain(&local.files) {
         check_save_path(&file.path)?;
     }
     let entry_dir = layout.entry_dir(game, entry);
     let mut staged: Vec<(PathBuf, PathBuf)> = Vec::new();
-    if let Err(err) = stage_downloads(remote, &entry_dir, wanted, saves_dir, local, &mut staged) {
+    if let Err(err) = stage_downloads(remote, &entry_dir, &wanted, saves_dir, &local, &mut staged) {
         for (part, _) in &staged {
             let _ = fs::remove_file(part);
         }
@@ -235,7 +261,8 @@ pub fn read_record(
 
 /// Write `card` as `history/<entry>/` + `card::CARD_FILE`, and the picture first when given
 /// (`(file name, bytes)`, the name being `card::PictureKind::file_name`). Called by `sync::push`
-/// after `upload_entry` and before `state.json`; `upload_entry` is unchanged.
+/// after `upload_entry` and before `state.json`; `upload_entry` is unchanged. A picture name
+/// that is not one of the two is `Error::StateInvalid`.
 pub fn put_card(
     remote: &dyn Remote,
     layout: &Layout,
@@ -244,7 +271,19 @@ pub fn put_card(
     card: &Card,
     picture: Option<(&str, &[u8])>,
 ) -> Result<()> {
-    not_built("transfer::put_card")
+    let dir = layout.entry_dir(game, entry);
+    if let Some((name, bytes)) = picture {
+        if kind_of(name).is_none() {
+            return Err(Error::StateInvalid(format!("not a picture name: {name}")));
+        }
+        remote.put(&format!("{dir}/{name}"), bytes, &Precondition::Any)?;
+    }
+    remote.put(
+        &format!("{dir}/{CARD_FILE}"),
+        card.to_json().as_bytes(),
+        &Precondition::Any,
+    )?;
+    Ok(())
 }
 
 /// The card of history entry `entry`. Missing or unreadable is `Ok(None)` (old entries have
@@ -255,7 +294,13 @@ pub fn read_card(
     game: &str,
     entry: &str,
 ) -> Result<Option<Card>> {
-    not_built("transfer::read_card")
+    match remote.get(&format!("{}/{CARD_FILE}", layout.entry_dir(game, entry))) {
+        Ok((bytes, _)) => Ok(std::str::from_utf8(&bytes)
+            .ok()
+            .and_then(|text| Card::from_json(text).ok())),
+        Err(Error::NotFound(_)) => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 /// The picture named by `card.picture` in entry `entry`: its bytes and MIME type
@@ -267,5 +312,16 @@ pub fn get_picture(
     entry: &str,
     card: &Card,
 ) -> Result<(Vec<u8>, String)> {
-    not_built("transfer::get_picture")
+    let missing = || Error::NotFound(format!("a picture in {entry}"));
+    let kind = card
+        .picture
+        .as_deref()
+        .and_then(kind_of)
+        .ok_or_else(missing)?;
+    let path = format!("{}/{}", layout.entry_dir(game, entry), kind.file_name());
+    match remote.get(&path) {
+        Ok((bytes, _)) => Ok((bytes, kind.mime().to_string())),
+        Err(Error::NotFound(_)) => Err(missing()),
+        Err(error) => Err(error),
+    }
 }

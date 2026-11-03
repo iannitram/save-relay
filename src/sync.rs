@@ -7,14 +7,16 @@
 //!
 //! `pull` reads the game's open-elsewhere mark (`presence`, M11), asks `plan::decide_with_mark` and
 //! writes this machine's mark after a launch that synced; `push` clears it again
-//! (docs/adr/0003-baton-wrap-cards-panel.md). Planned for M14: each new history entry gets a save
-//! card (`transfer::put_card`).
+//! (docs/adr/0003-baton-wrap-cards-panel.md). Each new history entry gets a save card
+//! (`transfer::put_card`, M14), and `pull` starts this machine's play session (`local::Session`)
+//! so the card can carry the playtime.
 
 use crate::api::{
     Action, Held, HistoryData, HistoryEntry, PictureData, RestoreData, Side, StatusData, SyncData,
     SyncReport, WhereData, WhereGame,
 };
-use crate::error::{not_built, Error, Result};
+use crate::card::{self, Card, PictureKind};
+use crate::error::{Error, Result};
 use crate::layout::{entry_name, parse_entry_name, Layout};
 use crate::local::LocalStore;
 use crate::manifest::Manifest;
@@ -24,6 +26,8 @@ use crate::remote::{ensure_dir, Precondition, Remote, RemoteEntry};
 use crate::scan::{scan, SaveSet};
 use crate::state::{LastSynced, ServerState, FORMAT};
 use crate::{retention, stamp, transfer};
+use std::fs;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 /// One command's connection and identity.
@@ -59,8 +63,8 @@ pub enum Resolve {
 /// `Action::Conflict`) unless `resolve` is given, which settles it as described on `Resolve`;
 /// Held (another machine's mark and not `anyway`: touch nothing, `Action::Held`, `held` set).
 /// After Noop, Adopt, Pull or Push, even a resolved conflict, this machine writes its mark
-/// (`write_mark`); offline and an unresolved conflict write nothing. The session start (M14) is
-/// not written here. The report carries both sides' cards when there are two (M14).
+/// (`write_mark`) and starts its play session (`local::Session`, M14); offline and an unresolved
+/// conflict write nothing. The report carries both sides' cards when there are two (M14).
 pub fn pull(
     s: &Session,
     game: &Game,
@@ -78,9 +82,9 @@ pub fn pull(
 /// only when it names this device: another machine's mark stays. A `deferred` push and an
 /// unresolved conflict leave it, since the saves are still only here.
 ///
-/// Planned for M14: each new entry gets a card (`card::for_push`: the session start for playtime,
-/// the sidecar's place and picture) through `transfer::put_card` after the MOVE and before
-/// `state.json`. The session start (M14) is not cleared here.
+/// Each new entry gets a card (`card::for_push`: the session start for playtime, the sidecar's
+/// place and picture) through `transfer::put_card` after the MOVE and before `state.json`. After
+/// a synced exit the session start is cleared; a `deferred` or unresolved push keeps it.
 pub fn push(
     s: &Session,
     game: &Game,
@@ -90,7 +94,8 @@ pub fn push(
     sync(s, game, store, resolve, Intent::Exit, false)
 }
 
-// The mark (M11) is read and written by `pull`, and cleared by `push`; the cards (M14) come later.
+// The mark (M11) is read and written by `pull`, and cleared by `push`; the session start (M14)
+// follows it; the cards (M14) travel with each new entry.
 fn sync(
     s: &Session,
     game: &Game,
@@ -113,6 +118,9 @@ fn sync(
     )?;
     let last = store.load_last(id)?;
     let view = server_view(state.as_ref(), reachable);
+    // The sidecar's place and picture for the cards, and a note for each part left out.
+    let mut found = found_in(&game.saves_dir);
+    let has_local = !local.is_empty();
     let mut data = SyncData {
         game: id.clone(),
         action: Action::Noop,
@@ -124,6 +132,8 @@ fn sync(
         message: "No saves transferred.".into(),
     };
     let mut held = None;
+    // The entry `state.json` names once this command is done; `None` without a server state.
+    let mut server_entry = state.as_ref().map(|state| state.entry.clone());
     let mut decision = plan::decide_with_mark(intent, &hold, anyway, &local, last.as_ref(), &view);
     if decision == Decision::Conflict {
         match resolve {
@@ -137,6 +147,9 @@ fn sync(
                     &game.saves_dir,
                     &local,
                 )?;
+                // The kept backup carries this machine's card too; it is no session's push, so no playtime.
+                let card = card_of(s, &found, None);
+                write_card(s, id, &entry, &card, &mut found);
                 data.backup = Some(entry);
                 decision = Decision::Pull;
             }
@@ -154,7 +167,7 @@ fn sync(
                 Error::StateInvalid("sync decision requires a server revision".into())
             })?;
             let files = if decision == Decision::Pull {
-                let wanted = state.save_set();
+                let wanted = transfer::without_reserved(&state.save_set());
                 let counts = transfer::download_entry(
                     s.remote,
                     &s.layout,
@@ -193,6 +206,13 @@ fn sync(
             let entry = entry_name(&stamp::entry_stamp(s.now), &s.device);
             data.counts =
                 transfer::upload_entry(s.remote, &s.layout, id, &entry, &game.saves_dir, &local)?;
+            // The playtime is the session's, and only an exit has one: a launch's push is no play.
+            let started = match intent {
+                Intent::Exit => session_start(store, id, &mut found.notes),
+                Intent::Launch => None,
+            };
+            let card = card_of(s, &found, started);
+            write_card(s, id, &entry, &card, &mut found);
             let next = ServerState {
                 format: FORMAT,
                 game: id.clone(),
@@ -213,6 +233,7 @@ fn sync(
                 // Other failures may be ambiguous: keep the complete entry in history.
                 return Err(error);
             }
+            server_entry = Some(entry.clone());
             let entries = s
                 .remote
                 .list(&s.layout.history_dir(id))?
@@ -273,13 +294,132 @@ fn sync(
             // The saves are already in step; the mark is advice, so this is not the command's error.
             data.message = format!("{} Could not {verb} playing.json: {error}.", data.message);
         }
+        // The playtime start follows the mark (M14): a launch that synced starts the session, an
+        // exit that synced ends it. Not the command's error either.
+        let session = match intent {
+            Intent::Launch => store.save_session(&crate::local::Session {
+                format: crate::local::FORMAT,
+                game: id.clone(),
+                started: s.now,
+            }),
+            Intent::Exit => store.clear_session(id),
+        };
+        if let Err(error) = session {
+            data.message = format!(
+                "{} Could not update the session start: {error}.",
+                data.message
+            );
+        }
+    }
+    let server_card = match &server_entry {
+        Some(entry) => match transfer::read_card(s.remote, &s.layout, id, entry) {
+            Ok(card) => card,
+            Err(error) => {
+                found.notes.push(format!("card not read: {error}"));
+                None
+            }
+        },
+        None => None,
+    };
+    let local_card = has_local.then(|| card_of(s, &found, None));
+    for note in &found.notes {
+        data.message = format!("{} {note}.", data.message);
     }
     Ok(SyncReport {
         sync: data,
         held,
-        server_card: None,
-        local_card: None,
+        server_card,
+        local_card,
     })
+}
+
+/// What this machine's saves folder says about a card: the sidecar's place and checked picture,
+/// and one note (a short line for `message`) for each part that was left out.
+#[derive(Debug, Default)]
+struct Found {
+    /// The sidecar's place as written; `card::for_push` cleans it.
+    place: Option<String>,
+    picture: Option<(PictureKind, Vec<u8>)>,
+    notes: Vec<String>,
+}
+
+/// Read the sidecar (`card::SIDECAR`) in `saves_dir` and the picture it names. Nothing there is
+/// nothing found, with no note; a bad sidecar or picture is a note, never an error.
+fn found_in(saves_dir: &Path) -> Found {
+    let mut found = Found::default();
+    let text = match fs::read_to_string(saves_dir.join(card::SIDECAR)) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return found,
+        Err(error) => {
+            found.notes.push(format!("sidecar left out: {error}"));
+            return found;
+        }
+    };
+    let sidecar = match card::parse_sidecar(&text) {
+        Ok(sidecar) => sidecar,
+        Err(note) => {
+            found.notes.push(note);
+            return found;
+        }
+    };
+    found.place = sidecar.place;
+    if let Some(relative) = sidecar.picture {
+        match read_picture(&saves_dir.join(&relative)) {
+            Ok(bytes) => match card::check_picture(&bytes) {
+                Ok(kind) => found.picture = Some((kind, bytes)),
+                Err(note) => found.notes.push(note),
+            },
+            Err(note) => found.notes.push(note),
+        }
+    }
+    found
+}
+
+/// The picture's bytes, read to one byte past the size limit, so a huge file is refused by
+/// `card::check_picture` without being loaded whole.
+fn read_picture(path: &Path) -> std::result::Result<Vec<u8>, String> {
+    let file = fs::File::open(path).map_err(|error| format!("picture left out: {error}"))?;
+    let mut bytes = Vec::new();
+    file.take(card::MAX_PICTURE_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("picture left out: {error}"))?;
+    Ok(bytes)
+}
+
+/// The card for this machine's saves at `s.now`, with a playtime from `started` (`None` for no
+/// playtime).
+fn card_of(s: &Session, found: &Found, started: Option<u64>) -> Card {
+    card::for_push(
+        &s.device,
+        s.now,
+        started,
+        found.place.as_deref(),
+        found.picture.as_ref().map(|(kind, _)| *kind),
+    )
+}
+
+/// The session start (M14) for a push at exit. Unreadable is a note and no playtime, never an
+/// error: the card is optional.
+fn session_start(store: &LocalStore, game: &str, notes: &mut Vec<String>) -> Option<u64> {
+    match store.load_session(game) {
+        Ok(session) => session.map(|session| session.started),
+        Err(error) => {
+            notes.push(format!("playtime left out: {error}"));
+            None
+        }
+    }
+}
+
+/// Write the card and picture of a new entry. A failure is a note, not an error: the entry is
+/// complete, so the save still goes up (a crash in between also reads as `card: null`).
+fn write_card(s: &Session, game: &str, entry: &str, card: &Card, found: &mut Found) {
+    let picture = found
+        .picture
+        .as_ref()
+        .map(|(kind, bytes)| (kind.file_name(), bytes.as_slice()));
+    if let Err(error) = transfer::put_card(s.remote, &s.layout, game, entry, card, picture) {
+        found.notes.push(format!("card left out: {error}"));
+    }
 }
 
 /// The line `pull` and `status` give for another machine's mark (M11).
@@ -369,12 +509,12 @@ fn read_server(s: &Session, id: &str) -> Result<(Option<ServerState>, Preconditi
     }
 }
 
-/// What `plan::decide_with_mark` gets as the server's side.
+/// What `plan::decide_with_mark` gets as the server's side (reserved names left out).
 fn server_view(state: Option<&ServerState>, reachable: bool) -> ServerView {
     match state {
         Some(state) => ServerView::At {
             revision: state.revision,
-            files: state.save_set(),
+            files: transfer::without_reserved(&state.save_set()),
         },
         None if reachable => ServerView::Empty,
         None => ServerView::Unreachable,
@@ -501,22 +641,26 @@ pub fn history(s: &Session, game: &str) -> Result<HistoryData> {
         )));
     }
     let current = state.as_ref().map(|state| state.entry.clone());
-    let mut entries: Vec<HistoryEntry> = history_children(s, game)?
+    let mut entries: Vec<HistoryEntry> = Vec::new();
+    for child in history_children(s, game)?
         .into_iter()
         .filter(|child| child.is_dir)
-        .filter_map(|child| {
-            let (stamp_text, device) = parse_entry_name(&child.name)?;
-            let unix = stamp::parse_entry_stamp(&stamp_text)?;
-            Some(HistoryEntry {
-                current: current.as_deref() == Some(child.name.as_str()),
-                entry: child.name,
-                device,
-                time: stamp::rfc3339(unix),
-                // Cards are not read yet (`transfer::read_card` is M14): every entry has none.
-                card: None,
-            })
-        })
-        .collect();
+    {
+        let Some((stamp_text, device)) = parse_entry_name(&child.name) else {
+            continue;
+        };
+        let Some(unix) = stamp::parse_entry_stamp(&stamp_text) else {
+            continue;
+        };
+        let card = transfer::read_card(s.remote, &s.layout, game, &child.name)?;
+        entries.push(HistoryEntry {
+            current: current.as_deref() == Some(child.name.as_str()),
+            device,
+            time: stamp::rfc3339(unix),
+            card,
+            entry: child.name,
+        });
+    }
     entries.sort_by(|left, right| right.entry.cmp(&left.entry));
     Ok(HistoryData {
         game: game.to_string(),
@@ -549,7 +693,8 @@ pub fn restore(s: &Session, game: &Game, store: &LocalStore, entry: &str) -> Res
     if !listed.iter().any(|name| name == entry) {
         return Err(Error::NoSuchEntry(entry.to_string()));
     }
-    let wanted = transfer::read_record(s.remote, &s.layout, id, entry)?;
+    let wanted =
+        transfer::without_reserved(&transfer::read_record(s.remote, &s.layout, id, entry)?);
     let local = scan(
         &game.saves_dir,
         &game.manifest.include,
@@ -667,5 +812,36 @@ fn fetch_mark(s: &Session, game: &str) -> Result<Option<Mark>> {
 /// `save-relay picture <game> <entry> --out <file>` (M14): copy the entry's card picture to
 /// `out` (through a part file). No card, or a card with no picture, is `Error::NotFound`.
 pub fn picture(s: &Session, game: &str, entry: &str, out: &Path) -> Result<PictureData> {
-    not_built("sync::picture")
+    let missing = || Error::NotFound(format!("a picture for {game} {entry}"));
+    // A name that is not an entry name has no card either.
+    if parse_entry_name(entry).is_none() {
+        return Err(missing());
+    }
+    let card = transfer::read_card(s.remote, &s.layout, game, entry)?.ok_or_else(missing)?;
+    let (bytes, _mime) = transfer::get_picture(s.remote, &s.layout, game, entry, &card)?;
+    write_through_part(out, &bytes)?;
+    Ok(PictureData {
+        path: out.display().to_string(),
+        bytes: bytes.len() as u64,
+    })
+}
+
+/// Write `bytes` to `out` through a part file beside it, renamed into place once complete.
+fn write_through_part(out: &Path, bytes: &[u8]) -> Result<()> {
+    let mut part_name = out.as_os_str().to_os_string();
+    part_name.push(transfer::PART);
+    let part = PathBuf::from(part_name);
+    let written = fs::File::create(&part).and_then(|mut file| {
+        file.write_all(bytes)?;
+        file.sync_all()
+    });
+    let result = written
+        .map_err(|error| Error::Io(format!("{}: {error}", part.display())))
+        .and_then(|()| {
+            fs::rename(&part, out).map_err(|error| Error::Io(format!("{}: {error}", out.display())))
+        });
+    if result.is_err() {
+        let _ = fs::remove_file(&part);
+    }
+    result
 }

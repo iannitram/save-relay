@@ -13,7 +13,7 @@
 //! Every write goes to `<file>.tmp` first and is renamed over the file, so a crash never leaves
 //! half a record.
 
-use crate::error::{not_built, Error, Result};
+use crate::error::{Error, Result};
 use crate::manifest::Manifest;
 use crate::pending::PendingChoice;
 use crate::platform::AppDirs;
@@ -191,19 +191,39 @@ impl LocalStore {
         Ok(choices)
     }
 
-    /// `None` when no `pull` ran since the last push.
+    /// `None` when no `pull` ran since the last push. A session of another format is
+    /// `Error::StateInvalid`.
     pub fn load_session(&self, game: &str) -> Result<Option<Session>> {
-        not_built("local::LocalStore::load_session")
+        let session: Option<Session> =
+            read_json(&self.dirs.data.join("session").join(format!("{game}.json")))?;
+        match session {
+            Some(session) if session.format != FORMAT => Err(Error::StateInvalid(format!(
+                "session format {} is not {FORMAT}",
+                session.format
+            ))),
+            other => Ok(other),
+        }
     }
 
     /// Saved under `session.game`.
     pub fn save_session(&self, session: &Session) -> Result<()> {
-        not_built("local::LocalStore::save_session")
+        write_json(
+            &self
+                .dirs
+                .data
+                .join("session")
+                .join(format!("{}.json", session.game)),
+            session,
+        )
     }
 
     /// Removes `session/<game>.json`; none there is fine.
     pub fn clear_session(&self, game: &str) -> Result<()> {
-        not_built("local::LocalStore::clear_session")
+        match fs::remove_file(self.dirs.data.join("session").join(format!("{game}.json"))) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        }
     }
 }
 
