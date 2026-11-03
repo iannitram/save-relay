@@ -158,6 +158,28 @@ fn parse_rejects_text_that_is_not_a_map_of_games() {
 }
 
 #[test]
+fn parse_budgets_are_raised_for_the_real_file_but_still_bounded() {
+    // The crate's default is 250,000 nodes; the real file is far above that. 40,000 games of
+    // about ten nodes each pass only because the budget was raised.
+    let mut big = String::new();
+    for n in 0..40_000 {
+        big.push_str(&format!(
+            "Game {n}:\n  files:\n    <home>/g{n}:\n      tags:\n      - save\n      - config\n"
+        ));
+    }
+    let games = ludusavi::parse(&big).unwrap();
+    assert_eq!(games.len(), 40_000);
+
+    // Nesting keeps the crate's depth limit: a field save-relay skips cannot be used to build
+    // a tower that exhausts the stack.
+    let deep = format!("Tower:\n  alias: {}{}\n", "[".repeat(500), "]".repeat(500));
+    match ludusavi::parse(&deep) {
+        Err(Error::StateInvalid(message)) => assert!(message.starts_with("ludusavi data: ")),
+        other => panic!("expected state_invalid for deep nesting, got {other:?}"),
+    }
+}
+
+#[test]
 fn steam_index_keeps_the_first_name_for_a_shared_id_and_skips_other_stores() {
     let index = ludusavi::steam_index(&ludusavi::parse(&fixture()).unwrap());
     assert_eq!(index.len(), 2);
@@ -518,7 +540,7 @@ fn which_uses_the_players_own_manifest_before_the_data() {
     assert_eq!(envelope["data"]["source"], "manifest");
     assert_eq!(
         envelope["data"]["saves_dir"],
-        saves.to_string_lossy().as_ref()
+        saves.to_string_lossy().replace('\\', "/").as_str()
     );
     assert_eq!(envelope["data"]["include"][0], "**/*.sav");
 }
