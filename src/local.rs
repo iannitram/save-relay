@@ -116,7 +116,24 @@ impl LocalStore {
 
     /// Every game id with a `games/<game>.json`, sorted (`where`, the panel).
     pub fn list_games(&self) -> Result<Vec<String>> {
-        not_built("local::LocalStore::list_games")
+        let entries = match fs::read_dir(self.dirs.data.join("games")) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error.into()),
+        };
+        let mut ids = Vec::new();
+        for entry in entries {
+            let entry = entry?;
+            let path = entry.path();
+            if !entry.file_type()?.is_file() || path.extension().is_none_or(|ext| ext != "json") {
+                continue;
+            }
+            if let Some(id) = path.file_stem().and_then(|stem| stem.to_str()) {
+                ids.push(id.to_string());
+            }
+        }
+        ids.sort();
+        Ok(ids)
     }
 
     /// `None` when no choice is pending for `game`. Unreadable is `Error::StateInvalid`.
