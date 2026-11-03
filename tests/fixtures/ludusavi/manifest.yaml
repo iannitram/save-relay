@@ -1,0 +1,42 @@
+# Made-up games in the shape of the ludusavi-manifest data (tests only; no real titles or paths).
+Example Quest:
+  files:
+    <winDocuments>/Example Quest/Saves:
+      tags: [save]
+      when:
+        - os: windows
+    <xdgData>/example-quest/saves:
+      tags: [save]
+      when:
+        - os: linux
+    <xdgConfig>/example-quest/settings.ini:
+      tags: [config]
+    <home>/Example Quest Saves/*.sav:
+      tags: [save]
+  installDir:
+    ExampleQuest: {}
+  registry:
+    HKEY_CURRENT_USER/Software/Example Quest:
+      tags: [save]
+  steam:
+    id: 1000001
+  gog:
+    id: 2000001
+Another Title:
+  files:
+    <home>/Saved Games/Another Title/*.sav:
+      tags: [save]
+  steam:
+    id: 1000003
+Duplicate Title:
+  files:
+    <winAppData>/Duplicate Title:
+      tags: [save]
+  steam:
+    id: 1000003
+Gog Only Tale:
+  files:
+    <winDocuments>/Gog Only Tale:
+      tags: [save]
+  gog:
+    id: 3000001

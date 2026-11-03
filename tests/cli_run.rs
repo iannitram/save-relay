@@ -690,7 +690,7 @@ fn help_and_version_and_commands_not_built_yet() {
     assert!(out.starts_with("save-relay <command>"));
 
     // Each of these arrives with its own issue; until then it says so, exit 1.
-    for line in ["which 12", "answer demo-game wait", "panel"] {
+    for line in ["answer demo-game wait", "panel"] {
         let (code, out) = machine.run(&format!("{line} --json"), "", T0);
         assert_eq!(code, 1, "{line}: {out}");
         assert_eq!(one_envelope(&out)["error"]["code"], "not_built", "{line}");
