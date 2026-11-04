@@ -234,6 +234,56 @@ fn answer_requires_a_pending_choice_and_a_fitting_answer_then_persists_it() {
     }
 }
 
+/// Two `answer` calls on one conflict at the same moment. Before each write had a temp file of
+/// its own, one rename found no file (os error 2) or published the other's bytes. Whichever
+/// answer lands last is the one on record, so the check is "one of the two", not a fixed one.
+#[test]
+fn two_answers_at_once_neither_fails_and_one_of_them_is_on_record() {
+    const ROUNDS: usize = 100;
+    let f = Fixture::new("race");
+    fs::create_dir_all(&f.pending).unwrap();
+    for round in 0..ROUNDS {
+        f.store.save_pending(&conflict()).unwrap();
+        let (first, second) = std::thread::scope(|scope| {
+            let first = scope.spawn(|| pending::answer(&f.store, "uncharted", Answer::KeepServer));
+            let second = scope.spawn(|| pending::answer(&f.store, "uncharted", Answer::KeepLocal));
+            (first.join().unwrap(), second.join().unwrap())
+        });
+        for result in [&first, &second] {
+            assert!(
+                !matches!(result, Err(Error::Io(_))),
+                "round {round}: {result:?}"
+            );
+        }
+        let stored = f.store.load_pending("uncharted").unwrap().unwrap().answer;
+        assert!(
+            stored == Some(Answer::KeepServer) || stored == Some(Answer::KeepLocal),
+            "round {round}: stored {stored:?}"
+        );
+    }
+    let leftovers: Vec<_> = fs::read_dir(&f.pending)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .filter(|name| name.to_string_lossy().ends_with(".tmp"))
+        .collect();
+    assert!(leftovers.is_empty(), "temp files left: {leftovers:?}");
+}
+
+/// A file named for one game that holds a choice for another is refused, and not rewritten.
+#[test]
+fn answer_refuses_a_stored_choice_for_another_game_and_changes_nothing() {
+    let f = Fixture::new("answer-mismatch");
+    fs::create_dir_all(&f.pending).unwrap();
+    let path = f.pending.join("totk.json");
+    fs::write(&path, conflict().to_json()).unwrap();
+    let before = fs::read(&path).unwrap();
+    assert_eq!(
+        pending::answer(&f.store, "totk", Answer::KeepLocal),
+        Err(Error::NoPendingChoice("totk".into()))
+    );
+    assert_eq!(fs::read(&path).unwrap(), before);
+}
+
 #[test]
 fn wait_times_out_after_exactly_120_sleeps_and_keeps_the_file() {
     static NOW: AtomicU64 = AtomicU64::new(700);

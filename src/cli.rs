@@ -505,6 +505,7 @@ pub fn parse(args: &[String]) -> Result<Args> {
         "answer" => {
             let flags = split(&args[1..], &[], &[])?;
             require(&flags.positionals, 2, &["<game>", "<answer>"])?;
+            check_game_id(flags.positionals[0])?;
             let answer = match Answer::parse(flags.positionals[1]) {
                 Some(a) => a,
                 None => {
@@ -679,6 +680,23 @@ fn resolve(flags: &Flags<'_>) -> Result<Option<Resolve>> {
     }
 }
 
+/// Whether `run` connects to the server before the command, through the saved setup: the commands
+/// that talk to the server. `setup` connects on its own (it reads its password first), and the
+/// other commands need no server.
+pub fn needs_server(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::Pull { .. }
+            | Command::PullAnyway { .. }
+            | Command::Push { .. }
+            | Command::Status { .. }
+            | Command::History { .. }
+            | Command::Restore { .. }
+            | Command::Where
+            | Command::Picture { .. }
+    )
+}
+
 /// The command's name as it appears in the envelope: "pull" (`Pull` and `PullAnyway`), "push",
 /// "status", "history", "restore", "setup" (both setup forms), "wrap", "which",
 /// "install-wrap", "answer", "where", "picture", "panel", "help", "version".
@@ -811,18 +829,7 @@ pub fn run(args: &[String], stdin: &mut dyn Read, stdout: &mut dyn Write) -> i32
             let remote = connect(server, user, Secret::new(line.clone()))?;
             Ok((remote, Some(line)))
         }),
-        Ok(Args {
-            command:
-                Command::Pull { .. }
-                | Command::PullAnyway { .. }
-                | Command::Push { .. }
-                | Command::Status { .. }
-                | Command::History { .. }
-                | Command::Restore { .. }
-                | Command::Where
-                | Command::Picture { .. },
-            ..
-        }) => match uses_service_tokens(&store) {
+        Ok(Args { command, .. }) if needs_server(command) => match uses_service_tokens(&store) {
             Ok(true) => Ok((Box::new(NoRemote), None)),
             Ok(false) => connection(&store, &*creds).and_then(|(config, secret)| {
                 Ok((connect(&config.server, &config.user, secret)?, None))
@@ -1215,10 +1222,23 @@ fn where_command(cx: &Context) -> Result<Outcome> {
     Ok(outcome("where", &data, text, 0))
 }
 
+/// The game named on the command line must follow the manifest id rule before any path is built
+/// from it (`answer ../../x` and a case variant such as `DEMO-GAME` are usage errors).
+fn check_game_id(game: &str) -> Result<()> {
+    if crate::manifest::valid_id(game) {
+        return Ok(());
+    }
+    Err(Error::Usage(format!(
+        "'{game}' is not a game id: use 1-64 lowercase letters, digits, or hyphens, \
+         starting with a letter or digit"
+    )))
+}
+
 /// `answer <game> <answer>` (M12): records the choice for the `wrap` that waits on it
 /// (`pending::answer`, which refuses an answer that does not fit the choice). Local only: no
 /// server call, and the exit code is 0.
 fn answer_command(game: &str, answer: Answer, cx: &Context) -> Result<Outcome> {
+    check_game_id(game)?;
     let choice = pending::answer(cx.store, game, answer)?;
     let message = answer_text(&choice.game, answer);
     let data = AnswerData {

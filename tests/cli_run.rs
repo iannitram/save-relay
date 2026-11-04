@@ -889,6 +889,90 @@ fn answer_that_does_not_fit_the_choice_is_usage_and_changes_nothing() {
 }
 
 #[test]
+fn answer_with_nothing_waiting_in_text_mode_says_so_and_exits_2() {
+    let remote = Arc::new(MemoryRemote::new());
+    let machine = Machine::new(&remote);
+
+    let (code, out) = machine.run(&format!("answer {GAME} keep-server"), "", T0);
+    assert_eq!(code, 2, "{out}");
+    assert_eq!(
+        out,
+        "save-relay: no choice is waiting for game 'demo-game'\n"
+    );
+}
+
+#[test]
+fn answer_records_a_conflict_choice_with_json() {
+    let remote = Arc::new(MemoryRemote::new());
+    let machine = Machine::new(&remote);
+    machine.store.save_pending(&waiting_conflict()).unwrap();
+
+    let (code, envelope) = machine.json(&format!("answer {GAME} keep-server"), T0 + 180);
+    assert_eq!(code, 0, "{envelope}");
+    assert_eq!(keys(&envelope), set(&["ok", "command", "data"]));
+    assert_eq!(envelope["command"], "answer");
+    let data = &envelope["data"];
+    assert_eq!(keys(data), set(&["game", "kind", "answer", "message"]));
+    assert_eq!(data["kind"], "conflict");
+    assert_eq!(data["answer"], "keep_server");
+    assert_eq!(
+        data["message"],
+        "Recorded keep-server for demo-game: the server's saves win the conflict."
+    );
+    let stored = machine.store.load_pending(GAME).unwrap().unwrap();
+    assert_eq!(stored.answer, Some(Answer::KeepServer));
+}
+
+#[test]
+fn answer_records_a_held_choice_in_text_mode() {
+    let remote = Arc::new(MemoryRemote::new());
+    let machine = Machine::new(&remote);
+    machine.store.save_pending(&waiting_held()).unwrap();
+
+    let (code, out) = machine.run(&format!("answer {GAME} play-anyway"), "", T0 + 180);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(
+        out,
+        "Recorded play-anyway for demo-game: the game starts past the open-elsewhere mark.\n"
+    );
+    let stored = machine.store.load_pending(GAME).unwrap().unwrap();
+    assert_eq!(stored.answer, Some(Answer::PlayAnyway));
+}
+
+/// A game id that is not a plain id is a usage error before any file is read or written. The
+/// planted `x.json` is what `../../x` would reach; it must come back unchanged.
+#[test]
+fn answer_refuses_a_game_id_that_is_not_a_plain_id_and_changes_nothing() {
+    let remote = Arc::new(MemoryRemote::new());
+    let machine = Machine::new(&remote);
+    machine.store.save_pending(&waiting_conflict()).unwrap();
+    let stored = machine.root.join("data/save-relay/pending/demo-game.json");
+    let planted = machine.root.join("data/x.json");
+    fs::write(
+        &planted,
+        PendingChoice {
+            game: "x".into(),
+            ..waiting_conflict()
+        }
+        .to_json(),
+    )
+    .unwrap();
+    let before = (fs::read(&stored).unwrap(), fs::read(&planted).unwrap());
+
+    for game in ["../../x", "DEMO-GAME"] {
+        let (code, envelope) = machine.json(&format!("answer {game} keep-server"), T0 + 180);
+        assert_eq!(code, 2, "{game}: {envelope}");
+        assert_eq!(envelope["command"], "answer", "{game}");
+        assert_eq!(envelope["error"]["code"], "usage", "{game}");
+        assert_eq!(
+            (fs::read(&stored).unwrap(), fs::read(&planted).unwrap()),
+            before,
+            "{game}"
+        );
+    }
+}
+
+#[test]
 fn text_mode_conflict_prompt_and_history_table() {
     let remote = Arc::new(MemoryRemote::new());
     let (a, _b) = conflicting_machines(&remote);

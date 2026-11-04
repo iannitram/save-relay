@@ -10,8 +10,8 @@
 //! <data>/save-relay/ludusavi/            the ludusavi data cache (`ludusavi::Cache`, M13)
 //! ```
 //!
-//! Every write goes to `<file>.tmp` first and is renamed over the file, so a crash never leaves
-//! half a record.
+//! Every write goes to a temp file of its own first and is renamed over the file, so a crash never
+//! leaves half a record.
 
 use crate::error::{Error, Result};
 use crate::manifest::Manifest;
@@ -21,6 +21,7 @@ use crate::state::LastSynced;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// The config format this build reads and writes.
 pub const FORMAT: u32 = 1;
@@ -238,12 +239,18 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &std::path::Path) -> Result<Opt
         .map_err(|error| Error::StateInvalid(error.to_string()))
 }
 
+/// Gives each write its own temp file name. A shared `<file>.json.tmp` let two writers of one
+/// file (two `answer` calls, say) rename each other's temp file: one then failed with os error 2,
+/// or published the other's bytes.
+static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
 fn write_json<T: Serialize>(path: &std::path::Path, value: &T) -> Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| Error::Io("local file has no parent folder".into()))?;
     fs::create_dir_all(parent)?;
-    let temp = path.with_extension("json.tmp");
+    let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let temp = path.with_extension(format!("json.{}.{seq}.tmp", std::process::id()));
     let mut text = serde_json::to_string_pretty(value)
         .map_err(|error| Error::StateInvalid(error.to_string()))?;
     text.push('\n');
