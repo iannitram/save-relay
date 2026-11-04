@@ -140,12 +140,19 @@ impl PendingChoice {
 }
 
 /// `save-relay answer <game> <answer>`: load the game's pending choice (none is
-/// `Error::NoPendingChoice`), refuse an answer that does not `fit` it (`Error::Usage` naming
-/// both), write it with the answer set, and return it.
+/// `Error::NoPendingChoice`), refuse a choice that names another game (`Error::StateInvalid`) or
+/// an answer that does not `fit` it (`Error::Usage` naming both), write it with the answer set,
+/// and return it.
 pub fn answer(store: &LocalStore, game: &str, answer: Answer) -> Result<PendingChoice> {
     let mut choice = store
         .load_pending(game)?
         .ok_or_else(|| Error::NoPendingChoice(game.into()))?;
+    if choice.game != game {
+        return Err(Error::StateInvalid(format!(
+            "the pending file for '{game}' names game '{}'",
+            choice.game
+        )));
+    }
     if !answer.fits(choice.kind) {
         let kind = match choice.kind {
             ChoiceKind::Conflict => "conflict",
