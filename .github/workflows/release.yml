@@ -3,11 +3,13 @@ name: release
 # Release binaries (#24, M8, M15). A `v*` tag builds the binaries, writes SHA256SUMS and attaches
 # them, with the Decky plugin zip and the panel zip, to a GitHub release. A workflow_dispatch run
 # does the same builds and uploads the files as run artifacts only: the dry run, and it makes no
-# release.
+# release. A pull request that changes this file gets the same dry run, so its head is built.
 
 on:
   push:
     tags: ["v*"]
+  pull_request:
+    paths: [".github/workflows/release.yml"]
   workflow_dispatch:
 
 permissions:
