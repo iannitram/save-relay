@@ -3,12 +3,13 @@
 //!
 //! The real child is this test binary run again: `child("child_exits_7")` is the command
 //! `<this exe> --exact child_exits_7 --ignored`, and that ignored test exits with its code. No
-//! fixture program is needed, and the helper tests never run in a plain `cargo test`.
+//! fixture program is needed. The helpers are `#[ignore]`d and also gated by an environment
+//! variable (`CHILD_GATE`) that `child` sets, so `cargo test -- --ignored` does not run them.
 
 use save_relay::api::{Action, Held, Side, SyncData, SyncReport};
-use save_relay::cli::{run_with, run_with_env};
+use save_relay::cli::{run_with, run_with_env, run_with_net, Net};
+use save_relay::clients::ClientSet;
 use save_relay::creds::{self, CredentialStore, MemoryStore, Secret};
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 use save_relay::http::{Request, Response, Transport};
 use save_relay::local::{Config, LocalStore};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -26,7 +27,7 @@ use std::fs;
 use std::io::Cursor;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 const GAME: &str = "demo-game";
 const T0: u64 = 1_793_476_260; // 2026-10-31T19:51:00Z
@@ -83,8 +84,21 @@ fn answer_at_then_tick(store: &LocalStore, answer: Answer, at: u64) -> impl Fn(u
     }
 }
 
+/// The variable the helper children need; `child` sets it, so a helper run by hand does nothing.
+const CHILD_GATE: &str = "SAVE_RELAY_WRAP_TEST_CHILD";
+/// Where `child_writes_save` writes, and the marker file it leaves when done.
+const CHILD_SAVE: &str = "SAVE_RELAY_WRAP_TEST_SAVE";
+const CHILD_MARK: &str = "SAVE_RELAY_WRAP_TEST_MARK";
+const CHILD_BYTES: &str = "bytes written by the game";
+
+/// True in a helper child run by `child`; false when a helper is run by hand.
+fn is_child() -> bool {
+    std::env::var_os(CHILD_GATE).is_some()
+}
+
 /// The child command: this test binary, running only the ignored test `name`.
 fn child(name: &str) -> Vec<String> {
+    std::env::set_var(CHILD_GATE, "1");
     let exe = std::env::current_exe().expect("the test binary's path");
     vec![
         exe.to_string_lossy().into_owned(),
@@ -100,13 +114,31 @@ fn child(name: &str) -> Vec<String> {
 #[test]
 #[ignore = "run as a child process by the tests in this file"]
 fn child_exits_0() {
-    std::process::exit(0);
+    if is_child() {
+        std::process::exit(0);
+    }
 }
 
 #[test]
 #[ignore = "run as a child process by the tests in this file"]
 fn child_exits_7() {
-    std::process::exit(7);
+    if is_child() {
+        std::process::exit(7);
+    }
+}
+
+/// The game: it changes a save, then leaves a marker (the test clock moves on once it exists).
+#[test]
+#[ignore = "run as a child process by the tests in this file"]
+fn child_writes_save() {
+    if !is_child() {
+        return;
+    }
+    let save = std::env::var(CHILD_SAVE).expect("the save path");
+    let mark = std::env::var(CHILD_MARK).expect("the marker path");
+    fs::write(save, CHILD_BYTES).expect("write the save");
+    fs::write(mark, "done").expect("write the marker");
+    std::process::exit(0);
 }
 
 // ---- a scripted engine ----------------------------------------------------------------------
@@ -686,6 +718,155 @@ fn wrap_on_a_set_up_machine_syncs_the_saves_and_exits_with_the_game_code() {
             .any(|path| path.ends_with("slot1.sav")),
         "the save reached the server: {:?}",
         remote.file_paths()
+    );
+}
+
+/// A transport that is never used (the server here is `MemoryRemote`).
+struct NoTransport;
+
+impl Transport for NoTransport {
+    fn send(&self, _: &Request) -> Result<Response, Error> {
+        Err(Error::Unreachable("no network in this test".into()))
+    }
+}
+
+/// The marker the game leaves; `clock_after_game` reads it.
+static MARK_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// T0 until the game has run, an hour later after: the exit is later than the launch.
+fn clock_after_game() -> u64 {
+    let marked = MARK_PATH
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .as_ref()
+        .is_some_and(|path| path.exists());
+    if marked {
+        T0 + 3600
+    } else {
+        T0
+    }
+}
+
+/// `wrap` on a first run (an empty server) whose game changes `slot1.sav` and exits an hour after
+/// the launch. Returns the server.
+fn wrap_a_game_that_changes_a_save(name: &str) -> MemoryRemote {
+    let fx = Fixture::new(name);
+    let vars = PathVars {
+        home: fx.root.join("home"),
+        data: fx.root.join("data"),
+        config: fx.root.join("config"),
+        documents: None,
+    };
+    let store = LocalStore::new(AppDirs::from_vars(&vars));
+    store
+        .save_config(&Config {
+            format: 1,
+            server: SERVER.into(),
+            user: USER.into(),
+            root: "save-relay".into(),
+            device: "this-pc".into(),
+        })
+        .unwrap();
+    let creds = MemoryStore::new();
+    creds
+        .set(
+            &creds::account(SERVER, USER).unwrap(),
+            &Secret::new(PASSWORD),
+        )
+        .unwrap();
+    let manifest = fx.root.join("demo.json");
+    fs::write(
+        &manifest,
+        r#"{"format":1,"id":"demo-game","name":"Demo Game","saves_from":"launcher","saves":{},"include":["**/*.sav"]}"#,
+    )
+    .unwrap();
+    let saves = fx.root.join("saves");
+    fs::create_dir_all(&saves).unwrap();
+    fs::write(saves.join("slot1.sav"), "bytes before the game").unwrap();
+
+    let mark = fx.root.join("game-ran");
+    *MARK_PATH
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner()) = Some(mark.clone());
+    std::env::set_var(CHILD_SAVE, saves.join("slot1.sav"));
+    std::env::set_var(CHILD_MARK, &mark);
+
+    let remote = MemoryRemote::new();
+    let manifest_arg = manifest.to_string_lossy().into_owned();
+    let saves_arg = saves.to_string_lossy().into_owned();
+    let args = wrap_args(
+        &[
+            "--game",
+            GAME,
+            "--manifest",
+            &manifest_arg,
+            "--saves-dir",
+            &saves_arg,
+        ],
+        child("child_writes_save"),
+    );
+    let refuse: &dyn Fn(&str) -> save_relay::Result<()> =
+        &|_: &str| Err(Error::Unreachable("no browser in this test".into()));
+    let net = Net {
+        transport: Arc::new(NoTransport),
+        open_browser: refuse,
+        clients: ClientSet::shipped(),
+        game_mode: false,
+        clock: clock_after_game,
+    };
+    let mut stdin = Cursor::new(Vec::<u8>::new());
+    let mut stdout = Vec::<u8>::new();
+    let code = run_with_net(
+        &args,
+        &mut stdin,
+        &mut stdout,
+        &remote,
+        &creds,
+        &store,
+        &vars,
+        T0,
+        &net,
+    );
+    *MARK_PATH
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner()) = None;
+    assert_eq!(code, 0, "{}", String::from_utf8_lossy(&stdout));
+    assert!(stdout.is_empty(), "{}", String::from_utf8_lossy(&stdout));
+    remote
+}
+
+#[test]
+fn the_push_after_the_game_sends_the_games_bytes() {
+    let _serial = serial();
+    let remote = wrap_a_game_that_changes_a_save("push-after-game");
+    let holds_new_bytes = remote
+        .file_paths()
+        .iter()
+        .filter(|path| path.ends_with("slot1.sav"))
+        .any(|path| remote.read(path).as_deref() == Some(CHILD_BYTES.as_bytes()));
+    assert!(
+        holds_new_bytes,
+        "the server holds what the game wrote: {:?}",
+        remote.file_paths()
+    );
+}
+
+#[test]
+fn the_push_after_the_game_is_stamped_with_the_exit_time() {
+    let _serial = serial();
+    let remote = wrap_a_game_that_changes_a_save("exit-time");
+    let launch = stamp::entry_stamp(T0);
+    let exit = stamp::entry_stamp(T0 + 3600);
+    let paths = remote.file_paths();
+    assert!(
+        paths.iter().any(|path| path.contains(&launch)),
+        "the launch pull made an entry at the launch time: {paths:?}"
+    );
+    assert!(
+        paths
+            .iter()
+            .any(|path| path.contains(&format!("history/{exit}-this-pc"))),
+        "the exit push made an entry at the exit time: {paths:?}"
     );
 }
 

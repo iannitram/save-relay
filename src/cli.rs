@@ -1139,7 +1139,7 @@ fn execute(command: Command, stdin: &mut dyn Read, cx: &Context) -> Result<Outco
         Command::Status { game } => status(&game, cx),
         Command::History { game } => history(&game, cx),
         Command::Restore { game, entry } => restore(&game, &entry, cx),
-        // Each of these is filled in by the issue that builds it (docs/code-map.md).
+        // `wrap` is started by `run_with_net` before it gets here; the rest are plain commands.
         Command::Wrap { .. } => unreachable!("run_with_net starts wrap itself"),
         Command::Which { app_id } => which(app_id, cx),
         Command::InstallWrap {
@@ -1221,9 +1221,10 @@ fn wrap_command(
     let mut ran: Option<i32> = None;
     let pause = |secs: u64| std::thread::sleep(std::time::Duration::from_secs(secs));
     let synced = with_remote(&config, cx, |remote| {
-        let s = session(&config, remote, cx)?;
         let engine = SyncEngine {
-            s,
+            config: &config,
+            remote,
+            clock: cx.net.clock,
             game: &target,
             store: cx.store,
             id: &id,
@@ -1330,12 +1331,27 @@ fn ludusavi_located(
     Ok((name, located))
 }
 
-/// The engine a `wrap` runs for one game: `sync::pull` and `sync::push` over this session.
+/// The engine a `wrap` runs for one game: `sync::pull` and `sync::push`. Each call builds its own
+/// session with the time of that call, so the push after the game is stamped with the exit time,
+/// not the launch time.
 struct SyncEngine<'a> {
-    s: Session<'a>,
+    config: &'a Config,
+    remote: &'a dyn Remote,
+    clock: Clock,
     game: &'a Game,
     store: &'a LocalStore,
     id: &'a str,
+}
+
+impl SyncEngine<'_> {
+    fn session(&self) -> Result<Session<'_>> {
+        Ok(Session {
+            remote: self.remote,
+            layout: Layout::new(&self.config.root)?,
+            device: self.config.device.clone(),
+            now: (self.clock)(),
+        })
+    }
 }
 
 impl wrap::Engine for SyncEngine<'_> {
@@ -1343,10 +1359,10 @@ impl wrap::Engine for SyncEngine<'_> {
         self.id
     }
     fn pull(&self, resolve: Option<Resolve>, anyway: bool) -> Result<SyncReport> {
-        sync::pull(&self.s, self.game, self.store, resolve, anyway)
+        sync::pull(&self.session()?, self.game, self.store, resolve, anyway)
     }
     fn push(&self, resolve: Option<Resolve>) -> Result<SyncReport> {
-        sync::push(&self.s, self.game, self.store, resolve)
+        sync::push(&self.session()?, self.game, self.store, resolve)
     }
 }
 
