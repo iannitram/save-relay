@@ -4,6 +4,10 @@ Share game saves between my machines through the service I pick once at setup (m
 
 **Stage:** see `PIPELINE.md`.
 
+## Install
+
+Download the binary for your system and `SHA256SUMS` from the [releases](https://github.com/iannitram/save-relay/releases) page, and check the file with `sha256sum -c SHA256SUMS` (Linux) or `Get-FileHash` (Windows) before use. The Linux binary is x86_64 and static, so it needs no system libraries; the Windows binary is x86_64. The macOS build is unsigned and not supported for 1.0.
+
 ## Start here
 
 - `IDEA.md`: the idea, in my words.
