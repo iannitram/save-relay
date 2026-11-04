@@ -18,8 +18,10 @@ import {
 
 export interface AppProps {
   bridge: Bridge;
-  /** Where an entry's picture is served; the default is the panel server's `/picture/...`. */
+  /** Where an entry's picture is served; the default is the panel server's, with the token. */
   pictureUrl?: (game: string, entry: string, file: string) => string | null;
+  /** The panel's token (the URL's `token`), which the default picture URL carries. */
+  token?: string | null;
 }
 
 type Route =
@@ -31,7 +33,7 @@ type Route =
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-export function App({ bridge, pictureUrl }: AppProps) {
+export function App({ bridge, pictureUrl, token }: AppProps) {
   const [route, setRoute] = useState<Route>({ view: "games" });
   const [rows, setRows] = useState<GameRow[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -112,19 +114,36 @@ export function App({ bridge, pictureUrl }: AppProps) {
       );
     }
     case "timeline":
-      return <Timeline key={route.game} bridge={bridge} game={route.game} pictureUrl={pictureUrl} onBack={() => home(`game:${route.game}`)} />;
+      return (
+        <Timeline
+          key={route.game}
+          bridge={bridge}
+          game={route.game}
+          pictureUrl={pictureUrl ?? panelPicture(token)}
+          onBack={() => home(`game:${route.game}`)}
+        />
+      );
     case "signin":
       return <SignIn bridge={bridge} onBack={() => home("signin")} />;
   }
 }
 
-const defaultPicture = (game: string, entry: string, file: string) =>
-  `/picture/${encodeURIComponent(game)}/${encodeURIComponent(entry)}/${encodeURIComponent(file)}`;
+/**
+ * An entry's picture on the panel server: `/picture/<game>/<entry>/<file>`, each segment
+ * percent-encoded, with the token as `?token=` (an `<img>` cannot send the header; src/panel.rs
+ * `route`). Without a token the path alone, which the server refuses.
+ */
+export function panelPicture(token: string | null | undefined) {
+  return (game: string, entry: string, file: string): string => {
+    const path = `/picture/${encodeURIComponent(game)}/${encodeURIComponent(entry)}/${encodeURIComponent(file)}`;
+    return token ? `${path}?token=${encodeURIComponent(token)}` : path;
+  };
+}
 
 function Timeline(props: {
   bridge: Bridge;
   game: string;
-  pictureUrl?: AppProps["pictureUrl"];
+  pictureUrl: (game: string, entry: string, file: string) => string | null;
   onBack: () => void;
 }) {
   const [history, setHistory] = useState<HistoryData | null>(null);
@@ -148,7 +167,7 @@ function Timeline(props: {
   return (
     <TimelineView
       history={history}
-      pictureUrl={props.pictureUrl ?? defaultPicture}
+      pictureUrl={props.pictureUrl}
       confirm={confirm}
       error={error}
       notice={notice}

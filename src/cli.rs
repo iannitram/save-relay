@@ -986,6 +986,9 @@ pub fn run_with_net(
         },
         other => other,
     };
+    if let Command::Panel { port, open } = &command {
+        return panel_command(*port, *open, json, stdout);
+    }
     let context = Context {
         remote,
         creds,
@@ -1148,7 +1151,39 @@ fn execute(command: Command, stdin: &mut dyn Read, cx: &Context) -> Result<Outco
         Command::Answer { game, answer } => answer_command(&game, answer, cx),
         Command::Where => where_command(cx),
         Command::Picture { game, entry, out } => picture_command(&game, &entry, &out, cx),
-        Command::Panel { .. } => not_built("panel (F63)"),
+        // `run_with_net` serves the panel before it gets here.
+        Command::Panel { .. } => Err(Error::Usage("panel runs as `save-relay panel`".into())),
+    }
+}
+
+/// `save-relay panel`: serves until the process stops (SPEC.md M15). The URL with its token is
+/// printed first: the `--json` envelope of `api::PanelData`, or a line of text. Each command the
+/// page asks for runs through `run`, the same code as the command line.
+fn panel_command(port: Option<u16>, open: bool, json: bool, stdout: &mut dyn Write) -> i32 {
+    let out = std::cell::RefCell::new(stdout);
+    let announce = |data: &api::PanelData| {
+        let line = if json {
+            api::success("panel", data)
+        } else {
+            format!(
+                "Save Relay panel: {}\nClose this window or press Ctrl+C to stop.",
+                data.url
+            )
+        };
+        let mut sink = out.borrow_mut();
+        let _ = writeln!(sink, "{line}");
+    };
+    let run_line = |args: &[String]| -> (i32, Vec<u8>) {
+        let mut captured = Vec::new();
+        let code = run(args, &mut std::io::empty(), &mut captured);
+        (code, captured)
+    };
+    match crate::panel::serve(port, open, &announce, &run_line) {
+        Ok(()) => 0,
+        Err(error) => {
+            let mut sink = out.borrow_mut();
+            print_failure(&mut *sink, json, "panel", &error)
+        }
     }
 }
 
