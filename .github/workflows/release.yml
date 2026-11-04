@@ -106,14 +106,19 @@ jobs:
         run: |
           # A tag is a release, so it refuses to build without the registrations. A dry run builds
           # with empty ids: Nextcloud works, and Google Drive and Dropbox say they are not registered.
+          # Each id is tested as it will be compiled: an empty id, or one with whitespace anywhere in
+          # it, is refused. Nothing is trimmed, so a padded id never reaches cargo.
           if [ "$GITHUB_EVENT_NAME" = "push" ]; then
             for name in SAVE_RELAY_GOOGLE_DESKTOP_ID SAVE_RELAY_GOOGLE_DESKTOP_SECRET \
                         SAVE_RELAY_GOOGLE_DEVICE_ID SAVE_RELAY_GOOGLE_DEVICE_SECRET \
                         SAVE_RELAY_DROPBOX_APP_KEY; do
-              if [ -z "$(printf '%s' "${!name:-}" | tr -d '[:space:]')" ]; then
-                echo "::error::$name is not set: a release needs the app registrations (#36)"
-                exit 1
-              fi
+              value="${!name:-}"
+              case "$value" in
+                ""|*[[:space:]]*)
+                  echo "::error::$name is empty or has whitespace: a release needs the app registrations (#36)"
+                  exit 1
+                  ;;
+              esac
             done
           fi
           cargo build --locked --release --target "$TARGET" --features panel-dist
