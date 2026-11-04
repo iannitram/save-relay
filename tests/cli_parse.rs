@@ -1,6 +1,4 @@
-use save_relay::cli::{
-    command_name, needs_server, parse, usage, Args, Command, GameArg, DEFAULT_ROOT,
-};
+use save_relay::cli::{command_name, parse, usage, Args, Command, GameArg, DEFAULT_ROOT};
 use save_relay::sync::Resolve;
 use save_relay::Error;
 use std::path::PathBuf;
@@ -150,15 +148,4 @@ fn usage_names_every_command_and_the_password_rule() {
         assert!(text.contains(word), "usage lacks {word}");
     }
     assert!(text.contains("standard input"));
-}
-
-/// `run` connects before a command only if `needs_server` says so: `pull --anyway` must (the
-/// real binary gave it NoRemote before), and the local `answer` and `panel` must not.
-#[test]
-fn only_the_commands_that_talk_to_the_server_connect_first() {
-    let server = |line: &str| needs_server(&p(line).unwrap().command);
-    assert!(server("pull demo-game --anyway"));
-    assert!(server("pull demo-game"));
-    assert!(!server("answer demo-game keep-local"));
-    assert!(!server("panel"));
 }

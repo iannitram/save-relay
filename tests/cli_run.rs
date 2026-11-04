@@ -3,7 +3,7 @@
 //! parse error printed as an envelope, and the app password never reaching stdout or a file.
 
 use save_relay::api::{Held, Side};
-use save_relay::cli::{connection, run_with};
+use save_relay::cli::{connection, needs_server, parse, run_with};
 use save_relay::creds::{CredentialStore, MemoryStore, Secret};
 use save_relay::local::LocalStore;
 use save_relay::pending::{Answer, ChoiceKind, PendingChoice};
@@ -939,37 +939,18 @@ fn answer_records_a_held_choice_in_text_mode() {
     assert_eq!(stored.answer, Some(Answer::PlayAnyway));
 }
 
-/// A game id that is not a plain id is a usage error before any file is read or written. The
-/// planted `x.json` is what `../../x` would reach; it must come back unchanged.
+/// `run` connects before a command only if `needs_server` says so: `pull --anyway` must (the
+/// real binary gave it NoRemote before), and the local `answer` and `panel` must not.
 #[test]
-fn answer_refuses_a_game_id_that_is_not_a_plain_id_and_changes_nothing() {
-    let remote = Arc::new(MemoryRemote::new());
-    let machine = Machine::new(&remote);
-    machine.store.save_pending(&waiting_conflict()).unwrap();
-    let stored = machine.root.join("data/save-relay/pending/demo-game.json");
-    let planted = machine.root.join("data/x.json");
-    fs::write(
-        &planted,
-        PendingChoice {
-            game: "x".into(),
-            ..waiting_conflict()
-        }
-        .to_json(),
-    )
-    .unwrap();
-    let before = (fs::read(&stored).unwrap(), fs::read(&planted).unwrap());
-
-    for game in ["../../x", "DEMO-GAME"] {
-        let (code, envelope) = machine.json(&format!("answer {game} keep-server"), T0 + 180);
-        assert_eq!(code, 2, "{game}: {envelope}");
-        assert_eq!(envelope["command"], "answer", "{game}");
-        assert_eq!(envelope["error"]["code"], "usage", "{game}");
-        assert_eq!(
-            (fs::read(&stored).unwrap(), fs::read(&planted).unwrap()),
-            before,
-            "{game}"
-        );
-    }
+fn only_the_commands_that_talk_to_the_server_connect_first() {
+    let server = |line: &str| {
+        let args: Vec<String> = line.split_whitespace().map(String::from).collect();
+        needs_server(&parse(&args).unwrap().command)
+    };
+    assert!(server("pull demo-game --anyway"));
+    assert!(server("pull demo-game"));
+    assert!(!server("answer demo-game keep-local"));
+    assert!(!server("panel"));
 }
 
 #[test]

@@ -79,7 +79,14 @@ impl Manifest {
         if self.format != FORMAT {
             return Err(Error::ManifestInvalid(format!("format: expected {FORMAT}")));
         }
-        if !valid_id(&self.id) {
+        if self.id.is_empty()
+            || self.id.len() > 64
+            || self.id.starts_with('-')
+            || !self
+                .id
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        {
             return Err(Error::ManifestInvalid(
                 "id: must be 1-64 lowercase letters, digits, or hyphens, starting with a letter or digit".into(),
             ));
@@ -157,17 +164,6 @@ pub fn expand(template: &str, vars: &PathVars) -> Result<PathBuf> {
     }
     result.push_str(remaining);
     Ok(PathBuf::from(result))
-}
-
-/// The game id rule (`validate`, and every game named on the command line): 1-64 lowercase
-/// letters, digits or hyphens, starting with a letter or digit.
-pub fn valid_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= 64
-        && !id.starts_with('-')
-        && id
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
 fn saves_from_invalid() -> Error {

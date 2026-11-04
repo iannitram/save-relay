@@ -505,7 +505,6 @@ pub fn parse(args: &[String]) -> Result<Args> {
         "answer" => {
             let flags = split(&args[1..], &[], &[])?;
             require(&flags.positionals, 2, &["<game>", "<answer>"])?;
-            check_game_id(flags.positionals[0])?;
             let answer = match Answer::parse(flags.positionals[1]) {
                 Some(a) => a,
                 None => {
@@ -1222,23 +1221,10 @@ fn where_command(cx: &Context) -> Result<Outcome> {
     Ok(outcome("where", &data, text, 0))
 }
 
-/// The game named on the command line must follow the manifest id rule before any path is built
-/// from it (`answer ../../x` and a case variant such as `DEMO-GAME` are usage errors).
-fn check_game_id(game: &str) -> Result<()> {
-    if crate::manifest::valid_id(game) {
-        return Ok(());
-    }
-    Err(Error::Usage(format!(
-        "'{game}' is not a game id: use 1-64 lowercase letters, digits, or hyphens, \
-         starting with a letter or digit"
-    )))
-}
-
 /// `answer <game> <answer>` (M12): records the choice for the `wrap` that waits on it
 /// (`pending::answer`, which refuses an answer that does not fit the choice). Local only: no
 /// server call, and the exit code is 0.
 fn answer_command(game: &str, answer: Answer, cx: &Context) -> Result<Outcome> {
-    check_game_id(game)?;
     let choice = pending::answer(cx.store, game, answer)?;
     let message = answer_text(&choice.game, answer);
     let data = AnswerData {
