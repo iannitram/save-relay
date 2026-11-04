@@ -9,6 +9,7 @@ use save_relay::steam::launch::{
     wrapped,
 };
 use save_relay::steam::vdf::{parse, to_text};
+use save_relay::steam::{installed_among, parse_libraries};
 use save_relay::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -131,6 +132,7 @@ fn is_wrapped_names_only_save_relay() {
         "gamemoderun %command%",
         "-novid",
         "/opt/tool/tool wrap -- %command%",
+        "/opt/save-relay-old wrap -- %command%",
         "/opt/save-relay/save-relay run -- %command%",
         "/opt/save-relay/save-relay wrap -- game",
     ] {
@@ -321,6 +323,191 @@ fn install_dry_run_reports_and_writes_nothing() {
 }
 
 #[test]
+fn install_dry_run_over_two_users_writes_nothing() {
+    let root = temp_root();
+    let first = add_user(&root, "42", LOCALCONFIG);
+    let second = add_user(&root, "43", LOCALCONFIG);
+    let data = install(
+        &root,
+        &[480, 1145360],
+        Path::new(BIN),
+        false,
+        true,
+        Platform::Linux,
+        NOW,
+    )
+    .unwrap();
+
+    assert!(data.dry_run);
+    let changes: Vec<(&str, u32)> = data
+        .changed
+        .iter()
+        .map(|c| (c.user_id.as_str(), c.app_id))
+        .collect();
+    assert_eq!(
+        changes,
+        [("42", 480), ("42", 1145360), ("43", 480), ("43", 1145360)]
+    );
+    assert!(data.backups.is_empty());
+    assert_eq!(fs::read(&first).unwrap(), LOCALCONFIG.as_bytes());
+    assert_eq!(fs::read(&second).unwrap(), LOCALCONFIG.as_bytes());
+    assert_eq!(fs::read_dir(first.parent().unwrap()).unwrap().count(), 1);
+    assert_eq!(fs::read_dir(second.parent().unwrap()).unwrap().count(), 1);
+}
+
+#[test]
+fn install_refuses_a_program_not_named_save_relay() {
+    let root = temp_root();
+    let file = add_user(&root, "42", LOCALCONFIG);
+    for program in [
+        "/opt/save-relay/save-relay-linux-x64",
+        "/opt/save-relay/save-relay-old",
+        r"C:\Downloads\save-relay (1).exe",
+        r"C:\Downloads\save-relay-windows-x64.exe",
+    ] {
+        // Refused again on a second attempt: the first one wrote nothing.
+        for _ in 0..2 {
+            let result = install(
+                &root,
+                &[480],
+                Path::new(program),
+                false,
+                false,
+                Platform::Linux,
+                NOW,
+            );
+            assert!(
+                matches!(result, Err(Error::Usage(_))),
+                "{program}: {result:?}"
+            );
+        }
+        assert_eq!(
+            fs::read(&file).unwrap(),
+            LOCALCONFIG.as_bytes(),
+            "{program}"
+        );
+    }
+    assert_eq!(fs::read_dir(file.parent().unwrap()).unwrap().count(), 1);
+    assert!(!root.join("userdata/.save-relay-install-wrap.lock").exists());
+}
+
+#[test]
+fn install_refuses_while_another_run_holds_the_lock() {
+    let root = temp_root();
+    let file = add_user(&root, "42", LOCALCONFIG);
+    let lock = root.join("userdata/.save-relay-install-wrap.lock");
+    fs::write(&lock, "").unwrap();
+    let result = install(
+        &root,
+        &[480],
+        Path::new(BIN),
+        false,
+        false,
+        Platform::Linux,
+        NOW,
+    );
+    assert!(matches!(result, Err(Error::Io(_))), "{result:?}");
+    assert_eq!(fs::read(&file).unwrap(), LOCALCONFIG.as_bytes());
+    assert_eq!(fs::read_dir(file.parent().unwrap()).unwrap().count(), 1);
+    // The lock is another run's to remove, so it stays.
+    assert!(lock.exists());
+}
+
+#[test]
+fn install_removes_its_lock_when_it_ends() {
+    let root = temp_root();
+    add_user(&root, "42", LOCALCONFIG);
+    install(
+        &root,
+        &[480],
+        Path::new(BIN),
+        false,
+        false,
+        Platform::Linux,
+        NOW,
+    )
+    .unwrap();
+    assert!(!root.join("userdata/.save-relay-install-wrap.lock").exists());
+
+    // A run that fails also lets go of its lock.
+    let other = temp_root();
+    add_user(
+        &other,
+        "42",
+        "\"UserLocalConfigStore\"\n{\n\t\"Software\"\n",
+    );
+    let result = install(
+        &other,
+        &[480],
+        Path::new(BIN),
+        false,
+        false,
+        Platform::Linux,
+        NOW,
+    );
+    assert!(matches!(result, Err(Error::Io(_))), "{result:?}");
+    assert!(!other
+        .join("userdata/.save-relay-install-wrap.lock")
+        .exists());
+}
+
+/// Two libraries: apps 480 and 1145360 installed in the first, 2000001 in the second.
+const LIBRARYFOLDERS: &str = r#""libraryfolders"
+{
+	"0"
+	{
+		"path"		"/steam/library-one"
+		"apps"
+		{
+			"480"		"1000"
+			"1145360"		"2000"
+		}
+	}
+	"1"
+	{
+		"path"		"/steam/library-two"
+		"apps"
+		{
+			"2000001"		"3000"
+		}
+	}
+}
+"#;
+
+#[test]
+fn installed_among_keeps_only_the_known_apps_that_are_installed() {
+    let libraries = parse_libraries(LIBRARYFOLDERS).unwrap();
+    // 999 is known but not installed; 3000 is installed but not known; 480 repeats.
+    assert_eq!(
+        installed_among(&libraries, [2000001, 999, 480, 480, 1145360, 3000]),
+        vec![480, 1145360, 2000001]
+    );
+    assert!(installed_among(&libraries, [999]).is_empty());
+}
+
+#[test]
+fn all_known_writes_only_the_installed_app_of_two_in_the_index() {
+    let root = temp_root();
+    let file = add_user(&root, "42", LOCALCONFIG);
+    let libraries = parse_libraries(LIBRARYFOLDERS).unwrap();
+    // The index knows 480 and 1659420; 1659420 is not installed, so only 480 is written.
+    let app_ids = installed_among(&libraries, [1659420, 480]);
+    assert_eq!(app_ids, vec![480]);
+    install(
+        &root,
+        &app_ids,
+        Path::new(BIN),
+        false,
+        false,
+        Platform::Linux,
+        NOW,
+    )
+    .unwrap();
+    assert_eq!(option_in(&file, 480), Some(WRAP.to_string()));
+    assert_eq!(option_in(&file, 1659420), None);
+}
+
+#[test]
 fn install_remove_takes_only_save_relay_back_out() {
     let root = temp_root();
     let file = add_user(&root, "42", LOCALCONFIG);
@@ -504,4 +691,17 @@ fn steam_running_sees_a_live_pid_on_linux() {
     )
     .unwrap();
     assert!(steam_running(Platform::Linux, &home).unwrap());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn steam_running_is_false_for_a_dead_pid_on_linux() {
+    let home = temp_root();
+    fs::create_dir_all(home.join(".steam")).unwrap();
+    // A child that has exited and been reaped: its pid names no process any more.
+    let mut child = std::process::Command::new("true").spawn().unwrap();
+    let pid = child.id();
+    child.wait().unwrap();
+    fs::write(home.join(".steam/steam.pid"), pid.to_string()).unwrap();
+    assert!(!steam_running(Platform::Linux, &home).unwrap());
 }

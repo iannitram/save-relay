@@ -1578,8 +1578,8 @@ fn which_outcome(data: &WhichData, message: String) -> Outcome {
 /// `install-wrap <appid>... | --all-known`: `save-relay wrap -- %command%` in the launch options
 /// of the games picked, in every Steam user's `localconfig.vdf` (`steam::launch::install`).
 /// Steam must not be running: checked before anything is read or written, and Steam is never
-/// closed. `--all-known` takes every app id in the ludusavi data, refreshed when a week old
-/// (as `which` does).
+/// closed. `--all-known` takes every installed app id (`steam::parse_libraries`) that the
+/// ludusavi data knows, refreshed when a week old (as `which` does).
 fn install_wrap(
     app_ids: Vec<u32>,
     all_known: bool,
@@ -1595,10 +1595,14 @@ fn install_wrap(
     let app_ids = if all_known {
         let cache = ludusavi::Cache::new(&AppDirs::from_vars(cx.vars));
         cache.refresh(&*cx.net.transport, cx.now, false)?;
-        cache
+        let known = cache
             .index()?
             .map(|index| index.apps.keys().copied().collect::<Vec<u32>>())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        let libraries = steam::parse_libraries(&std::fs::read_to_string(
+            root.join("steamapps/libraryfolders.vdf"),
+        )?)?;
+        steam::installed_among(&libraries, known)
     } else {
         app_ids
     };

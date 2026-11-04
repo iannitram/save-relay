@@ -67,10 +67,12 @@ pub fn is_wrapped(current: &str) -> bool {
 /// The inverse of `wrapped`: the launch option with save-relay's part taken out (`None` when
 /// nothing else was there). Not wrapped: `current` unchanged (`None` for an empty one).
 ///
-/// Exact for every text that holds `%command%` or is empty. One text has the same meaning to
-/// Steam but comes back shorter: game arguments with no `%command%` (`-novid`) and `%command%`
-/// followed by a space and the same arguments (`%command% -novid`) are both wrapped to the same
-/// text, and both come back as `-novid`.
+/// Exact for every text except two kinds, which come back shorter. `wrapped` writes the same text
+/// for each group named here, so no function can tell the members of a group apart:
+/// - `None`, `""` and `%command%` alone: all three come back `None`.
+/// - `%command%` followed by spaces and game arguments: one space fewer comes back, so
+///   `%command% -novid` comes back as `-novid` (the same text as `-novid` wrapped), and
+///   `%command% ` (one trailing space) comes back as `None`.
 pub fn unwrapped(current: &str) -> Option<String> {
     let Some((start, command)) = locate(current) else {
         return (!current.is_empty()).then(|| current.to_string());
@@ -157,6 +159,9 @@ pub fn steam_running(platform: Platform, home: &Path) -> Result<bool> {
 /// `localconfig.vdf` and every app in `app_ids`, apply `wrapped` (or `unwrapped` with
 /// `remove`); unless `dry_run`, write a backup (once per file per run) and then the file via a
 /// temp file and rename. Returns what changed, apps already in the wanted state left out.
+/// `binary` must be named `save-relay` or `save-relay.exe` (`Error::Usage` otherwise). A real
+/// run with a Steam user holds `<root>/userdata/.save-relay-install-wrap.lock` until it ends
+/// (`Error::Io` when it is already there).
 pub fn install(
     root: &Path,
     app_ids: &[u32],
@@ -167,7 +172,19 @@ pub fn install(
     now: u64,
 ) -> Result<InstallWrapData> {
     let program_path = binary.display().to_string();
+    if !is_program_name(&program_path) {
+        return Err(Error::Usage(format!(
+            "install-wrap needs the program named save-relay or save-relay.exe, not {program_path}: rename it, then run install-wrap again"
+        )));
+    }
     let users = steam::user_ids(root)?;
+    // A real run with a Steam user holds the lock until it has written, or failed, so a second
+    // run refuses instead of rewriting a file this run is changing.
+    let _lock = if dry_run || users.is_empty() {
+        None
+    } else {
+        Some(InstallLock::take(&root.join("userdata"))?)
+    };
     let mut changed = Vec::new();
     let mut backups = Vec::new();
     let mut pending: Vec<(PathBuf, Vec<u8>, Vdf)> = Vec::new();
@@ -283,6 +300,14 @@ fn program_start(head: &str) -> Option<usize> {
     (lower.ends_with("save-relay") || lower.ends_with("save-relay.exe")).then_some(start)
 }
 
+/// True when the program path's last part is `save-relay` or `save-relay.exe` (any case): the
+/// names `is_wrapped` finds. Another name (a release build's, `save-relay (1).exe`) would be
+/// written into the launch option and never found again by `--remove` or a second run.
+fn is_program_name(binary: &str) -> bool {
+    let name = binary.rsplit(['/', '\\']).next().unwrap_or(binary);
+    name.eq_ignore_ascii_case("save-relay") || name.eq_ignore_ascii_case("save-relay.exe")
+}
+
 /// The program path as it goes in the launch option: in double quotes on Windows or when it
 /// holds a space.
 fn program(binary: &str, platform: Platform) -> String {
@@ -368,6 +393,33 @@ fn write_config(path: &Path, config: &Vdf) -> Result<()> {
     fs::write(&temp, vdf::to_text(config))?;
     fs::rename(&temp, path)?;
     Ok(())
+}
+
+/// The lock a real `install` run holds in `<root>/userdata` (where the backups go) while it reads
+/// and writes the `localconfig.vdf` files. Created exclusively, so a second run refuses; removed
+/// when the run ends, whether it wrote or failed.
+const LOCK_NAME: &str = ".save-relay-install-wrap.lock";
+
+struct InstallLock(PathBuf);
+
+impl InstallLock {
+    fn take(userdata: &Path) -> Result<Self> {
+        let path = userdata.join(LOCK_NAME);
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(_) => Ok(Self(path)),
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => Err(Error::Io(format!(
+                "another install-wrap is running, or one stopped: {} is there (delete it if no install-wrap is running)",
+                path.display()
+            ))),
+            Err(error) => Err(error.into()),
+        }
+    }
+}
+
+impl Drop for InstallLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
 }
 
 fn file_name_of(path: &Path) -> String {

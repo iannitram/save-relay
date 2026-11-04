@@ -10,6 +10,7 @@ pub mod vdf;
 
 use crate::error::{Error, Result};
 use crate::platform::{PathVars, Platform};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 /// An environment variable naming the Steam folder; it wins over every default.
@@ -141,6 +142,17 @@ pub fn library_for(libraries: &[Library], app_id: u32) -> Option<&Library> {
     libraries
         .iter()
         .find(|library| library.apps.contains(&app_id))
+}
+
+/// The ids in `known` that some library holds installed, sorted, without repeats. The ludusavi
+/// index knows every Steam game, installed or not: `install-wrap --all-known` writes only these.
+pub fn installed_among(libraries: &[Library], known: impl IntoIterator<Item = u32>) -> Vec<u32> {
+    let installed: BTreeSet<u32> = libraries
+        .iter()
+        .flat_map(|library| library.apps.iter().copied())
+        .collect();
+    let wanted: BTreeSet<u32> = known.into_iter().collect();
+    wanted.intersection(&installed).copied().collect()
 }
 
 /// The install folder name from `steamapps/appmanifest_<id>.acf`'s text (`AppState/installdir`),
