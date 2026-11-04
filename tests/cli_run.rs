@@ -704,12 +704,12 @@ fn waiting_conflict() -> PendingChoice {
         game: GAME.into(),
         kind: ChoiceKind::Conflict,
         server: Some(Side {
-            device: "strix-tablet".into(),
+            device: "device-b".into(),
             time: "2026-10-31T19:53:00Z".into(),
             revision: Some(2),
         }),
         local: Some(Side {
-            device: "amd-handheld".into(),
+            device: "device-a".into(),
             time: "2026-10-31T19:51:00Z".into(),
             revision: None,
         }),
@@ -732,7 +732,7 @@ fn waiting_held() -> PendingChoice {
         server_card: None,
         local_card: None,
         held: Some(Held {
-            device: "strix-tablet".into(),
+            device: "device-b".into(),
             since: "2026-10-31T19:52:00Z".into(),
         }),
         time: "2026-10-31T19:54:00Z".into(),
@@ -743,12 +743,12 @@ fn waiting_held() -> PendingChoice {
 #[test]
 fn pull_anyway_in_text_mode_plays_past_the_other_machines_mark() {
     let remote = Arc::new(MemoryRemote::new());
-    let amd = pushed_machine(&remote, "amd-handheld");
+    let amd = pushed_machine(&remote, "device-a");
     // amd has the game open: its pull writes the open-elsewhere mark.
     let (code, out) = amd.run(&format!("pull {}", amd.game_flags()), "", T0 + 60);
     assert_eq!(code, 0, "{out}");
     let tablet = Machine::new(&remote);
-    tablet.setup("strix-tablet");
+    tablet.setup("device-b");
 
     let (code, out) = tablet.run(&format!("pull {}", tablet.game_flags()), "", T0 + 120);
     assert_eq!(code, 6, "{out}");
@@ -765,7 +765,7 @@ fn pull_anyway_in_text_mode_plays_past_the_other_machines_mark() {
     assert_eq!(code, 0, "{out}");
     assert_eq!(
         out,
-        "Pulled revision 1 from amd-handheld (2026-10-31T19:51:00Z).\n"
+        "Pulled revision 1 from device-a (2026-10-31T19:51:00Z).\n"
     );
     assert_eq!(
         fs::read_to_string(tablet.root.join("saves/slot1.sav")).unwrap(),
@@ -776,11 +776,11 @@ fn pull_anyway_in_text_mode_plays_past_the_other_machines_mark() {
 #[test]
 fn pull_anyway_with_json_returns_the_pull_envelope() {
     let remote = Arc::new(MemoryRemote::new());
-    let amd = pushed_machine(&remote, "amd-handheld");
+    let amd = pushed_machine(&remote, "device-a");
     let (code, out) = amd.run(&format!("pull {}", amd.game_flags()), "", T0 + 60);
     assert_eq!(code, 0, "{out}");
     let tablet = Machine::new(&remote);
-    tablet.setup("strix-tablet");
+    tablet.setup("device-b");
 
     let (code, envelope) = tablet.json(&format!("pull {}", tablet.game_flags()), T0 + 120);
     assert_eq!(code, 6, "{envelope}");
@@ -937,6 +937,83 @@ fn answer_records_a_held_choice_in_text_mode() {
     );
     let stored = machine.store.load_pending(GAME).unwrap().unwrap();
     assert_eq!(stored.answer, Some(Answer::PlayAnyway));
+}
+
+/// The file `wrap` and `answer` keep the pending choice for `game` in.
+fn pending_file(machine: &Machine, game: &str) -> PathBuf {
+    machine
+        .root
+        .join("data")
+        .join("save-relay")
+        .join("pending")
+        .join(format!("{game}.json"))
+}
+
+#[test]
+fn answer_with_a_game_id_that_is_not_the_manifest_id_is_usage_and_changes_nothing() {
+    let remote = Arc::new(MemoryRemote::new());
+    let machine = Machine::new(&remote);
+    machine.store.save_pending(&waiting_conflict()).unwrap();
+    let stored = fs::read(pending_file(&machine, GAME)).unwrap();
+
+    // The file is demo-game's; on a case-insensitive file system the upper-case name finds it.
+    let (code, envelope) = machine.json("answer DEMO-GAME keep-server", T0 + 180);
+    assert_eq!(code, 2, "{envelope}");
+    assert_eq!(envelope["command"], "answer");
+    assert_eq!(envelope["error"]["code"], "usage");
+    assert_eq!(fs::read(pending_file(&machine, GAME)).unwrap(), stored);
+}
+
+#[test]
+fn answer_with_a_traversing_game_id_is_usage_and_reads_and_writes_nothing() {
+    let remote = Arc::new(MemoryRemote::new());
+    let machine = Machine::new(&remote);
+    // A valid choice for another game, planted where `../../x` resolves from pending/: the
+    // store's data folder, next to save-relay.
+    let mut planted = waiting_conflict();
+    planted.game = "other-game".into();
+    fs::create_dir_all(machine.root.join("data")).unwrap();
+    let outside = machine.root.join("data").join("x.json");
+    fs::write(&outside, planted.to_json()).unwrap();
+    let before = fs::read(&outside).unwrap();
+
+    let (code, envelope) = machine.json("answer ../../x keep-server", T0 + 180);
+    assert_eq!(code, 2, "{envelope}");
+    assert_eq!(envelope["command"], "answer");
+    assert_eq!(envelope["error"]["code"], "usage");
+    assert_eq!(fs::read(&outside).unwrap(), before);
+    assert!(!pending_file(&machine, "other-game").exists());
+}
+
+#[test]
+fn answer_refuses_every_game_id_outside_the_manifest_rule() {
+    let remote = Arc::new(MemoryRemote::new());
+    let machine = Machine::new(&remote);
+    machine.store.save_pending(&waiting_conflict()).unwrap();
+    let stored = fs::read(pending_file(&machine, GAME)).unwrap();
+
+    // Reserved device names, a leading hyphen, underscore, dot, and 65 characters.
+    let too_long = "a".repeat(65);
+    for id in [
+        "con",
+        "nul",
+        "com1",
+        "-demo-game",
+        "demo_game",
+        "demo.game",
+        too_long.as_str(),
+    ] {
+        let (code, envelope) = machine.json(&format!("answer {id} keep-server"), T0 + 180);
+        assert_eq!(code, 2, "{id}: {envelope}");
+        assert_eq!(envelope["error"]["code"], "usage", "{id}");
+    }
+    assert_eq!(fs::read(pending_file(&machine, GAME)).unwrap(), stored);
+
+    // The longest id the rule allows is a game id: nothing is waiting for it, so no_pending_choice.
+    let longest = "a".repeat(64);
+    let (code, envelope) = machine.json(&format!("answer {longest} keep-server"), T0 + 180);
+    assert_eq!(code, 2, "{envelope}");
+    assert_eq!(envelope["error"]["code"], "no_pending_choice");
 }
 
 /// `run` connects before a command only if `needs_server` says so: `pull --anyway` must (the

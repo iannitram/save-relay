@@ -505,6 +505,13 @@ pub fn parse(args: &[String]) -> Result<Args> {
         "answer" => {
             let flags = split(&args[1..], &[], &[])?;
             require(&flags.positionals, 2, &["<game>", "<answer>"])?;
+            // Checked before any path is built from `<game>` (pending/<game>.json).
+            if !is_game_id(flags.positionals[0]) {
+                return Err(Error::Usage(format!(
+                    "'{}' is not a game id: use 1-64 lowercase letters, digits or hyphens, starting with a letter or digit, and not a Windows device name",
+                    flags.positionals[0]
+                )));
+            }
             let answer = match Answer::parse(flags.positionals[1]) {
                 Some(a) => a,
                 None => {
@@ -677,6 +684,23 @@ fn resolve(flags: &Flags<'_>) -> Result<Option<Resolve>> {
             "unknown --resolve '{other}': use keep-server or keep-local"
         ))),
     }
+}
+
+/// A game id as the manifest id rule has it (`Manifest::validate` in src/manifest.rs): 1-64 of
+/// `a-z`, `0-9` or `-`, starting with a letter or digit, and not a Windows device name. The
+/// reserved-name check is private to manifest.rs, so the `answer` arm repeats the rule here.
+fn is_game_id(id: &str) -> bool {
+    let reserved = matches!(id, "con" | "prn" | "aux" | "nul")
+        || (id.len() == 4
+            && (id.starts_with("com") || id.starts_with("lpt"))
+            && id.as_bytes()[3].is_ascii_digit());
+    !id.is_empty()
+        && id.len() <= 64
+        && !id.starts_with('-')
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        && !reserved
 }
 
 /// Whether `run` connects to the server before the command, through the saved setup: the commands
