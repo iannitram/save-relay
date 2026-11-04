@@ -704,10 +704,11 @@ fn help_and_version_and_commands_not_built_yet() {
     assert_eq!(code, 0);
     assert!(out.starts_with("save-relay <command>"));
 
-    // This arrives with its own issue; until then it says so, exit 1.
-    let (code, out) = machine.run("panel --json", "", T0);
-    assert_eq!(code, 1, "panel: {out}");
-    assert_eq!(one_envelope(&out)["error"]["code"], "not_built", "panel");
+    // `wrap` arrives with its own issue (F58); until then it says so, exit 1. (`panel` is
+    // built by F63 and serves instead; see tests/panel.rs.)
+    let (code, out) = machine.run("wrap --json -- echo hi", "", T0);
+    assert_eq!(code, 1, "wrap: {out}");
+    assert_eq!(one_envelope(&out)["error"]["code"], "not_built", "wrap");
 }
 
 /// A conflict `wrap` wrote for `GAME`, waiting for an answer.

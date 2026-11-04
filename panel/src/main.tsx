@@ -16,6 +16,6 @@ const bridge = fixtures
 const root = document.getElementById("root");
 if (root) {
   createRoot(root).render(
-    <App bridge={bridge} pictureUrl={fixtures ? fixturePicture : undefined} />,
+    <App bridge={bridge} pictureUrl={fixtures ? fixturePicture : undefined} token={token} />,
   );
 }
