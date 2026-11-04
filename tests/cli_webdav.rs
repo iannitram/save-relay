@@ -497,7 +497,11 @@ fn m5_offline_launch_starts_on_local_saves_and_pushes_at_the_next_launch() {
     // The server goes away: the game starts on the local saves, and the quit cannot push.
     b.point_at(&unused_url());
     expect(b.sync("pull", FIXTURE, &[]), 0, "offline");
-    assert_eq!(b.read(FIXTURE, "slot1.sav"), "fixture slot one\n");
+    // The fixture's own bytes: a Windows checkout may write CRLF, and the pulled copy matches it.
+    assert_eq!(
+        b.read(FIXTURE, "slot1.sav"),
+        fs::read_to_string(fixture_path("saves/fixture-game/slot1.sav")).unwrap()
+    );
     b.write(FIXTURE, "slot1.sav", "chapter two, made offline");
     expect(b.sync("push", FIXTURE, &[]), 0, "deferred");
 

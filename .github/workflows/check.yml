@@ -79,13 +79,25 @@ jobs:
             nextcloud:33-apache
           for _ in $(seq 1 120); do
             status=$(curl -fsS http://127.0.0.1:8080/status.php || true)
+            echo "status.php: $status"
             if echo "$status" | grep -q '"installed":true'; then
               echo "Nextcloud is installed"
               exit 0
             fi
             sleep 5
           done
-          docker logs nextcloud | tail -n 100
+          echo "::group::container state"
+          docker ps -a --filter name=nextcloud
+          echo "::endgroup::"
+          echo "::group::status.php with headers"
+          curl -sS -i http://127.0.0.1:8080/status.php || true
+          echo "::endgroup::"
+          echo "::group::occ status"
+          docker exec -u www-data nextcloud php occ status || true
+          echo "::endgroup::"
+          echo "::group::container log, stdout and stderr, no tail"
+          docker logs nextcloud 2>&1 || true
+          echo "::endgroup::"
           exit 1
       - name: Mint an app password (Linux)
         if: runner.os == 'Linux'
