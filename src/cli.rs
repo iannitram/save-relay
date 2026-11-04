@@ -32,7 +32,7 @@ use crate::api::{
 };
 use crate::clients::{self, Client, ClientSet};
 use crate::creds::{self, CredentialStore, Secret};
-use crate::error::{Error, NotBuilt, Result};
+use crate::error::{Error, Result};
 use crate::http::{Request, Response, Transport};
 use crate::layout::{self, Layout};
 use crate::local::{self, Config, GameRecord, LocalStore};
@@ -1850,10 +1850,6 @@ fn choose_service(stdin: &mut dyn Read, stdout: &mut dyn Write) -> Result<Servic
         ));
     }
     Ok(service)
-}
-
-fn not_built<T>(what: &'static str) -> Result<T> {
-    Err(Error::NotBuilt(NotBuilt(what)))
 }
 
 /// `which <appid>`: where a wrapped Steam game keeps its saves. A manifest of the person's own
