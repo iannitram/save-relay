@@ -110,7 +110,7 @@ jobs:
             for name in SAVE_RELAY_GOOGLE_DESKTOP_ID SAVE_RELAY_GOOGLE_DESKTOP_SECRET \
                         SAVE_RELAY_GOOGLE_DEVICE_ID SAVE_RELAY_GOOGLE_DEVICE_SECRET \
                         SAVE_RELAY_DROPBOX_APP_KEY; do
-              if [ -z "${!name:-}" ]; then
+              if [ -z "$(printf '%s' "${!name:-}" | tr -d '[:space:]')" ]; then
                 echo "::error::$name is not set: a release needs the app registrations (#36)"
                 exit 1
               fi
