@@ -347,3 +347,33 @@ fn wait_uses_a_tiny_timeout_without_real_sleep() {
     );
     assert_eq!(now(), 1);
 }
+
+/// Two `answer` calls on one conflict file at once. Each write has to own its temp file: with
+/// one shared `<file>.json.tmp`, one rename finds the file the other call already renamed (an io
+/// error), or records the other call's answer as its own. Both calls must succeed every round,
+/// and the answer on record must be one of the two.
+#[test]
+fn concurrent_answers_to_one_choice_do_not_share_a_temp_file() {
+    let f = Fixture::new("concurrent");
+    let game = conflict().game;
+    for round in 0..100 {
+        f.store.save_pending(&conflict()).unwrap();
+        let (first, second) = std::thread::scope(|scope| {
+            let first = scope.spawn(|| pending::answer(&f.store, &game, Answer::KeepServer));
+            let second = scope.spawn(|| pending::answer(&f.store, &game, Answer::KeepLocal));
+            (first.join().unwrap(), second.join().unwrap())
+        });
+        assert!(first.is_ok(), "round {round}: first answer: {first:?}");
+        assert!(second.is_ok(), "round {round}: second answer: {second:?}");
+        let stored = f.store.load_pending(&game).unwrap().unwrap().answer;
+        assert!(
+            matches!(stored, Some(Answer::KeepServer | Answer::KeepLocal)),
+            "round {round}: stored answer {stored:?}"
+        );
+    }
+    let names: Vec<_> = fs::read_dir(&f.pending)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    assert_eq!(names, vec![format!("{game}.json")]);
+}
