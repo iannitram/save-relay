@@ -1,7 +1,8 @@
 //! The built `save-relay` binary against a real WebDAV server (issue #23): two machines, each with
 //! its own folders and config, sharing one game, and a second game that joins with only its
-//! manifest. The tests are named after SPEC.md's Musts: M1 to M5 and M7, plus M6 (the password
-//! never reaches a file or an output). A racing push checks the write guard (`If-Match`) on Linux
+//! manifest. The tests are named after SPEC.md's Musts: M1 to M5 and M7, plus M6 for the three
+//! `--password` forms only (`m6_password_flags_are_refused_without_echo` lists what it does not
+//! cover). A racing push checks the write guard (`If-Match`) on Linux
 //! only: rclone 1.73.5, the server the Windows and macOS legs run, ignores `If-Match` and
 //! `If-None-Match`, so only Nextcloud proves that guard. They are ignored by default, so
 //! `cargo test` needs no server. The `integration` job in `.github/workflows/check.yml` starts one
@@ -27,7 +28,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const BINARY: &str = env!("CARGO_BIN_EXE_save-relay");
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
-/// The fixture game's saves, relative to its saves folder (`cache.tmp` is excluded by the manifest).
+/// The fixture game's saves, relative to its saves folder. The manifest's include matches
+/// `cache.tmp` and its exclude removes it, so only the exclude keeps it out of a save.
 const FIXTURE_SAVES: [&str; 3] = ["slot1.sav", "slot2.sav", "profile/progress.sav"];
 
 /// A game under test: its id, and its manifest under `tests/fixtures/games/`.
@@ -579,7 +581,53 @@ fn m5_offline_launch_starts_on_local_saves_and_checks_before_the_deferred_push()
 
 #[test]
 #[ignore = "needs a WebDAV server: see the file comment"]
-fn m6_the_password_never_reaches_a_file_or_an_output() {
+fn m5_a_deferred_save_goes_up_at_the_next_launch_when_the_server_has_not_moved() {
+    let server = Server::from_env();
+    let folder = server_folder("m5-clean");
+    let a = Machine::new("m5-clean", "a", &server);
+    a.setup(&server, "device-a", &folder);
+    a.load_fixture(FIXTURE);
+    expect(a.sync("push", FIXTURE, &[]), 0, "pushed");
+
+    let b = Machine::new("m5-clean", "b", &server);
+    b.setup(&server, "device-b", &folder);
+    expect(b.sync("pull", FIXTURE, &[]), 0, "pulled");
+    expect(b.sync("push", FIXTURE, &[]), 0, "noop");
+
+    // The server goes away: the game starts on the local saves, and the quit cannot push.
+    b.point_at(&unused_url());
+    expect(b.sync("pull", FIXTURE, &[]), 0, "offline");
+    b.write(FIXTURE, "slot1.sav", "chapter two, made offline");
+    expect(b.sync("push", FIXTURE, &[]), 0, "deferred");
+
+    // The server is back and nobody has written since B's pull. B's next launch is no conflict:
+    // its deferred save goes up at that launch, so the server's current entry is B's.
+    b.point_at(&server.url);
+    expect(b.sync("pull", FIXTURE, &[]), 0, "pushed");
+    assert_eq!(b.read(FIXTURE, "slot1.sav"), "chapter two, made offline");
+    let entries = b.history(FIXTURE);
+    assert_eq!(entries[0]["device"], "device-b");
+    assert_eq!(entries[0]["current"], true);
+
+    // B quits with nothing new: the launch already sent the save.
+    expect(b.sync("push", FIXTURE, &[]), 0, "noop");
+
+    // A's next launch brings the deferred save.
+    expect(a.sync("pull", FIXTURE, &[]), 0, "pulled");
+    assert_eq!(a.read(FIXTURE, "slot1.sav"), "chapter two, made offline");
+}
+
+/// M6, for the three `--password` forms. Each is refused before anything is sent, and no part of
+/// the password reaches its stdout or stderr. A password on standard input stays out of the setup
+/// and status envelopes, and out of every file under both machines' folders. The value alone is
+/// refused as an unexpected argument, and that message does not echo it.
+///
+/// Not covered, and still printed by a usage error: a secret typed as the command word, as a bare
+/// flag token, or as the `--resolve`, `--service` or answer value. A value typed as `--device` or
+/// `--root` is kept in `config.json`.
+#[test]
+#[ignore = "needs a WebDAV server: see the file comment"]
+fn m6_password_flags_are_refused_without_echo() {
     let server = Server::from_env();
     let folder = server_folder("m6");
     let a = Machine::new("m6", "a", &server);

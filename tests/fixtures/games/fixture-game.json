@@ -7,6 +7,6 @@
     "windows": "{data}/fixture-game/saves",
     "mac": "{config}/fixture-game/saves"
   },
-  "include": ["**/*.sav"],
+  "include": ["**/*.sav", "**/*.tmp"],
   "exclude": ["**/*.tmp"]
 }
