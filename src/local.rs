@@ -10,8 +10,8 @@
 //! <data>/save-relay/ludusavi/            the ludusavi data cache (`ludusavi::Cache`, M13)
 //! ```
 //!
-//! Every write goes to `<file>.tmp` first and is renamed over the file, so a crash never leaves
-//! half a record.
+//! Every write goes to a temp file of its own in the same folder first and is renamed over the
+//! file, so a crash never leaves half a record and two writes of one file never share a temp file.
 
 use crate::error::{Error, Result};
 use crate::manifest::Manifest;
@@ -21,6 +21,7 @@ use crate::state::LastSynced;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// The config format this build reads and writes.
 pub const FORMAT: u32 = 1;
@@ -238,12 +239,29 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &std::path::Path) -> Result<Opt
         .map_err(|error| Error::StateInvalid(error.to_string()))
 }
 
+/// Counts the temp files this process has made, so no two writes in it share a name.
+static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
 fn write_json<T: Serialize>(path: &std::path::Path, value: &T) -> Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| Error::Io("local file has no parent folder".into()))?;
     fs::create_dir_all(parent)?;
-    let temp = path.with_extension("json.tmp");
+    // Each write gets a temp file of its own, in the same folder: `<file>.<process id>.<n>.tmp`.
+    // Two writes of one file (two `answer` calls, or two threads) never share a name, so neither
+    // renames the other's temp file away. Two live processes never share a process id. A stale
+    // temp file from a crash is truncated only by a later write with the same name, and no live
+    // write owns that name.
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| Error::Io("local file has no name".into()))?;
+    let mut temp_name = file_name.to_os_string();
+    temp_name.push(format!(
+        ".{}.{}.tmp",
+        std::process::id(),
+        TEMP_SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    let temp = parent.join(temp_name);
     let mut text = serde_json::to_string_pretty(value)
         .map_err(|error| Error::StateInvalid(error.to_string()))?;
     text.push('\n');

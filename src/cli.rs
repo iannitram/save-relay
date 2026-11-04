@@ -27,8 +27,8 @@
 //! ```
 
 use crate::api::{
-    self, Action, HistoryData, SetupData, Side, SignInPrompt, SyncReport, WhereData, WhichData,
-    WhichSource,
+    self, Action, AnswerData, HistoryData, SetupData, Side, SignInPrompt, SyncReport, WhereData,
+    WhichData, WhichSource,
 };
 use crate::clients::{self, Client, ClientSet};
 use crate::creds::{self, CredentialStore, Secret};
@@ -39,7 +39,7 @@ use crate::local::{self, Config, GameRecord, LocalStore};
 use crate::ludusavi::{self, Facts};
 use crate::manifest::Manifest;
 use crate::oauth::{self, Pending, TokenSource, Tokens};
-use crate::pending::Answer;
+use crate::pending::{self, Answer};
 use crate::platform::{AppDirs, PathVars, Platform};
 use crate::remote::{self, Precondition, Remote, RemoteEntry};
 use crate::service::{self, Service};
@@ -505,6 +505,13 @@ pub fn parse(args: &[String]) -> Result<Args> {
         "answer" => {
             let flags = split(&args[1..], &[], &[])?;
             require(&flags.positionals, 2, &["<game>", "<answer>"])?;
+            // Checked before any path is built from `<game>` (pending/<game>.json).
+            if !is_game_id(flags.positionals[0]) {
+                return Err(Error::Usage(format!(
+                    "'{}' is not a game id: use 1-64 lowercase letters, digits or hyphens, starting with a letter or digit, and not a Windows device name",
+                    flags.positionals[0]
+                )));
+            }
             let answer = match Answer::parse(flags.positionals[1]) {
                 Some(a) => a,
                 None => {
@@ -679,6 +686,56 @@ fn resolve(flags: &Flags<'_>) -> Result<Option<Resolve>> {
     }
 }
 
+/// A game id as the manifest id rule has it (`Manifest::validate` in src/manifest.rs): 1-64 of
+/// `a-z`, `0-9` or `-`, starting with a letter or digit, and not a Windows device name. The
+/// reserved-name check is private to manifest.rs, so the `answer` arm repeats the rule here.
+fn is_game_id(id: &str) -> bool {
+    let reserved = matches!(id, "con" | "prn" | "aux" | "nul")
+        || (id.len() == 4
+            && (id.starts_with("com") || id.starts_with("lpt"))
+            && id.as_bytes()[3].is_ascii_digit());
+    !id.is_empty()
+        && id.len() <= 64
+        && !id.starts_with('-')
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        && !reserved
+}
+
+/// Whether `run` connects to the server before the command, through the saved setup: the commands
+/// that talk to the server. `setup` connects on its own (it reads its password first), and the
+/// other commands need no server.
+pub fn needs_server(command: &Command) -> bool {
+    matches!(
+        command,
+        Command::Pull { .. }
+            | Command::PullAnyway { .. }
+            | Command::Push { .. }
+            | Command::Status { .. }
+            | Command::History { .. }
+            | Command::Restore { .. }
+            | Command::Where
+            | Command::Picture { .. }
+    )
+}
+
+/// The remote a command works on, connected before the command runs (`run` calls this): the saved
+/// setup's server for a command that `needs_server`, and `NoRemote` for the others. Google Drive
+/// and Dropbox connect inside the command (`with_remote`), so they get `NoRemote` here as well.
+/// `answer` gets `NoRemote` even on a set-up machine: it is local.
+pub fn connect_before(
+    command: &Command,
+    store: &LocalStore,
+    creds: &dyn CredentialStore,
+) -> Result<Box<dyn Remote>> {
+    if !needs_server(command) || uses_service_tokens(store)? {
+        return Ok(Box::new(NoRemote));
+    }
+    let (config, secret) = connection(store, creds)?;
+    connect(&config.server, &config.user, secret)
+}
+
 /// The command's name as it appears in the envelope: "pull" (`Pull` and `PullAnyway`), "push",
 /// "status", "history", "restore", "setup" (both setup forms), "wrap", "which",
 /// "install-wrap", "answer", "where", "picture", "panel", "help", "version".
@@ -811,24 +868,10 @@ pub fn run(args: &[String], stdin: &mut dyn Read, stdout: &mut dyn Write) -> i32
             let remote = connect(server, user, Secret::new(line.clone()))?;
             Ok((remote, Some(line)))
         }),
-        Ok(Args {
-            command:
-                Command::Pull { .. }
-                | Command::Push { .. }
-                | Command::Status { .. }
-                | Command::History { .. }
-                | Command::Restore { .. }
-                | Command::Where
-                | Command::Picture { .. },
-            ..
-        }) => match uses_service_tokens(&store) {
-            Ok(true) => Ok((Box::new(NoRemote), None)),
-            Ok(false) => connection(&store, &*creds).and_then(|(config, secret)| {
-                Ok((connect(&config.server, &config.user, secret)?, None))
-            }),
-            Err(error) => Err(error),
-        },
-        _ => Ok((Box::new(NoRemote), None)),
+        Ok(Args { command, .. }) => {
+            connect_before(command, &store, &*creds).map(|remote| (remote, None))
+        }
+        Err(_) => Ok((Box::new(NoRemote), None)),
     };
     let (remote, password_line) = match connected {
         Ok(pair) => pair,
@@ -1019,17 +1062,22 @@ fn execute(command: Command, stdin: &mut dyn Read, cx: &Context) -> Result<Outco
                 "choose a service: nextcloud, gdrive or dropbox".into(),
             )),
         },
-        Command::Pull { game, resolve } => sync_command("pull", &game, resolve, cx),
-        Command::Push { game, resolve } => sync_command("push", &game, resolve, cx),
+        Command::Pull { game, resolve } => sync_command("pull", &game, resolve, false, cx),
+        Command::PullAnyway { game, resolve } => sync_command("pull", &game, resolve, true, cx),
+        Command::Push { game, resolve } => sync_command("push", &game, resolve, false, cx),
         Command::Status { game } => status(&game, cx),
         Command::History { game } => history(&game, cx),
         Command::Restore { game, entry } => restore(&game, &entry, cx),
         // Each of these is filled in by the issue that builds it (docs/code-map.md).
-        Command::PullAnyway { .. } => not_built("pull --anyway (F50)"),
         Command::Wrap { .. } => not_built("wrap (F58)"),
         Command::Which { app_id } => which(app_id, cx),
-        Command::InstallWrap { .. } => not_built("install-wrap (F59)"),
-        Command::Answer { .. } => not_built("answer (F57)"),
+        Command::InstallWrap {
+            app_ids,
+            all_known,
+            remove,
+            dry_run,
+        } => install_wrap(app_ids, all_known, remove, dry_run, cx),
+        Command::Answer { game, answer } => answer_command(&game, answer, cx),
         Command::Where => where_command(cx),
         Command::Picture { game, entry, out } => picture_command(&game, &entry, &out, cx),
         // `run_with_net` serves the panel before it gets here.
@@ -1154,10 +1202,13 @@ fn load_game(arg: &GameArg, cx: &Context) -> Result<Game> {
     Ok(game)
 }
 
+/// `pull` and `push`. `anyway` is `pull --anyway` (M11): play past another machine's open-elsewhere
+/// mark; a push decides without the mark and ignores it.
 fn sync_command(
     command: &str,
     arg: &GameArg,
     resolve: Option<Resolve>,
+    anyway: bool,
     cx: &Context,
 ) -> Result<Outcome> {
     let config = load_config(cx)?;
@@ -1165,7 +1216,7 @@ fn sync_command(
     let report = with_remote(&config, cx, |remote| {
         let s = session(&config, remote, cx)?;
         if command == "pull" {
-            sync::pull(&s, &game, cx.store, resolve, false)
+            sync::pull(&s, &game, cx.store, resolve, anyway)
         } else {
             sync::push(&s, &game, cx.store, resolve)
         }
@@ -1244,6 +1295,32 @@ fn where_command(cx: &Context) -> Result<Outcome> {
     })?;
     let text = where_text(&data);
     Ok(outcome("where", &data, text, 0))
+}
+
+/// `answer <game> <answer>` (M12): records the choice for the `wrap` that waits on it
+/// (`pending::answer`, which refuses an answer that does not fit the choice). Local only: no
+/// server call, and the exit code is 0.
+fn answer_command(game: &str, answer: Answer, cx: &Context) -> Result<Outcome> {
+    let choice = pending::answer(cx.store, game, answer)?;
+    let message = answer_text(&choice.game, answer);
+    let data = AnswerData {
+        game: choice.game,
+        kind: choice.kind,
+        answer,
+        message: message.clone(),
+    };
+    Ok(outcome("answer", &data, message, 0))
+}
+
+/// What `answer` says back: the answer on record, and what the waiting `wrap` does with it.
+fn answer_text(game: &str, answer: Answer) -> String {
+    let effect = match answer {
+        Answer::KeepServer => "the server's saves win the conflict",
+        Answer::KeepLocal => "this machine's saves win the conflict",
+        Answer::PlayAnyway => "the game starts past the open-elsewhere mark",
+        Answer::Wait => "the game waits until the open-elsewhere mark clears",
+    };
+    format!("Recorded {} for {game}: {effect}.", answer.key())
 }
 
 /// Switching service or account starts fresh (docs/adr/0002-storage-backends.md): the credentials
@@ -1603,6 +1680,62 @@ fn which(app_id: u32, cx: &Context) -> Result<Outcome> {
 fn which_outcome(data: &WhichData, message: String) -> Outcome {
     let text = format!("{message}\nFiles: {}", data.include.join(", "));
     outcome("which", data, text, 0)
+}
+
+/// `install-wrap <appid>... | --all-known`: `save-relay wrap -- %command%` in the launch options
+/// of the games picked, in every Steam user's `localconfig.vdf` (`steam::launch::install`).
+/// Steam must not be running: checked before anything is read or written, and Steam is never
+/// closed. `--all-known` takes every installed app id (`steam::parse_libraries`) that the
+/// ludusavi data knows, refreshed when a week old (as `which` does).
+fn install_wrap(
+    app_ids: Vec<u32>,
+    all_known: bool,
+    remove: bool,
+    dry_run: bool,
+    cx: &Context,
+) -> Result<Outcome> {
+    if steam::launch::steam_running(cx.platform, &cx.vars.home)? {
+        return Err(Error::SteamRunning);
+    }
+    let env = |name: &str| std::env::var(name).ok();
+    let root = steam::find_root(cx.platform, cx.vars, &env)?;
+    let app_ids = if all_known {
+        let cache = ludusavi::Cache::new(&AppDirs::from_vars(cx.vars));
+        cache.refresh(&*cx.net.transport, cx.now, false)?;
+        let known = cache
+            .index()?
+            .map(|index| index.apps.keys().copied().collect::<Vec<u32>>())
+            .unwrap_or_default();
+        let libraries = steam::parse_libraries(&std::fs::read_to_string(
+            root.join("steamapps/libraryfolders.vdf"),
+        )?)?;
+        steam::launch::installed_among(&libraries, known)
+    } else {
+        app_ids
+    };
+    let binary = std::env::current_exe()?;
+    let data = steam::launch::install(
+        &root,
+        &app_ids,
+        &binary,
+        remove,
+        dry_run,
+        cx.platform,
+        cx.now,
+    )?;
+    let mut text = data.message.clone();
+    for change in &data.changed {
+        text.push_str(&format!(
+            "\n  {} (Steam user {}): {}",
+            change.app_id,
+            change.user_id,
+            change.after.as_deref().unwrap_or("(no launch option)")
+        ));
+    }
+    for backup in &data.backups {
+        text.push_str(&format!("\nbackup: {backup}"));
+    }
+    Ok(outcome("install-wrap", &data, text, 0))
 }
 
 /// What this machine knows about a wrapped Steam game for `ludusavi::translate`: its Steam

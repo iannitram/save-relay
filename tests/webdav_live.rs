@@ -1,5 +1,6 @@
 //! Live check of `WebDav` against a Nextcloud test container (F17). Ignored by default, so
-//! normal CI never needs a server. Run it with:
+//! normal CI never needs a server; the PUT status mapping is also checked with a recording fake,
+//! which does run in normal CI. Run the live check with:
 //!
 //! ```text
 //! SR_NC_SERVER=http://127.0.0.1:8099 SR_NC_USER=<user> SR_NC_PASSWORD=<password> \
@@ -9,11 +10,11 @@
 //! It works in one folder it creates (`sr-live-<pid>`) and deletes that folder at the end.
 #![cfg(feature = "http")]
 use save_relay::creds::Secret;
-use save_relay::http::UreqTransport;
+use save_relay::http::{Request, Response, Transport, UreqTransport};
 use save_relay::remote::{Precondition, Remote};
 use save_relay::webdav::{files_url, WebDav};
-use save_relay::Error;
-use std::sync::Arc;
+use save_relay::{Error, Result};
+use std::sync::{Arc, Mutex};
 
 fn env(name: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| panic!("set {name} to run the live check"))
@@ -72,8 +73,8 @@ fn all_seven_methods_and_status_mappings_against_a_live_server() {
         let err = dav
             .put(&format!("{root}/nope/x.txt"), b"x", &Precondition::Any)
             .unwrap_err();
-        assert!(matches!(err, Error::NotFound(_)), "{err:?}");
-        println!("put missing parent (409): {err:?}");
+        assert_eq!(err, Error::NotFound(format!("{root}/nope")), "{err:?}");
+        println!("put missing parent (404, names the parent): {err:?}");
 
         // list: the folder's child, with name, size and etag.
         let entries = dav.list(&root).unwrap();
@@ -141,4 +142,62 @@ fn a_wrong_password_is_auth_failed_and_never_appears_in_an_error() {
         assert!(!text.contains(wrong), "password leaked: {text}");
     }
     println!("401 on all seven methods: AuthFailed, password absent from Display and Debug");
+}
+
+/// Answers every request with one status and records what was sent.
+struct Recorder {
+    status: u16,
+    sent: Mutex<Vec<Request>>,
+}
+
+impl Transport for Recorder {
+    fn send(&self, request: &Request) -> Result<Response> {
+        self.sent.lock().unwrap().push(request.clone());
+        Ok(Response::new(self.status, ""))
+    }
+}
+
+#[test]
+fn put_404_and_409_name_the_parent_folder() {
+    for status in [404, 409] {
+        let recorder = Arc::new(Recorder {
+            status,
+            sent: Mutex::new(Vec::new()),
+        });
+        let transport: Arc<dyn Transport> = recorder.clone();
+        let dav = WebDav::new(
+            "https://cloud.test/remote.php/dav/files/alex/",
+            "alex",
+            Secret::new("s3cret"),
+            transport,
+        );
+        let err = dav
+            .put("save-relay/g/x.sav", b"x", &Precondition::Any)
+            .unwrap_err();
+        assert_eq!(
+            err,
+            Error::NotFound("save-relay/g".into()),
+            "status {status}"
+        );
+        let sent = recorder.sent.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].method, "PUT");
+    }
+
+    // A 404 anywhere else still names the path that was asked for.
+    let recorder = Arc::new(Recorder {
+        status: 404,
+        sent: Mutex::new(Vec::new()),
+    });
+    let transport: Arc<dyn Transport> = recorder.clone();
+    let dav = WebDav::new(
+        "https://cloud.test/remote.php/dav/files/alex/",
+        "alex",
+        Secret::new("s3cret"),
+        transport,
+    );
+    assert_eq!(
+        dav.get("save-relay/g/x.sav").unwrap_err(),
+        Error::NotFound("save-relay/g/x.sav".into())
+    );
 }
