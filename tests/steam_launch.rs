@@ -455,6 +455,27 @@ fn install_refuses_a_file_it_cannot_read_and_writes_nothing() {
 }
 
 #[test]
+fn install_reads_every_file_before_it_writes_any() {
+    let root = temp_root();
+    let first = add_user(&root, "42", LOCALCONFIG);
+    let broken = "\"UserLocalConfigStore\"\n{\n\t\"Software\"\n";
+    let second = add_user(&root, "43", broken);
+    let result = install(
+        &root,
+        &[480],
+        Path::new(BIN),
+        false,
+        false,
+        Platform::Linux,
+        NOW,
+    );
+    assert!(matches!(result, Err(Error::Io(_))), "{result:?}");
+    assert_eq!(fs::read_to_string(&first).unwrap(), LOCALCONFIG);
+    assert_eq!(fs::read(&second).unwrap(), broken.as_bytes());
+    assert_eq!(fs::read_dir(first.parent().unwrap()).unwrap().count(), 1);
+}
+
+#[test]
 fn steam_running_is_false_without_a_pid_file() {
     let home = temp_root();
     assert!(!steam_running(Platform::Linux, &home).unwrap());

@@ -170,6 +170,7 @@ pub fn install(
     let users = steam::user_ids(root)?;
     let mut changed = Vec::new();
     let mut backups = Vec::new();
+    let mut pending: Vec<(PathBuf, Vec<u8>, Vdf)> = Vec::new();
     for user_id in &users {
         let path = root
             .join("userdata")
@@ -202,9 +203,17 @@ pub fn install(
             });
             file_changed = true;
         }
-        if file_changed && !dry_run {
-            backups.push(write_backup(&path, &bytes, now)?.display().to_string());
-            write_config(&path, &config)?;
+        if file_changed {
+            pending.push((path, bytes, config));
+        }
+    }
+    // Every file is read and parsed before the first write, so a file that cannot be read or
+    // parsed leaves the others as they were. A write that fails part way can still leave the
+    // files before it rewritten; their backups are listed in the result.
+    if !dry_run {
+        for (path, bytes, config) in &pending {
+            backups.push(write_backup(path, bytes, now)?.display().to_string());
+            write_config(path, config)?;
         }
     }
     let count = changed.len();
