@@ -464,20 +464,35 @@ fn a_restore_backup_of_unsynced_local_changes_carries_a_card() {
     let f = Fixture::new();
     f.write("a.sav", b"first");
     f.push_at(NOW);
-    let first = history(&f.session(DEVICE, NOW + 5), GAME)
+    f.write("a.sav", b"second");
+    f.push_at(NOW + 1);
+    // The older entry is restored, not the server's current one (the second push).
+    let current = server_state(&f.remote).entry;
+    let older = history(&f.session(DEVICE, NOW + 5), GAME)
         .unwrap()
         .entries
-        .remove(0)
-        .entry;
+        .into_iter()
+        .map(|row| row.entry)
+        .find(|entry| *entry != current)
+        .unwrap();
     f.write("a.sav", b"unsynced");
     f.write("shots/last.png", PNG);
     f.write(
         SIDECAR,
         br#"{"place":"Chapter 7","picture":"shots/last.png"}"#,
     );
+    // A play session is running, yet the backup has no playtime: it is no session's push.
+    f.store
+        .save_session(&save_relay::local::Session {
+            format: save_relay::local::FORMAT,
+            game: GAME.into(),
+            started: NOW + 1,
+        })
+        .unwrap();
 
-    let data = restore(&f.session(DEVICE, NOW + 10), &f.game, &f.store, &first).unwrap();
+    let data = restore(&f.session(DEVICE, NOW + 10), &f.game, &f.store, &older).unwrap();
 
+    assert_eq!(fs::read(f.game.saves_dir.join("a.sav")).unwrap(), b"first");
     let backup = data.backup.expect("unsynced local changes are backed up");
     let rows = history(&f.session(DEVICE, NOW + 20), GAME).unwrap().entries;
     let row = rows.iter().find(|row| row.entry == backup).unwrap();
