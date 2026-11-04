@@ -9,6 +9,8 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+  # TEMPORARY (#24): runs the build legs and the checksum step on this PR. Reverted before merge.
+  pull_request:
 
 permissions:
   contents: read
@@ -185,7 +187,7 @@ jobs:
           out="$PWD/dist"
           mkdir -p "$out" stage/save-relay/bin stage/save-relay/dist
           # Decky Loader installs a zip by its top-level folder, so the plugin sits under save-relay/.
-          cp decky/plugin.json decky/main.py stage/save-relay/
+          cp decky/plugin.json decky/main.py decky/package.json stage/save-relay/
           cp -r decky/dist/. stage/save-relay/dist/
           cp "linux-binary/save-relay-${VERSION}-x86_64-unknown-linux-musl" stage/save-relay/bin/save-relay
           # The artifact may lose the executable bit, and main.py checks it before it runs the binary.
