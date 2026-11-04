@@ -1025,7 +1025,12 @@ fn execute(command: Command, stdin: &mut dyn Read, cx: &Context) -> Result<Outco
         Command::PullAnyway { .. } => not_built("pull --anyway (F50)"),
         Command::Wrap { .. } => not_built("wrap (F58)"),
         Command::Which { app_id } => which(app_id, cx),
-        Command::InstallWrap { .. } => not_built("install-wrap (F59)"),
+        Command::InstallWrap {
+            app_ids,
+            all_known,
+            remove,
+            dry_run,
+        } => install_wrap(app_ids, all_known, remove, dry_run, cx),
         Command::Answer { .. } => not_built("answer (F57)"),
         Command::Where => where_command(cx),
         Command::Picture { game, entry, out } => picture_command(&game, &entry, &out, cx),
@@ -1568,6 +1573,62 @@ fn which(app_id: u32, cx: &Context) -> Result<Outcome> {
 fn which_outcome(data: &WhichData, message: String) -> Outcome {
     let text = format!("{message}\nFiles: {}", data.include.join(", "));
     outcome("which", data, text, 0)
+}
+
+/// `install-wrap <appid>... | --all-known`: `save-relay wrap -- %command%` in the launch options
+/// of the games picked, in every Steam user's `localconfig.vdf` (`steam::launch::install`).
+/// Steam must not be running: checked before anything is read or written, and Steam is never
+/// closed. `--all-known` takes every installed app id (`steam::parse_libraries`) that the
+/// ludusavi data knows, refreshed when a week old (as `which` does).
+fn install_wrap(
+    app_ids: Vec<u32>,
+    all_known: bool,
+    remove: bool,
+    dry_run: bool,
+    cx: &Context,
+) -> Result<Outcome> {
+    if steam::launch::steam_running(cx.platform, &cx.vars.home)? {
+        return Err(Error::SteamRunning);
+    }
+    let env = |name: &str| std::env::var(name).ok();
+    let root = steam::find_root(cx.platform, cx.vars, &env)?;
+    let app_ids = if all_known {
+        let cache = ludusavi::Cache::new(&AppDirs::from_vars(cx.vars));
+        cache.refresh(&*cx.net.transport, cx.now, false)?;
+        let known = cache
+            .index()?
+            .map(|index| index.apps.keys().copied().collect::<Vec<u32>>())
+            .unwrap_or_default();
+        let libraries = steam::parse_libraries(&std::fs::read_to_string(
+            root.join("steamapps/libraryfolders.vdf"),
+        )?)?;
+        steam::launch::installed_among(&libraries, known)
+    } else {
+        app_ids
+    };
+    let binary = std::env::current_exe()?;
+    let data = steam::launch::install(
+        &root,
+        &app_ids,
+        &binary,
+        remove,
+        dry_run,
+        cx.platform,
+        cx.now,
+    )?;
+    let mut text = data.message.clone();
+    for change in &data.changed {
+        text.push_str(&format!(
+            "\n  {} (Steam user {}): {}",
+            change.app_id,
+            change.user_id,
+            change.after.as_deref().unwrap_or("(no launch option)")
+        ));
+    }
+    for backup in &data.backups {
+        text.push_str(&format!("\nbackup: {backup}"));
+    }
+    Ok(outcome("install-wrap", &data, text, 0))
 }
 
 /// What this machine knows about a wrapped Steam game for `ludusavi::translate`: its Steam
