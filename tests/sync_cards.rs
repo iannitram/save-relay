@@ -498,6 +498,7 @@ fn a_restore_backup_of_unsynced_local_changes_carries_a_card() {
     let row = rows.iter().find(|row| row.entry == backup).unwrap();
     let card = row.card.as_ref().expect("the backup entry has a card");
     // This machine's card of the local saves, as the keep-server backup's: no playtime.
+    assert_eq!(card.format, save_relay::card::FORMAT);
     assert_eq!(card.device, DEVICE);
     assert_eq!(card.time, stamp::rfc3339(NOW + 10));
     assert_eq!(card.place.as_deref(), Some("Chapter 7"));
