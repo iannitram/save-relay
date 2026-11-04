@@ -3,11 +3,14 @@
 //! from the same front end (`panel/`), served on `127.0.0.1` by a tiny HTTP/1.1 server on
 //! `std::net` (no new dependency).
 //!
-//! - `GET /` (also `/index.html`): the front end's page, with the token. The front end's other
-//!   files (`GET /app.js`, `/app.css`) need no token, so the page loads. They are embedded in the
-//!   binary at build time from `panel/dist` with the `panel-dist` feature (after
-//!   `pnpm --dir panel build`, which writes fixed names); without it, the placeholder page
-//!   `panel/placeholder/index.html`, so `cargo build` never needs Node. No build script.
+//! - `GET /` (also `/index.html`): the front end's page. Its `./app.js` and `./app.css`
+//!   references carry the token (`served_page`), so the browser sends it for those files too.
+//!   The files are embedded in the binary at build time from `panel/dist` with the `panel-dist`
+//!   feature (after `pnpm --dir panel build`, which writes fixed names); without it, the
+//!   placeholder page `panel/placeholder/index.html`, so `cargo build` never needs Node. No build
+//!   script.
+//! - `GET /<file>` (`/app.js`, `/app.css`): the front end's other files, with the token like
+//!   every request.
 //! - `POST /api/<command>` with a JSON object body: runs the same code as the command line
 //!   (`api_args`, then `cli::run`) and answers its `--json` envelope with status 200, failures
 //!   included. A refused request (an unknown or missing field, a command the panel does not run)
@@ -16,10 +19,10 @@
 //! - `GET /picture/<game>/<entry>` (or `.../<game>/<entry>/<file>`, which the front end sends):
 //!   a save card's picture, as `image/jpeg` or `image/png` by its magic bytes.
 //!
-//! A random token is in the URL that is opened (`/?token=...`) and must come with the page, the
-//! API and the pictures (`X-Save-Relay-Token` header or `token` query), so other pages in the
-//! browser cannot call it; a missing or wrong token is 403. The browser opens like
-//! `oauth::open_browser`. Requests are answered one at a time.
+//! A random token is in the URL that is opened (`/?token=...`) and must come with every request
+//! (`X-Save-Relay-Token` header or `token` query): the page, its files, the API and the pictures.
+//! So other pages in the browser cannot call it; a missing or wrong token is 403. The browser
+//! opens like `oauth::open_browser`. Requests are answered one at a time.
 
 use crate::api::{self, PanelData};
 use crate::card;
@@ -191,31 +194,24 @@ pub enum Route {
     NotFound,
 }
 
-/// Route `request`. The front end's files other than `index.html` need no token. Everything else
-/// is checked for the token first: the header when it is there, else the `token` query. Then
-/// `/` and `/index.html` are the page, `POST /api/<command>` runs a command and
-/// `GET /picture/<game>/<entry>` (with or without a file segment) is a picture. Pure.
+/// Route `request`. Every request is checked for the token first: the header when it is there,
+/// else the `token` query. Then `/` and `/index.html` are the page, `GET /<file>` is one of the
+/// front end's other files, `POST /api/<command>` runs a command and `GET /picture/<game>/<entry>`
+/// (with or without a file segment) is a picture. Pure.
 pub fn route(request: &Request, token: &str) -> Route {
-    let path = request.path.as_str();
-    if request.method == "GET" && path != "/" && path != "/index.html" {
-        let file = path.strip_prefix('/').and_then(|name| {
-            assets::ASSETS
-                .iter()
-                .find(|entry| entry.0 != "index.html" && entry.0 == name)
-        });
-        if let Some(entry) = file {
-            return Route::Asset(entry.0);
-        }
-    }
     let given = header(request, TOKEN_HEADER).or_else(|| query_value(request, "token"));
     if !given.is_some_and(|given| same_token(given, token)) {
         return Route::Forbidden;
     }
+    let path = request.path.as_str();
     match request.method.as_str() {
         "GET" if path == "/" || path == "/index.html" => Route::Asset("index.html"),
-        "GET" => match path.strip_prefix("/picture/") {
-            Some(rest) => picture_route(rest),
-            None => Route::NotFound,
+        "GET" => match asset_named(path) {
+            Some(name) => Route::Asset(name),
+            None => match path.strip_prefix("/picture/") {
+                Some(rest) => picture_route(rest),
+                None => Route::NotFound,
+            },
         },
         "POST" => match path.strip_prefix("/api/") {
             Some(command) if API_COMMANDS.contains(&command) => Route::Api(command.to_string()),
@@ -223,6 +219,30 @@ pub fn route(request: &Request, token: &str) -> Route {
         },
         _ => Route::NotFound,
     }
+}
+
+/// The embedded file that `path` names (`/app.js`), other than the page itself.
+fn asset_named(path: &str) -> Option<&'static str> {
+    let name = path.strip_prefix('/')?;
+    assets::ASSETS
+        .iter()
+        .find(|entry| entry.0 != "index.html" && entry.0 == name)
+        .map(|entry| entry.0)
+}
+
+/// The page as it is served: its `./app.js` and `./app.css` references carry the token
+/// (`./app.js?token=...`). A relative reference drops the page's own query, so without this the
+/// browser would ask for the files with no token. The token is base64url, which needs no escaping
+/// in an attribute. A page without those references (the placeholder) is returned unchanged.
+pub fn served_page(token: &str, html: &[u8]) -> Vec<u8> {
+    let mut page = String::from_utf8_lossy(html).into_owned();
+    for file in ["app.js", "app.css"] {
+        page = page.replace(
+            &format!("\"./{file}\""),
+            &format!("\"./{file}?token={token}\""),
+        );
+    }
+    page.into_bytes()
 }
 
 /// The command-line arguments for an API call: `<command>` with its fields as flags
@@ -376,6 +396,7 @@ fn write_answer(
 fn answer(request: &Request, token: &str, run: &RunCommand) -> Answer {
     match route(request, token) {
         Route::Asset(name) => match assets::ASSETS.iter().find(|entry| entry.0 == name) {
+            Some(entry) if name == "index.html" => (200, entry.2, served_page(token, entry.1)),
             Some(entry) => (200, entry.2, entry.1.to_vec()),
             None => (404, TEXT, b"not found".to_vec()),
         },

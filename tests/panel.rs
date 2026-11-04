@@ -204,31 +204,49 @@ fn the_token_is_checked_before_the_path() {
 }
 
 #[test]
-fn the_front_end_files_other_than_the_page_need_no_token() {
+fn the_front_end_files_need_the_token_like_every_other_request() {
+    let by_header = parsed("GET", "/app.js", &[token_line()], "");
+    let by_query = parsed("GET", &format!("/app.css?token={TOKEN}"), &[], "");
     #[cfg(feature = "panel-dist")]
     {
-        assert_eq!(
-            route(&parsed("GET", "/app.js", &[], ""), TOKEN),
-            Route::Asset("app.js")
-        );
-        assert_eq!(
-            route(&parsed("GET", "/app.css", &[], ""), TOKEN),
-            Route::Asset("app.css")
-        );
+        assert_eq!(route(&by_header, TOKEN), Route::Asset("app.js"));
+        assert_eq!(route(&by_query, TOKEN), Route::Asset("app.css"));
     }
     #[cfg(not(feature = "panel-dist"))]
     {
-        // The placeholder build has no other files: without the token it is refused.
-        assert_eq!(
-            route(&parsed("GET", "/app.js", &[], ""), TOKEN),
-            Route::Forbidden
-        );
+        // The placeholder build has no other files.
+        assert_eq!(route(&by_header, TOKEN), Route::NotFound);
+        assert_eq!(route(&by_query, TOKEN), Route::NotFound);
     }
-    // Only GET is exempt: a POST to a file name still needs the token.
+    assert_eq!(
+        route(&parsed("GET", "/app.js", &[], ""), TOKEN),
+        Route::Forbidden
+    );
+    let wrong = parsed("GET", "/app.css?token=nope", &[], "");
+    assert_eq!(route(&wrong, TOKEN), Route::Forbidden);
+    // A POST to a file name is not an API call, with or without the token.
+    assert_eq!(
+        route(&parsed("POST", "/app.js", &[token_line()], ""), TOKEN),
+        Route::NotFound
+    );
     assert_eq!(
         route(&parsed("POST", "/app.js", &[], ""), TOKEN),
         Route::Forbidden
     );
+}
+
+#[test]
+fn the_served_page_carries_the_token_on_its_front_end_files() {
+    let html = br#"<script type="module" crossorigin src="./app.js"></script><link rel="stylesheet" crossorigin href="./app.css"><a href="./app.json">x</a>"#;
+    let served = String::from_utf8(panel::served_page(TOKEN, html)).expect("text");
+    assert_eq!(
+        served,
+        format!(
+            r#"<script type="module" crossorigin src="./app.js?token={TOKEN}"></script><link rel="stylesheet" crossorigin href="./app.css?token={TOKEN}"><a href="./app.json">x</a>"#
+        )
+    );
+    let placeholder = b"<p>this build has no panel</p>";
+    assert_eq!(panel::served_page(TOKEN, placeholder), placeholder.to_vec());
 }
 
 #[test]
@@ -742,13 +760,36 @@ fn the_picture_url_the_front_end_builds_loads_with_the_token_in_its_query() {
 }
 
 #[test]
-fn the_front_end_files_load_without_the_token_when_they_are_built_in() {
+fn the_front_end_files_are_refused_without_the_token_over_the_socket() {
     let data = start(fake_run(Vec::new()));
+    let token = token_in(&data.url);
     let (status, _) = get(data.port, "/app.js", None);
+    assert_eq!(status, "HTTP/1.1 403 Forbidden");
+    let wrong = format!("{TOKEN_HEADER}: {}", "x".repeat(43));
+    let (status, _) = get(data.port, "/app.css", Some(wrong));
+    assert_eq!(status, "HTTP/1.1 403 Forbidden");
+    let right = format!("{TOKEN_HEADER}: {token}");
+    let (status, _) = get(data.port, "/app.js", Some(right));
     #[cfg(feature = "panel-dist")]
     assert_eq!(status, "HTTP/1.1 200 OK");
     #[cfg(not(feature = "panel-dist"))]
-    assert_eq!(status, "HTTP/1.1 403 Forbidden");
+    assert_eq!(status, "HTTP/1.1 404 Not Found");
+}
+
+#[cfg(feature = "panel-dist")]
+#[test]
+fn the_page_loads_its_front_end_files_with_the_token_it_carries() {
+    let data = start(fake_run(Vec::new()));
+    let token = token_in(&data.url);
+    let (status, page) = get(data.port, &format!("/?token={token}"), None);
+    assert_eq!(status, "HTTP/1.1 200 OK");
+    let page = String::from_utf8_lossy(&page).into_owned();
+    for file in ["app.js", "app.css"] {
+        assert!(page.contains(&format!("./{file}?token={token}")), "{file}");
+        let (status, body) = get(data.port, &format!("/{file}?token={token}"), None);
+        assert_eq!(status, "HTTP/1.1 200 OK", "{file}");
+        assert!(!body.is_empty(), "{file}");
+    }
 }
 
 #[test]
