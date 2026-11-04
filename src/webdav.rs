@@ -244,10 +244,20 @@ fn hex_value(byte: u8) -> Option<u8> {
     }
 }
 
+/// The folder above `path`: `"a/b/f"` -> `"a/b"`, `"f"` -> `""` (the files root).
+fn parent_path(path: &str) -> String {
+    match path.rfind('/') {
+        Some(pos) => path[..pos].to_string(),
+        None => String::new(),
+    }
+}
+
 /// The real server, over any `Transport`. Every request carries Basic auth; 401/403 is `Error::AuthFailed`; a
 /// connection, DNS, TLS or timeout failure is `Error::Unreachable`; 412 on PUT is `Error::Changed`
-/// (on COPY/MOVE it is `Error::Server("exists")`); 404 is `Error::NotFound`; 409 on
-/// PUT/MKCOL/MOVE/COPY is `Error::NotFound(parent)`.
+/// (on COPY/MOVE it is `Error::Server("exists")`); 404 is `Error::NotFound(path)`; 409 on
+/// PUT/MKCOL/MOVE/COPY is `Error::NotFound(parent)`. 404 on PUT is `Error::NotFound(parent)` too:
+/// Nextcloud answers a PUT under a missing folder with 404, not 409. `parent` is the path without
+/// its last segment, `""` at the top of the files root.
 /// The password is never logged or put in an error message.
 pub struct WebDav {
     files_url: String,
@@ -364,11 +374,9 @@ impl WebDav {
             Ok(response)
         } else {
             match response.status {
+                404 if method == "PUT" => Err(Error::NotFound(parent_path(path))),
                 404 => Err(Error::NotFound(path.to_string())),
-                409 => match path.rfind('/') {
-                    Some(pos) => Err(Error::NotFound(path[..pos].to_string())),
-                    None => Err(Error::NotFound(String::new())),
-                },
+                409 => Err(Error::NotFound(parent_path(path))),
                 412 if method == "PUT" => Err(Error::Changed),
                 401 | 403 => Err(Error::AuthFailed),
                 _ => Err(Error::Server(format!(
