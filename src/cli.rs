@@ -32,7 +32,7 @@ use crate::api::{
 };
 use crate::clients::{self, Client, ClientSet};
 use crate::creds::{self, CredentialStore, Secret};
-use crate::error::{Error, NotBuilt, Result};
+use crate::error::{Error, Result};
 use crate::http::{Request, Response, Transport};
 use crate::layout::{self, Layout};
 use crate::local::{self, Config, GameRecord, LocalStore};
@@ -49,6 +49,7 @@ use crate::sync::{self, Game, Resolve, Session};
 use crate::webdav;
 #[cfg(feature = "http")]
 use crate::webdav::WebDav;
+use crate::wrap;
 use serde::Serialize;
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -835,16 +836,30 @@ pub struct Net<'a> {
 /// Run one command end to end: parse, load the config, the credential store and the game,
 /// connect, call `sync`, print text or the `--json` envelope to `stdout`, and return the exit
 /// code (`api::exit_code_for`, `api::exit_code`). A parse error with `--json` among the
-/// arguments is still printed as an envelope (command "unknown" when none was recognised).
+/// arguments is still printed as an envelope (command "unknown" when none was recognised), except
+/// for `wrap`, whose standard output is the game's: its failures are notes on standard error
+/// (`front_door_failure`).
 ///
 /// This is the real environment: the platform folders from the process environment, the system
-/// credential store, the real network and browser, and this session's Game Mode. `run_with_net`
-/// does the work.
+/// credential store, the real network and browser, and this session's Game Mode. `run_with_env`
+/// does the work with the environment passed in, and `run_with_net` the rest.
 pub fn run(args: &[String], stdin: &mut dyn Read, stdout: &mut dyn Write) -> i32 {
+    run_with_env(args, stdin, stdout, &|name| std::env::var(name).ok())
+}
+
+/// `run` with the environment passed in: the platform folders and Game Mode are read through
+/// `var`, not the process environment. A test passes its own (an empty one for the folders-not-
+/// found path); `run` passes the process environment.
+pub fn run_with_env(
+    args: &[String],
+    stdin: &mut dyn Read,
+    stdout: &mut dyn Write,
+    var: &dyn Fn(&str) -> Option<String>,
+) -> i32 {
     let json = args.iter().any(|arg| arg == "--json");
-    let vars = match PathVars::from_env(Platform::current(), &|name| std::env::var(name).ok()) {
+    let vars = match PathVars::from_env(Platform::current(), var) {
         Ok(vars) => vars,
-        Err(error) => return print_failure(stdout, json, &guess_command(args), &error),
+        Err(error) => return front_door_failure(stdout, json, args, &error),
     };
     let store = LocalStore::new(AppDirs::from_vars(&vars));
     let creds = real_credentials();
@@ -853,7 +868,7 @@ pub fn run(args: &[String], stdin: &mut dyn Read, stdout: &mut dyn Write) -> i32
         transport: real_transport(),
         open_browser: &crate::oauth::open_browser,
         clients: ClientSet::shipped(),
-        game_mode: crate::oauth::in_game_mode(&|name| std::env::var(name).ok()),
+        game_mode: crate::oauth::in_game_mode(var),
         clock: stamp::now,
     };
 
@@ -868,6 +883,10 @@ pub fn run(args: &[String], stdin: &mut dyn Read, stdout: &mut dyn Write) -> i32
             let remote = connect(server, user, Secret::new(line.clone()))?;
             Ok((remote, Some(line)))
         }),
+        Ok(Args {
+            command: Command::Wrap { .. },
+            ..
+        }) => Ok((wrap_remote(&store, &*creds), None)),
         Ok(Args { command, .. }) => {
             connect_before(command, &store, &*creds).map(|remote| (remote, None))
         }
@@ -943,7 +962,7 @@ pub fn run_with_net(
         Ok(parsed) => parsed,
         Err(error) => {
             let json = args.iter().any(|arg| arg == "--json");
-            return print_failure(stdout, json, &guess_command(args), &error);
+            return front_door_failure(stdout, json, args, &error);
         }
     };
     let name = command_name(&parsed.command);
@@ -979,6 +998,22 @@ pub fn run_with_net(
         now,
         net,
     };
+    // `wrap` starts the game itself: its stdout is the game's, and its exit code is the game's.
+    if let Command::Wrap {
+        game,
+        manifest,
+        saves_dir,
+        command: child,
+    } = &command
+    {
+        return wrap_command(
+            game.as_deref(),
+            manifest.as_ref(),
+            saves_dir.as_ref(),
+            child,
+            &context,
+        );
+    }
     match execute(command, stdin, &context) {
         Ok(done) => {
             let shown = if json { &done.json } else { &done.text };
@@ -999,6 +1034,42 @@ fn print_failure(stdout: &mut dyn Write, json: bool, command: &str, error: &Erro
         }
     }
     api::exit_code(error)
+}
+
+/// A failure before `wrap` could sync: the arguments did not parse, or the platform folders are
+/// not set. `wrap`'s standard output is the game's, so its failure is a note on standard error
+/// and the command after its first `--` still starts, unsynced (`start_unsynced`), with its exit
+/// code. With no command to start (no `--`, or nothing after it) the note and the usage code are
+/// the whole result. Any other command prints its failure on standard output (`print_failure`).
+fn front_door_failure(stdout: &mut dyn Write, json: bool, args: &[String], error: &Error) -> i32 {
+    if !is_wrap(args) {
+        return print_failure(stdout, json, &guess_command(args), error);
+    }
+    match wrap_child(args) {
+        Some(command) => start_unsynced(Some(error), command),
+        None => {
+            eprintln!("save-relay: {error}");
+            if matches!(error, Error::Usage(_)) {
+                eprintln!("Run `save-relay help` for the commands.");
+            }
+            api::exit_code(error)
+        }
+    }
+}
+
+/// True when the first argument other than `--json` is `wrap` (the rule `parse` uses).
+fn is_wrap(args: &[String]) -> bool {
+    args.iter()
+        .find(|arg| arg.as_str() != "--json")
+        .is_some_and(|arg| arg == "wrap")
+}
+
+/// The command after the first `--`, when there is one: what `wrap` starts after a front-door
+/// failure. None when there is no `--`, or nothing after it.
+fn wrap_child(args: &[String]) -> Option<&[String]> {
+    let dash = args.iter().position(|arg| arg == "--")?;
+    let command = &args[dash + 1..];
+    (!command.is_empty()).then_some(command)
 }
 
 /// The command word for an envelope when the arguments did not parse: the first argument that
@@ -1068,8 +1139,8 @@ fn execute(command: Command, stdin: &mut dyn Read, cx: &Context) -> Result<Outco
         Command::Status { game } => status(&game, cx),
         Command::History { game } => history(&game, cx),
         Command::Restore { game, entry } => restore(&game, &entry, cx),
-        // Each of these is filled in by the issue that builds it (docs/code-map.md).
-        Command::Wrap { .. } => not_built("wrap (F58)"),
+        // `wrap` is started by `run_with_net` before it gets here; the rest are plain commands.
+        Command::Wrap { .. } => unreachable!("run_with_net starts wrap itself"),
         Command::Which { app_id } => which(app_id, cx),
         Command::InstallWrap {
             app_ids,
@@ -1113,6 +1184,185 @@ fn panel_command(port: Option<u16>, open: bool, json: bool, stdout: &mut dyn Wri
             let mut sink = out.borrow_mut();
             print_failure(&mut *sink, json, "panel", &error)
         }
+    }
+}
+
+/// `wrap`: start the game, synced around it when that can be done. The game is never refused:
+/// a setup or game problem is a note on standard error and an unsynced start. Nothing goes to
+/// standard output, so the game's own output is the only output. The exit code is the game's.
+fn wrap_command(
+    explicit: Option<&str>,
+    manifest: Option<&PathBuf>,
+    saves_dir: Option<&PathBuf>,
+    command: &[String],
+    cx: &Context,
+) -> i32 {
+    let env = |name: &str| std::env::var(name).ok();
+    let app_id = steam::app_id_from_env(&env);
+    let id = match wrap::game_id(explicit, &env) {
+        Ok(id) => id,
+        Err(error) => return start_unsynced(Some(&error), command),
+    };
+    let config = match load_config(cx) {
+        Ok(config) => config,
+        Err(error) => return start_unsynced(Some(&error), command),
+    };
+    let arg = GameArg {
+        id: id.clone(),
+        manifest: manifest.cloned(),
+        saves_dir: saves_dir.cloned(),
+    };
+    let target = match wrap_game(&arg, app_id, cx) {
+        Ok(target) => target,
+        Err(error) => return start_unsynced(Some(&error), command),
+    };
+    // Set once the game has run, so a failure after it (a rotated token that cannot be stored)
+    // is a note and never a second start of the game.
+    let mut ran: Option<i32> = None;
+    let pause = |secs: u64| std::thread::sleep(std::time::Duration::from_secs(secs));
+    let synced = with_remote(&config, cx, |remote| {
+        let engine = SyncEngine {
+            config: &config,
+            remote,
+            clock: cx.net.clock,
+            game: &target,
+            store: cx.store,
+            id: &id,
+        };
+        ran = Some(wrap::run(&engine, cx.store, command, cx.net.clock, &pause));
+        Ok(())
+    });
+    match ran {
+        Some(code) => {
+            if let Err(error) = synced {
+                eprintln!("save-relay: {error}");
+            }
+            code
+        }
+        None => start_unsynced(synced.as_ref().err(), command),
+    }
+}
+
+/// Start the game without sync. A note says why (when there is a reason), then the game runs
+/// with the command's standard streams. Its exit code, or 1 when it cannot start.
+fn start_unsynced(reason: Option<&Error>, command: &[String]) -> i32 {
+    if let Some(error) = reason {
+        eprintln!("save-relay: {error}; the game starts without sync");
+    }
+    match wrap::run_child(command) {
+        Ok(code) => code,
+        Err(error) => {
+            eprintln!("save-relay: {error}");
+            1
+        }
+    }
+}
+
+/// The connection a `wrap` works through. A connection that cannot be made is a remote that
+/// says why on every call (`FailedRemote`). Google Drive and Dropbox open their server inside
+/// the command (`with_remote`), so they get no connection here.
+fn wrap_remote(store: &LocalStore, creds: &dyn CredentialStore) -> Box<dyn Remote> {
+    let remote: Result<Box<dyn Remote>> = match uses_service_tokens(store) {
+        Ok(true) => Ok(Box::new(NoRemote)),
+        Ok(false) => connection(store, creds)
+            .and_then(|(config, secret)| connect(&config.server, &config.user, secret)),
+        Err(error) => Err(error),
+    };
+    match remote {
+        Ok(remote) => remote,
+        Err(error) => Box::new(FailedRemote(error)),
+    }
+}
+
+/// The game a `wrap` syncs: the manifest the person gave or remembered (`load_game`). With none,
+/// and a Steam app id from the environment that the game id names, the ludusavi entry for it.
+fn wrap_game(arg: &GameArg, app_id: Option<u32>, cx: &Context) -> Result<Game> {
+    match load_game(arg, cx) {
+        Err(Error::GameUnknown(_)) if arg.manifest.is_none() => match app_id {
+            Some(app_id) if steam::game_id(app_id) == arg.id => ludusavi_game(arg, app_id, cx),
+            _ => Err(Error::GameUnknown(arg.id.clone())),
+        },
+        other => other,
+    }
+}
+
+/// The game for a Steam app with no manifest of the person's own: the ludusavi data, refreshed
+/// when a week old. A failed refresh is a note; the data already cached still serves. A saves
+/// folder the person gave with `--saves-dir` is the one synced, and it is remembered with the
+/// game as `load_game` remembers it for `--manifest`, so later runs use it too.
+fn ludusavi_game(arg: &GameArg, app_id: u32, cx: &Context) -> Result<Game> {
+    let cache = ludusavi::Cache::new(&AppDirs::from_vars(cx.vars));
+    if let Err(error) = cache.refresh(&*cx.net.transport, cx.now, false) {
+        eprintln!("save-relay: ludusavi data not refreshed: {error}");
+    }
+    let (_, located) = ludusavi_located(app_id, cx, &cache)?;
+    let Some(saves_dir) = arg.saves_dir.clone() else {
+        return Ok(Game {
+            manifest: located.manifest,
+            saves_dir: located.saves_dir,
+        });
+    };
+    cx.store.save_game(&GameRecord {
+        manifest: located.manifest.clone(),
+        saves_dir: Some(saves_dir.clone()),
+    })?;
+    Ok(Game {
+        manifest: located.manifest,
+        saves_dir,
+    })
+}
+
+/// The game's name and where its saves are, from the ludusavi data: the entry (`lookup`)
+/// translated for this machine (`steam_facts`, `translate`).
+fn ludusavi_located(
+    app_id: u32,
+    cx: &Context,
+    cache: &ludusavi::Cache,
+) -> Result<(String, ludusavi::Located)> {
+    let (name, entry) = cache.lookup(app_id)?;
+    let facts = steam_facts(app_id, cx)?;
+    let located = ludusavi::translate(
+        &name,
+        &entry,
+        &facts,
+        &|path: &std::path::Path| path.exists(),
+        &|path: &std::path::Path| path.is_dir(),
+    )?;
+    Ok((name, located))
+}
+
+/// The engine a `wrap` runs for one game: `sync::pull` and `sync::push`. Each call builds its own
+/// session with the time of that call, so the push after the game is stamped with the exit time,
+/// not the launch time.
+struct SyncEngine<'a> {
+    config: &'a Config,
+    remote: &'a dyn Remote,
+    clock: Clock,
+    game: &'a Game,
+    store: &'a LocalStore,
+    id: &'a str,
+}
+
+impl SyncEngine<'_> {
+    fn session(&self) -> Result<Session<'_>> {
+        Ok(Session {
+            remote: self.remote,
+            layout: Layout::new(&self.config.root)?,
+            device: self.config.device.clone(),
+            now: (self.clock)(),
+        })
+    }
+}
+
+impl wrap::Engine for SyncEngine<'_> {
+    fn game(&self) -> &str {
+        self.id
+    }
+    fn pull(&self, resolve: Option<Resolve>, anyway: bool) -> Result<SyncReport> {
+        sync::pull(&self.session()?, self.game, self.store, resolve, anyway)
+    }
+    fn push(&self, resolve: Option<Resolve>) -> Result<SyncReport> {
+        sync::push(&self.session()?, self.game, self.store, resolve)
     }
 }
 
@@ -1618,10 +1868,6 @@ fn choose_service(stdin: &mut dyn Read, stdout: &mut dyn Write) -> Result<Servic
     Ok(service)
 }
 
-fn not_built<T>(what: &'static str) -> Result<T> {
-    Err(Error::NotBuilt(NotBuilt(what)))
-}
-
 /// `which <appid>`: where a wrapped Steam game keeps its saves. A manifest of the person's own
 /// for `steam-<appid>` (remembered by `--manifest`) always wins. Otherwise the ludusavi data is
 /// refreshed when a week old (`Cache::refresh`), the game's entry is translated for this
@@ -1653,15 +1899,7 @@ fn which(app_id: u32, cx: &Context) -> Result<Outcome> {
 
     let cache = ludusavi::Cache::new(&AppDirs::from_vars(cx.vars));
     cache.refresh(&*cx.net.transport, cx.now, false)?;
-    let (name, entry) = cache.lookup(app_id)?;
-    let facts = steam_facts(app_id, cx)?;
-    let located = ludusavi::translate(
-        &name,
-        &entry,
-        &facts,
-        &|path: &std::path::Path| path.exists(),
-        &|path: &std::path::Path| path.is_dir(),
-    )?;
+    let (name, located) = ludusavi_located(app_id, cx, &cache)?;
     let saves_dir = located.saves_dir.to_string_lossy().replace('\\', "/");
     let message = format!("{name}: saves are in {saves_dir} (ludusavi data)");
     let data = WhichData {
@@ -1862,6 +2100,34 @@ impl Remote for NoRemote {
 
 fn no_server() -> Error {
     Error::Io("this command has no server connection".into())
+}
+
+/// A remote for a `wrap` whose connection could not be made: every call says why, so the
+/// engine's error becomes a note and the game starts on the local saves.
+struct FailedRemote(Error);
+
+impl Remote for FailedRemote {
+    fn list(&self, _: &str) -> Result<Vec<RemoteEntry>> {
+        Err(self.0.clone())
+    }
+    fn get(&self, _: &str) -> Result<(Vec<u8>, String)> {
+        Err(self.0.clone())
+    }
+    fn put(&self, _: &str, _: &[u8], _: &Precondition) -> Result<String> {
+        Err(self.0.clone())
+    }
+    fn mkcol(&self, _: &str) -> Result<()> {
+        Err(self.0.clone())
+    }
+    fn copy(&self, _: &str, _: &str) -> Result<()> {
+        Err(self.0.clone())
+    }
+    fn move_to(&self, _: &str, _: &str) -> Result<()> {
+        Err(self.0.clone())
+    }
+    fn delete(&self, _: &str) -> Result<()> {
+        Err(self.0.clone())
+    }
 }
 
 /// The system store, except in a debug build with `SAVE_RELAY_TEST_PASSWORD` set: then that
