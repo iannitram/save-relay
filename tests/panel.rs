@@ -156,6 +156,18 @@ fn the_page_needs_the_token_in_the_header_or_the_query() {
     );
     let almost = format!("{TOKEN_HEADER}: {TOKEN}x");
     assert_eq!(route(&page(&[almost]), TOKEN), Route::Forbidden);
+    // A wrong token of the right length, in the header and in the query: one byte off at the end,
+    // then one off at the start. A comparator that checks only the length, or only the first
+    // byte, passes the first of these.
+    let last_byte_off = format!("{}x", &TOKEN[..TOKEN.len() - 1]);
+    let first_byte_off = format!("U{}", &TOKEN[1..]);
+    for wrong in [last_byte_off, first_byte_off] {
+        assert_eq!(wrong.len(), TOKEN.len());
+        let header = format!("{TOKEN_HEADER}: {wrong}");
+        assert_eq!(route(&page(&[header]), TOKEN), Route::Forbidden, "{wrong}");
+        let by_query = parsed("GET", &format!("/?token={wrong}"), &[], "");
+        assert_eq!(route(&by_query, TOKEN), Route::Forbidden, "{wrong}");
+    }
     assert_eq!(
         route(&page(&[token_line()]), TOKEN),
         Route::Asset("index.html")
@@ -542,8 +554,19 @@ fn panel_refuses_a_bad_port_and_stray_words() {
 /// `picture_bytes` to its `--out` file (an empty file for "no picture"); `status` with `game`
 /// `broken` prints no envelope.
 fn fake_run(picture_bytes: Vec<u8>) -> impl Fn(&[String]) -> (i32, Vec<u8>) + Send + 'static {
+    fake_run_seen(picture_bytes, None)
+}
+
+/// `fake_run`, which also sends each argument line of `picture` to `seen`, when there is one.
+fn fake_run_seen(
+    picture_bytes: Vec<u8>,
+    seen: Option<mpsc::Sender<Vec<String>>>,
+) -> impl Fn(&[String]) -> (i32, Vec<u8>) + Send + 'static {
     move |args: &[String]| {
         if args[0] == "picture" {
+            if let Some(seen) = &seen {
+                let _ = seen.send(args.to_vec());
+            }
             let out = args.iter().position(|word| word == "--out").expect("--out");
             let _ = fs::write(&args[out + 1], &picture_bytes);
             let code = if picture_bytes.is_empty() { 1 } else { 0 };
@@ -743,10 +766,36 @@ fn a_picture_is_served_as_its_image_type_or_not_found() {
     assert_eq!(status, "HTTP/1.1 403 Forbidden");
 }
 
+/// The picture command gets the game and the entry from the URL, and no file segment: a swap of
+/// the two, or a file name in its command line, fails here.
 #[test]
-fn the_picture_url_the_front_end_builds_loads_with_the_token_in_its_query() {
-    // The front end's `panelPicture(token)` (panel/src/App.tsx): `/picture/<game>/<entry>/<file>`
-    // with each segment percent-encoded and `?token=` for the `<img>`, which cannot send the header.
+fn the_picture_command_gets_the_game_and_the_entry_from_the_url() {
+    let (seen, argv) = mpsc::channel();
+    let data = start(fake_run_seen(PNG.to_vec(), Some(seen)));
+    let token = token_in(&data.url);
+    let (status, body) = get(
+        data.port,
+        &format!("/picture/steam-1/2026-11-01/.save-relay-picture.png?token={token}"),
+        None,
+    );
+    assert_eq!(status, "HTTP/1.1 200 OK");
+    assert_eq!(body, PNG.to_vec());
+    let line = argv
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the picture command ran");
+    let words: Vec<&str> = line.iter().map(String::as_str).collect();
+    assert_eq!(words.len(), 6, "{words:?}");
+    assert_eq!(&words[..3], &["picture", "steam-1", "2026-11-01"]);
+    assert_eq!(words[3], "--out");
+    assert_eq!(words[5], "--json");
+}
+
+#[test]
+fn a_picture_url_in_panel_pictures_shape_loads_with_the_token_in_its_query() {
+    // The shape `panelPicture(token)` builds (panel/src/App.tsx): `/picture/<game>/<entry>/<file>`
+    // with `?token=` for the `<img>`, which cannot send the header. This URL is written by hand
+    // here, and panel/src/picture.test.ts holds its own literal of the same shape. Nothing runs
+    // one against the other, so a change to only one side is not caught by these tests.
     let data = start(fake_run(PNG.to_vec()));
     let token = token_in(&data.url);
     let built = format!("/picture/steam-1/2026-11-01/.save-relay-picture.png?token={token}");
