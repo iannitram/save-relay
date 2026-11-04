@@ -11,7 +11,7 @@ use save_relay::platform::{AppDirs, PathVars};
 use save_relay::remote::{MemoryRemote, Precondition, Remote, RemoteEntry};
 use save_relay::{Error, Result};
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -154,6 +154,19 @@ fn files_under(dir: &Path, found: &mut Vec<PathBuf>) {
             }
         }
     }
+}
+
+/// Every file under `dir` with its bytes, so a test can show that nothing changed.
+fn snapshot(dir: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+    let mut found = Vec::new();
+    files_under(dir, &mut found);
+    found
+        .into_iter()
+        .map(|path| {
+            let bytes = fs::read(&path).unwrap();
+            (path, bytes)
+        })
+        .collect()
 }
 
 /// A machine set up as `device`, with one save file and one revision pushed.
@@ -1014,6 +1027,36 @@ fn answer_refuses_every_game_id_outside_the_manifest_rule() {
     let (code, envelope) = machine.json(&format!("answer {longest} keep-server"), T0 + 180);
     assert_eq!(code, 2, "{envelope}");
     assert_eq!(envelope["error"]["code"], "no_pending_choice");
+}
+
+/// `pending::answer` checks that the stored choice names the game the command named. A file for
+/// demo-game that names another game, or a name that leads out of pending/, is refused with
+/// state_invalid, and no file under the machine's folder changes.
+#[test]
+fn answer_refuses_a_stored_choice_that_names_another_game() {
+    for stored_game in ["other-game", "../../x"] {
+        let remote = Arc::new(MemoryRemote::new());
+        let machine = Machine::new(&remote);
+        // A real choice for other-game, which must not change.
+        let mut other = waiting_conflict();
+        other.game = "other-game".into();
+        machine.store.save_pending(&other).unwrap();
+        // demo-game's file, but it names `stored_game` inside.
+        let mut planted = waiting_conflict();
+        planted.game = stored_game.into();
+        fs::write(pending_file(&machine, GAME), planted.to_json()).unwrap();
+        let before = snapshot(&machine.root);
+
+        let (code, envelope) = machine.json(&format!("answer {GAME} keep-local"), T0 + 180);
+        assert_eq!(code, 5, "{stored_game}: {envelope}");
+        assert_eq!(envelope["command"], "answer", "{stored_game}");
+        assert_eq!(envelope["error"]["code"], "state_invalid", "{stored_game}");
+        assert_eq!(
+            snapshot(&machine.root),
+            before,
+            "{stored_game}: a file changed"
+        );
+    }
 }
 
 /// `run` connects before a command only if `needs_server` says so: `pull --anyway` must (the
