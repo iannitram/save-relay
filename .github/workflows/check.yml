@@ -49,10 +49,14 @@ jobs:
       - run: pnpm -r test
       - run: pnpm -r build
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
           cache-bin: false
       - run: cargo build --features panel-dist
+      - run: cargo clippy --all-targets --features panel-dist -- -D warnings
+      - run: cargo test --features panel-dist --test panel
 
   integration:
     # The built CLI against a real WebDAV server (tests/cli_webdav.rs, ignored by `cargo test`).
