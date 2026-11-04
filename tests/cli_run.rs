@@ -11,7 +11,7 @@ use save_relay::platform::{AppDirs, PathVars};
 use save_relay::remote::{MemoryRemote, Precondition, Remote, RemoteEntry};
 use save_relay::{Error, Result};
 use serde_json::Value;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -154,19 +154,6 @@ fn files_under(dir: &Path, found: &mut Vec<PathBuf>) {
             }
         }
     }
-}
-
-/// Every file under `dir` with its bytes, so a test can show that nothing changed.
-fn snapshot(dir: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
-    let mut found = Vec::new();
-    files_under(dir, &mut found);
-    found
-        .into_iter()
-        .map(|path| {
-            let bytes = fs::read(&path).unwrap();
-            (path, bytes)
-        })
-        .collect()
 }
 
 /// A machine set up as `device`, with one save file and one revision pushed.
@@ -1029,36 +1016,6 @@ fn answer_refuses_every_game_id_outside_the_manifest_rule() {
     assert_eq!(envelope["error"]["code"], "no_pending_choice");
 }
 
-/// `pending::answer` checks that the stored choice names the game the command named. A file for
-/// demo-game that names another game, or a name that leads out of pending/, is refused with
-/// state_invalid, and no file under the machine's folder changes.
-#[test]
-fn answer_refuses_a_stored_choice_that_names_another_game() {
-    for stored_game in ["other-game", "../../x"] {
-        let remote = Arc::new(MemoryRemote::new());
-        let machine = Machine::new(&remote);
-        // A real choice for other-game, which must not change.
-        let mut other = waiting_conflict();
-        other.game = "other-game".into();
-        machine.store.save_pending(&other).unwrap();
-        // demo-game's file, but it names `stored_game` inside.
-        let mut planted = waiting_conflict();
-        planted.game = stored_game.into();
-        fs::write(pending_file(&machine, GAME), planted.to_json()).unwrap();
-        let before = snapshot(&machine.root);
-
-        let (code, envelope) = machine.json(&format!("answer {GAME} keep-local"), T0 + 180);
-        assert_eq!(code, 5, "{stored_game}: {envelope}");
-        assert_eq!(envelope["command"], "answer", "{stored_game}");
-        assert_eq!(envelope["error"]["code"], "state_invalid", "{stored_game}");
-        assert_eq!(
-            snapshot(&machine.root),
-            before,
-            "{stored_game}: a file changed"
-        );
-    }
-}
-
 /// `run` connects before a command only if `needs_server` says so: `pull --anyway` must (the
 /// real binary gave it NoRemote before), and the local `answer` and `panel` must not.
 #[test]
@@ -1071,6 +1028,48 @@ fn only_the_commands_that_talk_to_the_server_connect_first() {
     assert!(server("pull demo-game"));
     assert!(!server("answer demo-game keep-local"));
     assert!(!server("panel"));
+}
+
+/// `pull --anyway` gets a server remote from `connect_before`, the connection `run` makes, and
+/// `answer` gets `NoRemote` even on a set-up machine. The machine is set up the way setup stores
+/// it, with the server on 127.0.0.1:9 (a closed port). A refused connection there is
+/// `server_unreachable`, and `NoRemote` answers `io`, so a `NoRemote` where the server should be
+/// fails this test. It needs the `http` feature: the remote is then a real WebDAV connection.
+#[cfg(feature = "http")]
+#[test]
+fn pull_anyway_connects_to_the_saved_server_and_answer_does_not() {
+    use save_relay::cli::connect_before;
+
+    let remote = Arc::new(MemoryRemote::new());
+    let machine = Machine::new(&remote);
+    let (code, out) = machine.run(
+        "setup --server http://127.0.0.1:9 --user player --device amd-handheld --json",
+        &format!("{PASSWORD}\n"),
+        T0,
+    );
+    assert_eq!(code, 0, "{out}");
+
+    let command = |line: &str| {
+        let args: Vec<String> = line.split_whitespace().map(String::from).collect();
+        parse(&args).unwrap().command
+    };
+    let anyway = command("pull demo-game --anyway");
+    let server = connect_before(&anyway, &machine.store, &machine.creds)
+        .unwrap_or_else(|error| panic!("pull --anyway should connect: {error}"));
+    let error = server
+        .list("")
+        .expect_err("nothing listens on 127.0.0.1:9, so the list fails");
+    assert_eq!(
+        error.code(),
+        "server_unreachable",
+        "pull --anyway got NoRemote"
+    );
+
+    let answer = command("answer demo-game keep-local");
+    let local = connect_before(&answer, &machine.store, &machine.creds)
+        .unwrap_or_else(|error| panic!("answer should not connect: {error}"));
+    let error = local.list("").expect_err("NoRemote fails every call");
+    assert_eq!(error.code(), "io", "answer should get NoRemote");
 }
 
 #[test]

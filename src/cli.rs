@@ -720,6 +720,22 @@ pub fn needs_server(command: &Command) -> bool {
     )
 }
 
+/// The remote a command works on, connected before the command runs (`run` calls this): the saved
+/// setup's server for a command that `needs_server`, and `NoRemote` for the others. Google Drive
+/// and Dropbox connect inside the command (`with_remote`), so they get `NoRemote` here as well.
+/// `answer` gets `NoRemote` even on a set-up machine: it is local.
+pub fn connect_before(
+    command: &Command,
+    store: &LocalStore,
+    creds: &dyn CredentialStore,
+) -> Result<Box<dyn Remote>> {
+    if !needs_server(command) || uses_service_tokens(store)? {
+        return Ok(Box::new(NoRemote));
+    }
+    let (config, secret) = connection(store, creds)?;
+    connect(&config.server, &config.user, secret)
+}
+
 /// The command's name as it appears in the envelope: "pull" (`Pull` and `PullAnyway`), "push",
 /// "status", "history", "restore", "setup" (both setup forms), "wrap", "which",
 /// "install-wrap", "answer", "where", "picture", "panel", "help", "version".
@@ -852,14 +868,10 @@ pub fn run(args: &[String], stdin: &mut dyn Read, stdout: &mut dyn Write) -> i32
             let remote = connect(server, user, Secret::new(line.clone()))?;
             Ok((remote, Some(line)))
         }),
-        Ok(Args { command, .. }) if needs_server(command) => match uses_service_tokens(&store) {
-            Ok(true) => Ok((Box::new(NoRemote), None)),
-            Ok(false) => connection(&store, &*creds).and_then(|(config, secret)| {
-                Ok((connect(&config.server, &config.user, secret)?, None))
-            }),
-            Err(error) => Err(error),
-        },
-        _ => Ok((Box::new(NoRemote), None)),
+        Ok(Args { command, .. }) => {
+            connect_before(command, &store, &*creds).map(|remote| (remote, None))
+        }
+        Err(_) => Ok((Box::new(NoRemote), None)),
     };
     let (remote, password_line) = match connected {
         Ok(pair) => pair,
