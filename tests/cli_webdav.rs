@@ -1,0 +1,588 @@
+//! The built `save-relay` binary against a real WebDAV server (issue #23): two machines, each with
+//! its own folders and config, sharing one game, and a second game that joins with only its
+//! manifest. The tests are named after SPEC.md's Musts: M1 to M5 and M7, plus M6 (the password
+//! never reaches a file or an output). They are ignored by default, so `cargo test` needs no
+//! server. The `integration` job in `.github/workflows/check.yml` starts one and runs them:
+//!
+//! ```text
+//! SR_WEBDAV_SERVER=http://127.0.0.1:8080 SR_WEBDAV_USER=admin SR_WEBDAV_PASSWORD=<app password> \
+//!   cargo test --locked --test cli_webdav -- --ignored
+//! ```
+//!
+//! Each test works in a folder of its own on the server (`sr-it-<test>-<stamp>`), so the tests
+//! share one server. The password reaches the binary through `SAVE_RELAY_TEST_PASSWORD`, which
+//! only a debug build reads (`creds::test_password_from_env`).
+
+use save_relay::creds::TEST_PASSWORD_VAR;
+use serde_json::Value;
+use std::fs;
+use std::io::Write;
+use std::net::TcpListener;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+const BINARY: &str = env!("CARGO_BIN_EXE_save-relay");
+const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
+/// The fixture game's saves, relative to its saves folder (`cache.tmp` is excluded by the manifest).
+const FIXTURE_SAVES: [&str; 3] = ["slot1.sav", "slot2.sav", "profile/progress.sav"];
+
+/// A game under test: its id, and its manifest under `tests/fixtures/games/`.
+#[derive(Clone, Copy)]
+struct Game {
+    id: &'static str,
+    manifest: &'static str,
+}
+
+const FIXTURE: Game = Game {
+    id: "fixture-game",
+    manifest: "games/fixture-game.json",
+};
+const SECOND: Game = Game {
+    id: "second-game",
+    manifest: "games/second-game.json",
+};
+
+/// The server under test, from the environment the `integration` job sets.
+struct Server {
+    url: String,
+    user: String,
+    password: String,
+}
+
+impl Server {
+    fn from_env() -> Server {
+        let get = |name: &str| {
+            std::env::var(name).unwrap_or_else(|_| panic!("set {name}: see the file comment"))
+        };
+        Server {
+            url: get("SR_WEBDAV_SERVER"),
+            user: get("SR_WEBDAV_USER"),
+            password: get("SR_WEBDAV_PASSWORD"),
+        }
+    }
+}
+
+/// A folder on the server that no other test or run uses.
+fn server_folder(test: &str) -> String {
+    format!("sr-it-{test}-{}", stamp())
+}
+
+fn stamp() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos()
+}
+
+/// An address with nothing listening on it: a connection to it is refused at once.
+fn unused_url() -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    format!("http://127.0.0.1:{port}")
+}
+
+fn fixture_path(relative: &str) -> PathBuf {
+    Path::new(FIXTURES).join(relative)
+}
+
+fn copy_tree(from: &Path, to: &Path) {
+    fs::create_dir_all(to).unwrap();
+    for entry in fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_tree(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), target).unwrap();
+        }
+    }
+}
+
+/// Every file under `dir` whose bytes contain `needle`.
+fn files_containing(dir: &Path, needle: &str) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    for entry in fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            found.extend(files_containing(&path, needle));
+        } else if fs::read(&path)
+            .unwrap()
+            .windows(needle.len())
+            .any(|window| window == needle.as_bytes())
+        {
+            found.push(path);
+        }
+    }
+    found
+}
+
+/// The `action` of a sync envelope, or "" when there is none.
+fn action(envelope: &Value) -> &str {
+    envelope["data"]["action"].as_str().unwrap_or("")
+}
+
+/// Asserts a command's exit code and action, and returns its envelope.
+fn expect(result: (i32, Value), code: i32, action_name: &str) -> Value {
+    let (got, envelope) = result;
+    assert_eq!((got, action(&envelope)), (code, action_name), "{envelope}");
+    envelope
+}
+
+/// What one run of the binary printed and returned.
+#[derive(Debug)]
+struct Run {
+    code: i32,
+    stdout: String,
+    stderr: String,
+}
+
+/// One machine: its own home, config, data and saves folders. The binary takes its platform
+/// folders from them, so two machines share nothing but the server.
+struct Machine {
+    root: PathBuf,
+    password: String,
+}
+
+impl Machine {
+    fn new(test: &str, name: &str, server: &Server) -> Machine {
+        let root =
+            std::env::temp_dir().join(format!("save-relay-webdav-{test}-{name}-{}", stamp()));
+        for folder in ["home", "config", "data", "saves"] {
+            fs::create_dir_all(root.join(folder)).unwrap();
+        }
+        Machine {
+            root,
+            password: server.password.clone(),
+        }
+    }
+
+    fn home(&self) -> PathBuf {
+        self.root.join("home")
+    }
+
+    fn saves(&self, game: Game) -> PathBuf {
+        self.root.join("saves").join(game.id)
+    }
+
+    fn save(&self, game: Game, name: &str) -> PathBuf {
+        self.saves(game).join(name)
+    }
+
+    fn write(&self, game: Game, name: &str, text: &str) {
+        let path = self.save(game, name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, text).unwrap();
+    }
+
+    fn read(&self, game: Game, name: &str) -> String {
+        fs::read_to_string(self.save(game, name)).unwrap()
+    }
+
+    /// The fixture game's saves, as a player has them before the first push.
+    fn load_fixture(&self, game: Game) {
+        copy_tree(
+            &fixture_path(&format!("saves/{}", game.id)),
+            &self.saves(game),
+        );
+    }
+
+    /// Where `config.json` is, as the binary's `AppDirs` names it on each platform.
+    fn config_file(&self) -> PathBuf {
+        let config = if cfg!(target_os = "macos") {
+            self.home().join("Library/Application Support")
+        } else {
+            self.root.join("config")
+        };
+        config.join("save-relay").join("config.json")
+    }
+
+    /// Points this machine at `url`. A URL with nothing listening is a server that is down.
+    fn point_at(&self, url: &str) {
+        let path = self.config_file();
+        let mut config: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        config["server"] = Value::String(url.to_string());
+        fs::write(&path, config.to_string()).unwrap();
+    }
+
+    /// The binary with `args` and `stdin`, on this machine's folders and the test password.
+    fn run(&self, args: &[&str], stdin: &str) -> Run {
+        let mut child = Command::new(BINARY)
+            .args(args)
+            .env("HOME", self.home())
+            .env("USERPROFILE", self.home())
+            .env("XDG_CONFIG_HOME", self.root.join("config"))
+            .env("XDG_DATA_HOME", self.root.join("data"))
+            .env("APPDATA", self.root.join("config"))
+            .env("LOCALAPPDATA", self.root.join("data"))
+            .env(TEST_PASSWORD_VAR, &self.password)
+            .env_remove("SteamGamepadUI")
+            .env_remove("XDG_CURRENT_DESKTOP")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("start the save-relay binary");
+        if let Some(mut pipe) = child.stdin.take() {
+            // Dropped at the end of this statement, so the binary reads end of input after `stdin`.
+            let _ = pipe.write_all(stdin.as_bytes());
+        }
+        let out = child.wait_with_output().expect("wait for save-relay");
+        Run {
+            code: out.status.code().unwrap_or(-1),
+            stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        }
+    }
+
+    /// `args` with `--json` added: the exit code and the one-line envelope.
+    fn json(&self, args: &[&str], stdin: &str) -> (i32, Value) {
+        let mut with_json = args.to_vec();
+        with_json.push("--json");
+        let run = self.run(&with_json, stdin);
+        let envelope = serde_json::from_str(run.stdout.trim())
+            .unwrap_or_else(|error| panic!("not one JSON envelope ({error}): {run:?}"));
+        (run.code, envelope)
+    }
+
+    /// The first run on this machine: `setup` against `server`, in the server folder `folder`.
+    fn setup(&self, server: &Server, device: &str, folder: &str) {
+        let (code, envelope) = self.json(
+            &[
+                "setup",
+                "--service",
+                "nextcloud",
+                "--server",
+                server.url.as_str(),
+                "--user",
+                server.user.as_str(),
+                "--device",
+                device,
+                "--root",
+                folder,
+            ],
+            &format!("{}\n", server.password),
+        );
+        assert_eq!(code, 0, "setup: {envelope}");
+        assert_eq!(envelope["data"]["service"], "nextcloud");
+    }
+
+    /// A game command (`pull`, `push`, `status`, `restore`) for `game`, with its manifest and
+    /// saves folder as a launcher passes them.
+    fn sync(&self, verb: &str, game: Game, extra: &[&str]) -> (i32, Value) {
+        // A history entry is named to the second, so two entries from one device in the same
+        // second collide (the server answers `exists`). A call that writes an entry (a push,
+        // or a `--resolve` that keeps a backup) waits past the second first.
+        if verb == "push" || extra.contains(&"--resolve") {
+            std::thread::sleep(std::time::Duration::from_millis(1100));
+        }
+        let manifest = fixture_path(game.manifest);
+        let saves = self.saves(game);
+        fs::create_dir_all(&saves).unwrap();
+        let mut args = vec![
+            verb,
+            game.id,
+            "--manifest",
+            manifest.to_str().unwrap(),
+            "--saves-dir",
+            saves.to_str().unwrap(),
+        ];
+        args.extend_from_slice(extra);
+        self.json(&args, "")
+    }
+
+    /// `history <game>`: the server's entries for the game, newest first.
+    fn history(&self, game: Game) -> Vec<Value> {
+        let (code, envelope) = self.json(&["history", game.id], "");
+        assert_eq!(code, 0, "history: {envelope}");
+        envelope["data"]["entries"].as_array().unwrap().clone()
+    }
+
+    /// The device that made the history entry `entry`.
+    fn device_of(&self, game: Game, entry: &str) -> String {
+        self.history(game)
+            .iter()
+            .find(|found| found["entry"] == entry)
+            .map(|found| found["device"].as_str().unwrap().to_string())
+            .unwrap_or_else(|| panic!("no history entry {entry}"))
+    }
+}
+
+impl Drop for Machine {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+/// Two machines in a conflict: A pushed the fixture game, B pulled it and pushed a change, and A
+/// changed the same save without pulling. Returns A and B.
+fn conflicting_machines(test: &str, server: &Server, folder: &str) -> (Machine, Machine) {
+    let a = Machine::new(test, "a", server);
+    a.setup(server, "amd-handheld", folder);
+    a.load_fixture(FIXTURE);
+    expect(a.sync("push", FIXTURE, &[]), 0, "pushed");
+
+    let b = Machine::new(test, "b", server);
+    b.setup(server, "strix-tablet", folder);
+    expect(b.sync("pull", FIXTURE, &[]), 0, "pulled");
+    b.write(FIXTURE, "slot1.sav", "chapter two, tablet");
+    expect(b.sync("push", FIXTURE, &[]), 0, "pushed");
+
+    a.write(FIXTURE, "slot1.sav", "chapter two, handheld");
+    (a, b)
+}
+
+#[test]
+#[ignore = "needs a WebDAV server: see the file comment"]
+fn m1_pull_brings_the_newest_saves_from_another_machine() {
+    let server = Server::from_env();
+    let folder = server_folder("m1");
+    let a = Machine::new("m1", "a", &server);
+    a.setup(&server, "amd-handheld", &folder);
+    a.load_fixture(FIXTURE);
+    expect(a.sync("push", FIXTURE, &[]), 0, "pushed");
+
+    let b = Machine::new("m1", "b", &server);
+    b.setup(&server, "strix-tablet", &folder);
+    expect(b.sync("pull", FIXTURE, &[]), 0, "pulled");
+    for name in FIXTURE_SAVES {
+        assert_eq!(b.read(FIXTURE, name), a.read(FIXTURE, name), "{name}");
+    }
+    assert!(
+        !b.save(FIXTURE, "cache.tmp").exists(),
+        "a file the manifest excludes is not a save"
+    );
+    // B quits without changing anything: the push clears B's open mark.
+    expect(b.sync("push", FIXTURE, &[]), 0, "noop");
+
+    // A plays again and quits; B's next launch brings the newest save.
+    a.write(FIXTURE, "slot1.sav", "chapter two");
+    expect(a.sync("push", FIXTURE, &[]), 0, "pushed");
+    expect(b.sync("pull", FIXTURE, &[]), 0, "pulled");
+    assert_eq!(b.read(FIXTURE, "slot1.sav"), "chapter two");
+}
+
+#[test]
+#[ignore = "needs a WebDAV server: see the file comment"]
+fn m2_push_puts_the_save_on_the_server_with_device_and_time() {
+    let server = Server::from_env();
+    let folder = server_folder("m2");
+    let a = Machine::new("m2", "a", &server);
+    a.setup(&server, "amd-handheld", &folder);
+    a.load_fixture(FIXTURE);
+
+    let pushed = expect(a.sync("push", FIXTURE, &[]), 0, "pushed");
+    assert_eq!(pushed["data"]["counts"]["uploaded"], FIXTURE_SAVES.len());
+    assert_eq!(pushed["data"]["server"]["device"], "amd-handheld");
+    assert!(pushed["data"]["server"]["time"].is_string());
+
+    let entries = a.history(FIXTURE);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["device"], "amd-handheld");
+    assert!(entries[0]["time"].is_string());
+
+    // Another machine sees the same record in its status, before it has pulled anything.
+    let b = Machine::new("m2", "b", &server);
+    b.setup(&server, "strix-tablet", &folder);
+    let (code, status) = b.sync("status", FIXTURE, &[]);
+    assert_eq!(code, 0, "{status}");
+    assert_eq!(status["data"]["server"]["device"], "amd-handheld");
+}
+
+#[test]
+#[ignore = "needs a WebDAV server: see the file comment"]
+fn m3_conflict_exits_3_then_keep_local_keeps_the_other_side_as_a_backup() {
+    let server = Server::from_env();
+    let folder = server_folder("m3-local");
+    let (a, _b) = conflicting_machines("m3-local", &server, &folder);
+
+    let conflict = expect(a.sync("pull", FIXTURE, &[]), 3, "conflict");
+    assert_eq!(conflict["data"]["server"]["device"], "strix-tablet");
+    assert_eq!(conflict["data"]["local"]["device"], "amd-handheld");
+    assert!(conflict["data"]["server"]["time"].is_string());
+    assert!(conflict["data"]["local"]["time"].is_string());
+    assert_eq!(
+        a.read(FIXTURE, "slot1.sav"),
+        "chapter two, handheld",
+        "a conflict touches nothing"
+    );
+
+    let pushed = expect(
+        a.sync("push", FIXTURE, &["--resolve", "keep-local"]),
+        0,
+        "pushed",
+    );
+    let backup = pushed["data"]["backup"]
+        .as_str()
+        .expect("the side not chosen is kept as a dated backup");
+    assert_eq!(a.device_of(FIXTURE, backup), "strix-tablet");
+
+    // The loser is restorable.
+    let (code, envelope) = a.sync("restore", FIXTURE, &[backup]);
+    assert_eq!(code, 0, "{envelope}");
+    assert_eq!(a.read(FIXTURE, "slot1.sav"), "chapter two, tablet");
+}
+
+#[test]
+#[ignore = "needs a WebDAV server: see the file comment"]
+fn m3_conflict_exits_3_then_keep_server_keeps_the_local_side_as_a_backup() {
+    let server = Server::from_env();
+    let folder = server_folder("m3-server");
+    let (a, _b) = conflicting_machines("m3-server", &server, &folder);
+
+    expect(a.sync("pull", FIXTURE, &[]), 3, "conflict");
+    let pulled = expect(
+        a.sync("pull", FIXTURE, &["--resolve", "keep-server"]),
+        0,
+        "pulled",
+    );
+    let backup = pulled["data"]["backup"]
+        .as_str()
+        .expect("the side not chosen is kept as a dated backup");
+    assert_eq!(a.device_of(FIXTURE, backup), "amd-handheld");
+    assert_eq!(a.read(FIXTURE, "slot1.sav"), "chapter two, tablet");
+
+    // The launch wrote A's open mark; A quits, which clears it.
+    let (code, envelope) = a.sync("push", FIXTURE, &[]);
+    assert_eq!(code, 0, "{envelope}");
+
+    // The handheld's save is restorable from the backup.
+    let (code, envelope) = a.sync("restore", FIXTURE, &[backup]);
+    assert_eq!(code, 0, "{envelope}");
+    assert_eq!(a.read(FIXTURE, "slot1.sav"), "chapter two, handheld");
+}
+
+#[test]
+#[ignore = "needs a WebDAV server: see the file comment"]
+fn m4_keeps_the_last_ten_pushes_and_restores_any_of_them() {
+    let server = Server::from_env();
+    let folder = server_folder("m4");
+    let a = Machine::new("m4", "a", &server);
+    a.setup(&server, "amd-handheld", &folder);
+    a.load_fixture(FIXTURE);
+
+    for version in 1..=11 {
+        a.write(FIXTURE, "slot1.sav", &format!("version {version}"));
+        expect(a.sync("push", FIXTURE, &[]), 0, "pushed");
+    }
+
+    // Newest first: the current copy, then ten dated copies in all, so version 1 is gone.
+    let entries = a.history(FIXTURE);
+    assert_eq!(entries.len(), 10);
+    assert_eq!(entries[0]["current"], true);
+    let oldest = entries[9]["entry"].as_str().unwrap();
+
+    let (code, envelope) = a.sync("restore", FIXTURE, &[oldest]);
+    assert_eq!(code, 0, "{envelope}");
+    assert_eq!(envelope["data"]["entry"], oldest);
+    assert_eq!(a.read(FIXTURE, "slot1.sav"), "version 2");
+}
+
+#[test]
+#[ignore = "needs a WebDAV server: see the file comment"]
+fn m5_offline_launch_starts_on_local_saves_and_pushes_at_the_next_launch() {
+    let server = Server::from_env();
+    let folder = server_folder("m5");
+    let a = Machine::new("m5", "a", &server);
+    a.setup(&server, "amd-handheld", &folder);
+    a.load_fixture(FIXTURE);
+    expect(a.sync("push", FIXTURE, &[]), 0, "pushed");
+
+    let b = Machine::new("m5", "b", &server);
+    b.setup(&server, "strix-tablet", &folder);
+    expect(b.sync("pull", FIXTURE, &[]), 0, "pulled");
+    expect(b.sync("push", FIXTURE, &[]), 0, "noop");
+
+    // The server goes away: the game starts on the local saves, and the quit cannot push.
+    b.point_at(&unused_url());
+    expect(b.sync("pull", FIXTURE, &[]), 0, "offline");
+    assert_eq!(b.read(FIXTURE, "slot1.sav"), "fixture slot one\n");
+    b.write(FIXTURE, "slot1.sav", "chapter two, made offline");
+    expect(b.sync("push", FIXTURE, &[]), 0, "deferred");
+
+    // The server is back: the next launch checks first (M3), then pushes the deferred save.
+    b.point_at(&server.url);
+    expect(b.sync("pull", FIXTURE, &[]), 0, "pushed");
+    expect(b.sync("push", FIXTURE, &[]), 0, "noop");
+
+    expect(a.sync("pull", FIXTURE, &[]), 0, "pulled");
+    assert_eq!(a.read(FIXTURE, "slot1.sav"), "chapter two, made offline");
+}
+
+#[test]
+#[ignore = "needs a WebDAV server: see the file comment"]
+fn m6_the_password_never_reaches_a_file_or_an_output() {
+    let server = Server::from_env();
+    let folder = server_folder("m6");
+    let a = Machine::new("m6", "a", &server);
+
+    // `--password` is refused before anything is sent (exit 2), and nothing it printed holds the value.
+    let refused = a.run(
+        &[
+            "setup",
+            "--service",
+            "nextcloud",
+            "--server",
+            server.url.as_str(),
+            "--user",
+            server.user.as_str(),
+            "--password",
+            server.password.as_str(),
+        ],
+        "",
+    );
+    assert_eq!(refused.code, 2, "{refused:?}");
+    assert!(!refused.stdout.contains(&server.password), "{refused:?}");
+    assert!(!refused.stderr.contains(&server.password), "{refused:?}");
+
+    // The password goes in on standard input, and comes back in no output.
+    let (code, envelope) = a.json(
+        &[
+            "setup",
+            "--service",
+            "nextcloud",
+            "--server",
+            server.url.as_str(),
+            "--user",
+            server.user.as_str(),
+            "--device",
+            "amd-handheld",
+            "--root",
+            folder.as_str(),
+        ],
+        &format!("{}\n", server.password),
+    );
+    assert_eq!(code, 0, "{envelope}");
+    assert!(!envelope.to_string().contains(&server.password));
+    let (code, status) = a.sync("status", FIXTURE, &[]);
+    assert_eq!(code, 0, "{status}");
+    assert_eq!(status["data"]["service"], "nextcloud");
+    assert!(!status.to_string().contains(&server.password));
+
+    // And no file under this machine's folders holds it.
+    let leaks = files_containing(&a.root, &server.password);
+    assert!(leaks.is_empty(), "the password is in {leaks:?}");
+}
+
+#[test]
+#[ignore = "needs a WebDAV server: see the file comment"]
+fn m7_a_second_game_joins_with_only_its_manifest() {
+    let server = Server::from_env();
+    let folder = server_folder("m7");
+    let a = Machine::new("m7", "a", &server);
+    a.setup(&server, "amd-handheld", &folder);
+    a.write(SECOND, "run.dat", "second game, run");
+    a.write(SECOND, "profile/one.dat", "second game, profile");
+    expect(a.sync("push", SECOND, &[]), 0, "pushed");
+
+    let b = Machine::new("m7", "b", &server);
+    b.setup(&server, "strix-tablet", &folder);
+    expect(b.sync("pull", SECOND, &[]), 0, "pulled");
+    assert_eq!(b.read(SECOND, "run.dat"), "second game, run");
+    assert_eq!(b.read(SECOND, "profile/one.dat"), "second game, profile");
+    assert!(
+        !b.save(FIXTURE, "slot1.sav").exists(),
+        "the second game brings none of the fixture game's saves"
+    );
+}

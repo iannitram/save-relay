@@ -53,3 +53,110 @@ jobs:
         with:
           cache-bin: false
       - run: cargo build --features panel-dist
+
+  integration:
+    # The built CLI against a real WebDAV server (tests/cli_webdav.rs, ignored by `cargo test`).
+    # Linux runs Nextcloud in a container; Windows and macOS run rclone's WebDAV server, pinned.
+    # Every server answers at http://127.0.0.1:8080/remote.php/dav/files/admin/.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-bin: false
+      - name: Start Nextcloud (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          docker run -d --name nextcloud -p 8080:80 \
+            -e NEXTCLOUD_ADMIN_USER=admin \
+            -e NEXTCLOUD_ADMIN_PASSWORD=ci-admin-password \
+            -e NEXTCLOUD_TRUSTED_DOMAINS="localhost 127.0.0.1" \
+            nextcloud:33-apache
+          for _ in $(seq 1 120); do
+            status=$(curl -fsS http://127.0.0.1:8080/status.php || true)
+            if echo "$status" | grep -q '"installed":true'; then
+              echo "Nextcloud is installed"
+              exit 0
+            fi
+            sleep 5
+          done
+          docker logs nextcloud | tail -n 100
+          exit 1
+      - name: Mint an app password (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          pw=$(curl -fsS -u admin:ci-admin-password -H 'OCS-APIRequest: true' -H 'Accept: application/json' http://127.0.0.1:8080/ocs/v2.php/core/getapppassword | python3 -c 'import json,sys; print(json.load(sys.stdin)["ocs"]["data"]["apppassword"])')
+          echo "::add-mask::$pw"
+          {
+            echo "SR_WEBDAV_SERVER=http://127.0.0.1:8080"
+            echo "SR_WEBDAV_USER=admin"
+            echo "SR_WEBDAV_PASSWORD=$pw"
+          } >> "$GITHUB_ENV"
+      - name: Integration tests (Linux, Nextcloud)
+        if: runner.os == 'Linux'
+        run: cargo test --locked --test cli_webdav -- --ignored --test-threads=1
+      - name: Integration tests (Windows, rclone)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          SR_WEBDAV_SERVER: http://127.0.0.1:8080
+          SR_WEBDAV_USER: admin
+          SR_WEBDAV_PASSWORD: ci-rclone-password
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = 'v1.73.5'
+          $dir = Join-Path $env:RUNNER_TEMP 'rclone'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $zip = Join-Path $dir 'rclone.zip'
+          Invoke-WebRequest -Uri "https://downloads.rclone.org/$version/rclone-$version-windows-amd64.zip" -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $dir -Force
+          $exe = (Get-ChildItem -Path $dir -Recurse -Filter rclone.exe | Select-Object -First 1).FullName
+          $root = Join-Path $dir 'dav-root'
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          $server = Start-Process -FilePath $exe -PassThru -WindowStyle Hidden -ArgumentList 'serve', 'webdav', $root, '--addr', '127.0.0.1:8080', '--baseurl', '/remote.php/dav/files/admin', '--user', 'admin', '--pass', $env:SR_WEBDAV_PASSWORD
+          try {
+            for ($i = 0; $i -lt 30; $i++) {
+              curl.exe -s -o NUL http://127.0.0.1:8080/remote.php/dav/files/admin/
+              if ($LASTEXITCODE -eq 0) { break }
+              Start-Sleep -Seconds 1
+            }
+            cargo test --locked --test cli_webdav -- --ignored --test-threads=1
+            $code = $LASTEXITCODE
+          } finally {
+            Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
+          }
+          exit $code
+      - name: Integration tests (macOS, rclone)
+        if: runner.os == 'macOS'
+        env:
+          SR_WEBDAV_SERVER: http://127.0.0.1:8080
+          SR_WEBDAV_USER: admin
+          SR_WEBDAV_PASSWORD: ci-rclone-password
+        run: |
+          set -euo pipefail
+          version=v1.73.5
+          case "$(uname -m)" in
+            arm64) arch=arm64 ;;
+            *) arch=amd64 ;;
+          esac
+          dir="$RUNNER_TEMP/rclone"
+          mkdir -p "$dir"
+          curl -fsSL -o "$dir/rclone.zip" "https://downloads.rclone.org/$version/rclone-$version-osx-$arch.zip"
+          unzip -q "$dir/rclone.zip" -d "$dir"
+          rclone_bin="$dir/rclone-$version-osx-$arch/rclone"
+          chmod +x "$rclone_bin"
+          root="$dir/dav-root"
+          mkdir -p "$root"
+          "$rclone_bin" serve webdav "$root" --addr 127.0.0.1:8080 --baseurl /remote.php/dav/files/admin --user admin --pass "$SR_WEBDAV_PASSWORD" > "$dir/rclone.log" 2>&1 &
+          server=$!
+          trap 'kill "$server" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 30); do
+            if curl -s -o /dev/null http://127.0.0.1:8080/remote.php/dav/files/admin/; then break; fi
+            sleep 1
+          done
+          cargo test --locked --test cli_webdav -- --ignored --test-threads=1
