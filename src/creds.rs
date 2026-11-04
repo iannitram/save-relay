@@ -112,6 +112,53 @@ impl CredentialStore for MemoryStore {
     }
 }
 
+/// The variable the integration tests set (issue #23): a debug build uses its value as the
+/// password for every account, so the built binary runs on a CI runner with no keyring. A
+/// release build never reads it.
+pub const TEST_PASSWORD_VAR: &str = "SAVE_RELAY_TEST_PASSWORD";
+
+/// The password from `TEST_PASSWORD_VAR`, in a debug build only; `None` otherwise, and when the
+/// variable is unset or empty.
+#[cfg(debug_assertions)]
+pub fn test_password_from_env(var: &dyn Fn(&str) -> Option<String>) -> Option<Secret> {
+    var(TEST_PASSWORD_VAR)
+        .filter(|value| !value.is_empty())
+        .map(Secret::new)
+}
+
+/// A release build has no test override.
+#[cfg(not(debug_assertions))]
+pub fn test_password_from_env(_: &dyn Fn(&str) -> Option<String>) -> Option<Secret> {
+    None
+}
+
+/// The test override as a store: every account has the one password, and `set` and `delete`
+/// write nothing, because the environment is the store. Nothing reaches a file.
+pub struct EnvPasswordStore {
+    password: Secret,
+}
+
+impl EnvPasswordStore {
+    pub fn new(password: Secret) -> EnvPasswordStore {
+        EnvPasswordStore { password }
+    }
+}
+
+impl CredentialStore for EnvPasswordStore {
+    fn get(&self, _: &str) -> Result<Option<Secret>> {
+        Ok(Some(self.password.clone()))
+    }
+    fn set(&self, _: &str, _: &Secret) -> Result<()> {
+        Ok(())
+    }
+    fn delete(&self, _: &str) -> Result<()> {
+        Ok(())
+    }
+    fn kind(&self) -> &'static str {
+        "test-environment"
+    }
+}
+
 /// The system credential store, through the `keyring` crate: Secret Service on Linux (pure-Rust
 /// zbus backend), Credential Manager on Windows, Keychain on macOS. Each account is one entry
 /// under the service name `SERVICE`.

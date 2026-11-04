@@ -1,0 +1,12 @@
+{
+  "format": 1,
+  "id": "fixture-game",
+  "name": "Fixture Game",
+  "saves": {
+    "linux": "{data}/fixture-game/saves",
+    "windows": "{data}/fixture-game/saves",
+    "mac": "{config}/fixture-game/saves"
+  },
+  "include": ["**/*.sav", "**/*.tmp"],
+  "exclude": ["**/*.tmp"]
+}
