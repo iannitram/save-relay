@@ -2114,9 +2114,14 @@ impl Remote for FailedRemote {
     }
 }
 
+/// The system store, except in a debug build with `SAVE_RELAY_TEST_PASSWORD` set: then that
+/// password is used for every account (the integration tests, `tests/cli_webdav.rs`).
 #[cfg(feature = "keyring")]
 fn real_credentials() -> Box<dyn CredentialStore> {
-    Box::new(creds::KeyringStore::new())
+    match creds::test_password_from_env(&|name| std::env::var(name).ok()) {
+        Some(password) => Box::new(creds::EnvPasswordStore::new(password)),
+        None => Box::new(creds::KeyringStore::new()),
+    }
 }
 
 /// A build without the `keyring` feature has no credential store of its own (a mobile build

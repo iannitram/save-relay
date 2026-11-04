@@ -1,0 +1,11 @@
+{
+  "format": 1,
+  "id": "second-game",
+  "name": "Second Game",
+  "saves": {
+    "linux": "{documents}/second-game",
+    "windows": "{documents}/second-game",
+    "mac": "{documents}/second-game"
+  },
+  "include": ["**/*.dat"]
+}
