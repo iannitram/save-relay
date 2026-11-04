@@ -12,7 +12,7 @@ use save_relay::remote::{MemoryRemote, Precondition, Remote};
 use save_relay::scan::{hash_bytes, scan, FileEntry, SaveSet};
 use save_relay::stamp;
 use save_relay::state::ServerState;
-use save_relay::sync::{history, picture, pull, push, restore, Game, Session};
+use save_relay::sync::{history, picture, pull, push, restore, Game, Resolve, Session};
 use save_relay::transfer::{read_card, read_record, upload_entry, RECORD};
 use save_relay::Error;
 use std::fs;
@@ -538,6 +538,91 @@ fn a_restore_backup_whose_card_write_fails_is_a_note_not_an_error() {
     let rows = history(&f.session(DEVICE, NOW + 20), GAME).unwrap().entries;
     let row = rows.iter().find(|row| row.entry == backup).unwrap();
     assert_eq!(row.card, None);
+}
+
+#[test]
+fn a_restore_message_stays_on_one_line_when_a_sidecar_note_has_a_newline() {
+    let f = Fixture::new();
+    f.write("a.sav", b"first");
+    f.push_at(NOW);
+    let first = history(&f.session(DEVICE, NOW + 5), GAME)
+        .unwrap()
+        .entries
+        .remove(0)
+        .entry;
+    f.write("a.sav", b"unsynced");
+    // The picture path starts with `/`, so the sidecar's note quotes it, newline and all.
+    f.write(SIDECAR, br#"{"place":"Chapter 7","picture":"/x\ny.png"}"#);
+
+    let data = restore(&f.session(DEVICE, NOW + 10), &f.game, &f.store, &first).unwrap();
+
+    assert!(
+        data.backup.is_some(),
+        "unsynced local changes are backed up"
+    );
+    assert!(!data.message.contains('\n'), "{:?}", data.message);
+    assert!(
+        data.message
+            .ends_with("sidecar left out: picture path /x y.png is not inside the saves folder."),
+        "{}",
+        data.message
+    );
+}
+
+#[test]
+fn a_pull_message_stays_on_one_line_when_a_sidecar_note_has_a_newline() {
+    let f = Fixture::new();
+    f.write("a.sav", b"base");
+    f.push_at(NOW);
+
+    // Another machine pulls that revision, saves a new one, and pushes it.
+    let other_store = LocalStore::new(AppDirs {
+        config: f.root.join("other-config"),
+        data: f.root.join("other-data"),
+    });
+    let other = Game {
+        manifest: manifest(),
+        saves_dir: f.root.join("other-saves"),
+    };
+    let other_session = |now| Session {
+        remote: &f.remote,
+        layout: layout(),
+        device: OTHER.into(),
+        now,
+    };
+    pull(&other_session(NOW + 100), &other, &other_store, None, false).unwrap();
+    fs::write(other.saves_dir.join("a.sav"), b"server").unwrap();
+    let pushed = push(&other_session(NOW + 200), &other, &other_store, None).unwrap();
+    assert_eq!(pushed.sync.action, Action::Pushed);
+
+    // This machine changed its saves meanwhile, and its sidecar's picture path has a newline.
+    f.write("a.sav", b"local");
+    f.write(SIDECAR, br#"{"picture":"/x\ny.png"}"#);
+
+    let report = pull(
+        &f.session(DEVICE, NOW + 300),
+        &f.game,
+        &f.store,
+        Some(Resolve::KeepServer),
+        false,
+    )
+    .unwrap();
+
+    assert_eq!(report.sync.action, Action::Pulled);
+    assert!(report.sync.backup.is_some(), "the local saves are kept");
+    assert!(
+        !report.sync.message.contains('\n'),
+        "{:?}",
+        report.sync.message
+    );
+    assert!(
+        report
+            .sync
+            .message
+            .ends_with("sidecar left out: picture path /x y.png is not inside the saves folder."),
+        "{}",
+        report.sync.message
+    );
 }
 
 /// A server that refuses every card write and passes the rest on.

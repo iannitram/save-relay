@@ -323,7 +323,7 @@ fn sync(
     };
     let local_card = has_local.then(|| card_of(s, &found, None));
     for note in &found.notes {
-        data.message = format!("{} {note}.", data.message);
+        data.message = format!("{} {}.", data.message, one_line(note));
     }
     Ok(SyncReport {
         sync: data,
@@ -341,6 +341,14 @@ struct Found {
     place: Option<String>,
     picture: Option<(PictureKind, Vec<u8>)>,
     notes: Vec<String>,
+}
+
+/// A note as one line of `message`: each control character, a newline included, becomes a space.
+/// A note can quote the sidecar's picture path, and that path is not checked for control characters.
+fn one_line(note: &str) -> String {
+    note.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
 }
 
 /// Read the sidecar (`card::SIDECAR`) in `saves_dir` and the picture it names. Nothing there is
@@ -771,7 +779,7 @@ pub fn restore(s: &Session, game: &Game, store: &LocalStore, entry: &str) -> Res
     }
     let mut message = format!("Restored {entry} as revision {revision}.");
     for note in &notes {
-        message = format!("{message} {note}.");
+        message = format!("{message} {}.", one_line(note));
     }
     Ok(RestoreData {
         game: id.clone(),
