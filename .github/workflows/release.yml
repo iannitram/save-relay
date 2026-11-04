@@ -9,8 +9,6 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
-  # TEMPORARY (#24): runs the build legs and the checksum step on this PR. Reverted before merge.
-  pull_request:
 
 permissions:
   contents: read
