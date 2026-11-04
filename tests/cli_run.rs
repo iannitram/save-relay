@@ -2,14 +2,16 @@
 //! `--json` envelope (field names exactly as docs/code-map.md § API shape), the exit codes, a
 //! parse error printed as an envelope, and the app password never reaching stdout or a file.
 
-use save_relay::cli::{connection, run_with};
+use save_relay::api::{Held, Side};
+use save_relay::cli::{connection, needs_server, parse, run_with};
 use save_relay::creds::{CredentialStore, MemoryStore, Secret};
 use save_relay::local::LocalStore;
+use save_relay::pending::{Answer, ChoiceKind, PendingChoice};
 use save_relay::platform::{AppDirs, PathVars};
 use save_relay::remote::{MemoryRemote, Precondition, Remote, RemoteEntry};
 use save_relay::{Error, Result};
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -152,6 +154,19 @@ fn files_under(dir: &Path, found: &mut Vec<PathBuf>) {
             }
         }
     }
+}
+
+/// Every file under `dir` with its bytes, so a test can show that nothing changed.
+fn snapshot(dir: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+    let mut found = Vec::new();
+    files_under(dir, &mut found);
+    found
+        .into_iter()
+        .map(|path| {
+            let bytes = fs::read(&path).unwrap();
+            (path, bytes)
+        })
+        .collect()
 }
 
 /// A machine set up as `device`, with one save file and one revision pushed.
@@ -689,12 +704,415 @@ fn help_and_version_and_commands_not_built_yet() {
     assert_eq!(code, 0);
     assert!(out.starts_with("save-relay <command>"));
 
-    // Each of these arrives with its own issue; until then it says so, exit 1.
-    for line in ["answer demo-game wait", "panel"] {
-        let (code, out) = machine.run(&format!("{line} --json"), "", T0);
-        assert_eq!(code, 1, "{line}: {out}");
-        assert_eq!(one_envelope(&out)["error"]["code"], "not_built", "{line}");
+    // This arrives with its own issue; until then it says so, exit 1.
+    let (code, out) = machine.run("panel --json", "", T0);
+    assert_eq!(code, 1, "panel: {out}");
+    assert_eq!(one_envelope(&out)["error"]["code"], "not_built", "panel");
+}
+
+/// A conflict `wrap` wrote for `GAME`, waiting for an answer.
+fn waiting_conflict() -> PendingChoice {
+    PendingChoice {
+        format: 1,
+        game: GAME.into(),
+        kind: ChoiceKind::Conflict,
+        server: Some(Side {
+            device: "device-b".into(),
+            time: "2026-10-31T19:53:00Z".into(),
+            revision: Some(2),
+        }),
+        local: Some(Side {
+            device: "device-a".into(),
+            time: "2026-10-31T19:51:00Z".into(),
+            revision: None,
+        }),
+        server_card: None,
+        local_card: None,
+        held: None,
+        time: "2026-10-31T19:54:00Z".into(),
+        answer: None,
     }
+}
+
+/// A held game `wrap` wrote for `GAME`, waiting for an answer.
+fn waiting_held() -> PendingChoice {
+    PendingChoice {
+        format: 1,
+        game: GAME.into(),
+        kind: ChoiceKind::Held,
+        server: None,
+        local: None,
+        server_card: None,
+        local_card: None,
+        held: Some(Held {
+            device: "device-b".into(),
+            since: "2026-10-31T19:52:00Z".into(),
+        }),
+        time: "2026-10-31T19:54:00Z".into(),
+        answer: None,
+    }
+}
+
+#[test]
+fn pull_anyway_in_text_mode_plays_past_the_other_machines_mark() {
+    let remote = Arc::new(MemoryRemote::new());
+    let amd = pushed_machine(&remote, "device-a");
+    // amd has the game open: its pull writes the open-elsewhere mark.
+    let (code, out) = amd.run(&format!("pull {}", amd.game_flags()), "", T0 + 60);
+    assert_eq!(code, 0, "{out}");
+    let tablet = Machine::new(&remote);
+    tablet.setup("device-b");
+
+    let (code, out) = tablet.run(&format!("pull {}", tablet.game_flags()), "", T0 + 120);
+    assert_eq!(code, 6, "{out}");
+    assert!(
+        !tablet.root.join("saves/slot1.sav").exists(),
+        "a held game touches nothing"
+    );
+
+    let (code, out) = tablet.run(
+        &format!("pull {} --anyway", tablet.game_flags()),
+        "",
+        T0 + 180,
+    );
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(
+        out,
+        "Pulled revision 1 from device-a (2026-10-31T19:51:00Z).\n"
+    );
+    assert_eq!(
+        fs::read_to_string(tablet.root.join("saves/slot1.sav")).unwrap(),
+        "chapter one"
+    );
+}
+
+#[test]
+fn pull_anyway_with_json_returns_the_pull_envelope() {
+    let remote = Arc::new(MemoryRemote::new());
+    let amd = pushed_machine(&remote, "device-a");
+    let (code, out) = amd.run(&format!("pull {}", amd.game_flags()), "", T0 + 60);
+    assert_eq!(code, 0, "{out}");
+    let tablet = Machine::new(&remote);
+    tablet.setup("device-b");
+
+    let (code, envelope) = tablet.json(&format!("pull {}", tablet.game_flags()), T0 + 120);
+    assert_eq!(code, 6, "{envelope}");
+    assert_eq!(envelope["data"]["action"], "held");
+
+    let (code, envelope) = tablet.json(&format!("pull {} --anyway", tablet.game_flags()), T0 + 180);
+    assert_eq!(code, 0, "{envelope}");
+    assert_eq!(keys(&envelope), set(&["ok", "command", "data"]));
+    assert_eq!(envelope["ok"], true);
+    assert_eq!(envelope["command"], "pull");
+    let data = &envelope["data"];
+    assert_eq!(
+        keys(data),
+        set(&[
+            "game",
+            "action",
+            "revision",
+            "server",
+            "local",
+            "backup",
+            "counts",
+            "message",
+            "held",
+            "server_card",
+            "local_card",
+        ])
+    );
+    assert_eq!(data["game"], GAME);
+    assert_eq!(data["action"], "pulled");
+    assert_eq!(data["revision"], 1);
+    assert!(data["held"].is_null());
+    assert_eq!(
+        fs::read_to_string(tablet.root.join("saves/slot1.sav")).unwrap(),
+        "chapter one"
+    );
+}
+
+#[test]
+fn answer_with_nothing_waiting_is_no_pending_choice_exit_2() {
+    let remote = Arc::new(MemoryRemote::new());
+    let machine = Machine::new(&remote);
+
+    let (code, envelope) = machine.json(&format!("answer {GAME} keep-server"), T0);
+    assert_eq!(code, 2, "{envelope}");
+    assert_eq!(envelope["ok"], false);
+    assert_eq!(envelope["command"], "answer");
+    assert_eq!(envelope["error"]["code"], "no_pending_choice");
+}
+
+#[test]
+fn answer_records_a_conflict_choice_in_text_mode() {
+    let remote = Arc::new(MemoryRemote::new());
+    let machine = Machine::new(&remote);
+    machine.store.save_pending(&waiting_conflict()).unwrap();
+
+    let (code, out) = machine.run(&format!("answer {GAME} keep-local"), "", T0 + 180);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(
+        out,
+        "Recorded keep-local for demo-game: this machine's saves win the conflict.\n"
+    );
+    let stored = machine.store.load_pending(GAME).unwrap().unwrap();
+    assert_eq!(stored.kind, ChoiceKind::Conflict);
+    assert_eq!(stored.answer, Some(Answer::KeepLocal));
+}
+
+#[test]
+fn answer_records_a_held_choice_with_json() {
+    let remote = Arc::new(MemoryRemote::new());
+    let machine = Machine::new(&remote);
+    machine.store.save_pending(&waiting_held()).unwrap();
+
+    let (code, envelope) = machine.json(&format!("answer {GAME} play-anyway"), T0 + 180);
+    assert_eq!(code, 0, "{envelope}");
+    assert_eq!(keys(&envelope), set(&["ok", "command", "data"]));
+    assert_eq!(envelope["command"], "answer");
+    let data = &envelope["data"];
+    assert_eq!(keys(data), set(&["game", "kind", "answer", "message"]));
+    assert_eq!(data["game"], GAME);
+    assert_eq!(data["kind"], "held");
+    assert_eq!(data["answer"], "play_anyway");
+    assert_eq!(
+        data["message"],
+        "Recorded play-anyway for demo-game: the game starts past the open-elsewhere mark."
+    );
+    let stored = machine.store.load_pending(GAME).unwrap().unwrap();
+    assert_eq!(stored.answer, Some(Answer::PlayAnyway));
+}
+
+#[test]
+fn answer_that_does_not_fit_the_choice_is_usage_and_changes_nothing() {
+    let remote = Arc::new(MemoryRemote::new());
+    let machine = Machine::new(&remote);
+    machine.store.save_pending(&waiting_conflict()).unwrap();
+
+    let (code, envelope) = machine.json(&format!("answer {GAME} wait"), T0 + 180);
+    assert_eq!(code, 2, "{envelope}");
+    assert_eq!(envelope["command"], "answer");
+    assert_eq!(envelope["error"]["code"], "usage");
+    assert_eq!(
+        envelope["error"]["message"],
+        "wait does not answer a conflict choice"
+    );
+    let stored = machine.store.load_pending(GAME).unwrap().unwrap();
+    assert_eq!(stored.answer, None);
+}
+
+#[test]
+fn answer_with_nothing_waiting_in_text_mode_says_so_and_exits_2() {
+    let remote = Arc::new(MemoryRemote::new());
+    let machine = Machine::new(&remote);
+
+    let (code, out) = machine.run(&format!("answer {GAME} keep-server"), "", T0);
+    assert_eq!(code, 2, "{out}");
+    assert_eq!(
+        out,
+        "save-relay: no choice is waiting for game 'demo-game'\n"
+    );
+}
+
+#[test]
+fn answer_records_a_conflict_choice_with_json() {
+    let remote = Arc::new(MemoryRemote::new());
+    let machine = Machine::new(&remote);
+    machine.store.save_pending(&waiting_conflict()).unwrap();
+
+    let (code, envelope) = machine.json(&format!("answer {GAME} keep-server"), T0 + 180);
+    assert_eq!(code, 0, "{envelope}");
+    assert_eq!(keys(&envelope), set(&["ok", "command", "data"]));
+    assert_eq!(envelope["command"], "answer");
+    let data = &envelope["data"];
+    assert_eq!(keys(data), set(&["game", "kind", "answer", "message"]));
+    assert_eq!(data["kind"], "conflict");
+    assert_eq!(data["answer"], "keep_server");
+    assert_eq!(
+        data["message"],
+        "Recorded keep-server for demo-game: the server's saves win the conflict."
+    );
+    let stored = machine.store.load_pending(GAME).unwrap().unwrap();
+    assert_eq!(stored.answer, Some(Answer::KeepServer));
+}
+
+#[test]
+fn answer_records_a_held_choice_in_text_mode() {
+    let remote = Arc::new(MemoryRemote::new());
+    let machine = Machine::new(&remote);
+    machine.store.save_pending(&waiting_held()).unwrap();
+
+    let (code, out) = machine.run(&format!("answer {GAME} play-anyway"), "", T0 + 180);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(
+        out,
+        "Recorded play-anyway for demo-game: the game starts past the open-elsewhere mark.\n"
+    );
+    let stored = machine.store.load_pending(GAME).unwrap().unwrap();
+    assert_eq!(stored.answer, Some(Answer::PlayAnyway));
+}
+
+/// The file `wrap` and `answer` keep the pending choice for `game` in.
+fn pending_file(machine: &Machine, game: &str) -> PathBuf {
+    machine
+        .root
+        .join("data")
+        .join("save-relay")
+        .join("pending")
+        .join(format!("{game}.json"))
+}
+
+#[test]
+fn answer_with_a_game_id_that_is_not_the_manifest_id_is_usage_and_changes_nothing() {
+    let remote = Arc::new(MemoryRemote::new());
+    let machine = Machine::new(&remote);
+    machine.store.save_pending(&waiting_conflict()).unwrap();
+    let stored = fs::read(pending_file(&machine, GAME)).unwrap();
+
+    // The file is demo-game's; on a case-insensitive file system the upper-case name finds it.
+    let (code, envelope) = machine.json("answer DEMO-GAME keep-server", T0 + 180);
+    assert_eq!(code, 2, "{envelope}");
+    assert_eq!(envelope["command"], "answer");
+    assert_eq!(envelope["error"]["code"], "usage");
+    assert_eq!(fs::read(pending_file(&machine, GAME)).unwrap(), stored);
+}
+
+#[test]
+fn answer_with_a_traversing_game_id_is_usage_and_reads_and_writes_nothing() {
+    let remote = Arc::new(MemoryRemote::new());
+    let machine = Machine::new(&remote);
+    // A valid choice for another game, planted where `../../x` resolves from pending/: the
+    // store's data folder, next to save-relay.
+    let mut planted = waiting_conflict();
+    planted.game = "other-game".into();
+    fs::create_dir_all(machine.root.join("data")).unwrap();
+    let outside = machine.root.join("data").join("x.json");
+    fs::write(&outside, planted.to_json()).unwrap();
+    let before = fs::read(&outside).unwrap();
+
+    let (code, envelope) = machine.json("answer ../../x keep-server", T0 + 180);
+    assert_eq!(code, 2, "{envelope}");
+    assert_eq!(envelope["command"], "answer");
+    assert_eq!(envelope["error"]["code"], "usage");
+    assert_eq!(fs::read(&outside).unwrap(), before);
+    assert!(!pending_file(&machine, "other-game").exists());
+}
+
+#[test]
+fn answer_refuses_every_game_id_outside_the_manifest_rule() {
+    let remote = Arc::new(MemoryRemote::new());
+    let machine = Machine::new(&remote);
+    machine.store.save_pending(&waiting_conflict()).unwrap();
+    let stored = fs::read(pending_file(&machine, GAME)).unwrap();
+
+    // Reserved device names, a leading hyphen, underscore, dot, and 65 characters.
+    let too_long = "a".repeat(65);
+    for id in [
+        "con",
+        "nul",
+        "com1",
+        "-demo-game",
+        "demo_game",
+        "demo.game",
+        too_long.as_str(),
+    ] {
+        let (code, envelope) = machine.json(&format!("answer {id} keep-server"), T0 + 180);
+        assert_eq!(code, 2, "{id}: {envelope}");
+        assert_eq!(envelope["error"]["code"], "usage", "{id}");
+    }
+    assert_eq!(fs::read(pending_file(&machine, GAME)).unwrap(), stored);
+
+    // The longest id the rule allows is a game id: nothing is waiting for it, so no_pending_choice.
+    let longest = "a".repeat(64);
+    let (code, envelope) = machine.json(&format!("answer {longest} keep-server"), T0 + 180);
+    assert_eq!(code, 2, "{envelope}");
+    assert_eq!(envelope["error"]["code"], "no_pending_choice");
+}
+
+/// `pending::answer` checks that the stored choice names the game the command named. A file for
+/// demo-game that names another game, or a name that leads out of pending/, is refused with
+/// state_invalid, and no file under the machine's folder changes.
+#[test]
+fn answer_refuses_a_stored_choice_that_names_another_game() {
+    for stored_game in ["other-game", "../../x"] {
+        let remote = Arc::new(MemoryRemote::new());
+        let machine = Machine::new(&remote);
+        // A real choice for other-game, which must not change.
+        let mut other = waiting_conflict();
+        other.game = "other-game".into();
+        machine.store.save_pending(&other).unwrap();
+        // demo-game's file, but it names `stored_game` inside.
+        let mut planted = waiting_conflict();
+        planted.game = stored_game.into();
+        fs::write(pending_file(&machine, GAME), planted.to_json()).unwrap();
+        let before = snapshot(&machine.root);
+
+        let (code, envelope) = machine.json(&format!("answer {GAME} keep-local"), T0 + 180);
+        assert_eq!(code, 5, "{stored_game}: {envelope}");
+        assert_eq!(envelope["command"], "answer", "{stored_game}");
+        assert_eq!(envelope["error"]["code"], "state_invalid", "{stored_game}");
+        assert_eq!(
+            snapshot(&machine.root),
+            before,
+            "{stored_game}: a file changed"
+        );
+    }
+}
+
+/// `run` connects before a command only if `needs_server` says so: `pull --anyway` must (the
+/// real binary gave it NoRemote before), and the local `answer` and `panel` must not.
+#[test]
+fn only_the_commands_that_talk_to_the_server_connect_first() {
+    let server = |line: &str| {
+        let args: Vec<String> = line.split_whitespace().map(String::from).collect();
+        needs_server(&parse(&args).unwrap().command)
+    };
+    assert!(server("pull demo-game --anyway"));
+    assert!(server("pull demo-game"));
+    assert!(!server("answer demo-game keep-local"));
+    assert!(!server("panel"));
+}
+
+/// `pull --anyway` gets a server remote from `connect_before`, the connection `run` makes, and
+/// `answer` gets `NoRemote` even on a set-up machine. The machine is set up the way setup stores
+/// it, with the server on 127.0.0.1:9 (a closed port). A refused connection there is
+/// `server_unreachable`, and `NoRemote` answers `io`, so a `NoRemote` where the server should be
+/// fails this test. It needs the `http` feature: the remote is then a real WebDAV connection.
+#[cfg(feature = "http")]
+#[test]
+fn pull_anyway_connects_to_the_saved_server_and_answer_does_not() {
+    use save_relay::cli::connect_before;
+
+    let remote = Arc::new(MemoryRemote::new());
+    let machine = Machine::new(&remote);
+    let (code, out) = machine.run(
+        "setup --server http://127.0.0.1:9 --user player --device amd-handheld --json",
+        &format!("{PASSWORD}\n"),
+        T0,
+    );
+    assert_eq!(code, 0, "{out}");
+
+    let command = |line: &str| {
+        let args: Vec<String> = line.split_whitespace().map(String::from).collect();
+        parse(&args).unwrap().command
+    };
+    let anyway = command("pull demo-game --anyway");
+    let server = connect_before(&anyway, &machine.store, &machine.creds)
+        .unwrap_or_else(|error| panic!("pull --anyway should connect: {error}"));
+    let error = server
+        .list("")
+        .expect_err("nothing listens on 127.0.0.1:9, so the list fails");
+    assert_eq!(
+        error.code(),
+        "server_unreachable",
+        "pull --anyway got NoRemote"
+    );
+
+    let answer = command("answer demo-game keep-local");
+    let local = connect_before(&answer, &machine.store, &machine.creds)
+        .unwrap_or_else(|error| panic!("answer should not connect: {error}"));
+    let error = local.list("").expect_err("NoRemote fails every call");
+    assert_eq!(error.code(), "io", "answer should get NoRemote");
 }
 
 #[test]
