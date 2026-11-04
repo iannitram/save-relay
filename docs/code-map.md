@@ -156,7 +156,7 @@ In a saves folder, every name starting `.save-relay-` is reserved and never part
 | `tests/wrap.rs`, `tests/baton.rs` | planned | a fixture sidecar; two simulated machines (mark, Wait, Play anyway); a wrapped fixture program (F65) | | M11-M14 |
 | `docs/wrap.md`, `docs/panel.md` | planned | wrap, which, install-wrap and Proton; the panel in Game Mode and the browser (F66) | | M12-M15 |
 | `.github/workflows/check.yml` | present | fmt, clippy (default and no features), build, test on Linux, Windows, macOS; a `frontend` job on Linux: pnpm install, typecheck, vitest, build, then `cargo build --features panel-dist` | | M8, M15 |
-| `.github/workflows/release.yml` | present | on a `v*` tag: Linux x86_64 (static, musl) and Windows x86_64 binaries, and macOS arm64 (unsigned), built with `--features panel-dist` and attached with `SHA256SUMS` to the release, for launchers to bundle; `workflow_dispatch` makes the same files as run artifacts only (dry run) | | M8 |
+| `.github/workflows/release.yml` | present | on a `v*` tag: Linux x86_64 (static, musl) and Windows x86_64 binaries, and macOS arm64 (unsigned), built with `--features panel-dist` and attached with `SHA256SUMS` to the release, for launchers to bundle; the Decky plugin zip (with the Linux binary as `bin/save-relay`) and the panel zip (`panel/dist`) are attached too; `workflow_dispatch` makes the same files as run artifacts only (dry run); a tag refuses to build without the five app ids (#36) | | M8, M15 |
 | `docs/manifest.md` | present | the manifest format for port maintainers | | M7 |
 
 ## API shape

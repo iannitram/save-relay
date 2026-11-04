@@ -1,8 +1,9 @@
 name: release
 
-# Release binaries (#24, M8). A `v*` tag builds the binaries, writes SHA256SUMS and attaches
-# both to a GitHub release. A workflow_dispatch run does the same builds and uploads the files
-# as run artifacts only: the dry run, and it makes no release.
+# Release binaries (#24, M8, M15). A `v*` tag builds the binaries, writes SHA256SUMS and attaches
+# them, with the Decky plugin zip and the panel zip, to a GitHub release. A workflow_dispatch run
+# does the same builds and uploads the files as run artifacts only: the dry run, and it makes no
+# release.
 
 on:
   push:
@@ -95,7 +96,27 @@ jobs:
         shell: bash
         env:
           CARGO_PROFILE_RELEASE_STRIP: "true"
-        run: cargo build --locked --release --target "$TARGET" --features panel-dist
+          # The public app registrations that `src/clients.rs` reads (#36). The Google secrets are
+          # public by design too, but they stay secrets so GitHub masks them in logs.
+          SAVE_RELAY_GOOGLE_DESKTOP_ID: ${{ vars.SAVE_RELAY_GOOGLE_DESKTOP_ID }}
+          SAVE_RELAY_GOOGLE_DESKTOP_SECRET: ${{ secrets.SAVE_RELAY_GOOGLE_DESKTOP_SECRET }}
+          SAVE_RELAY_GOOGLE_DEVICE_ID: ${{ vars.SAVE_RELAY_GOOGLE_DEVICE_ID }}
+          SAVE_RELAY_GOOGLE_DEVICE_SECRET: ${{ secrets.SAVE_RELAY_GOOGLE_DEVICE_SECRET }}
+          SAVE_RELAY_DROPBOX_APP_KEY: ${{ vars.SAVE_RELAY_DROPBOX_APP_KEY }}
+        run: |
+          # A tag is a release, so it refuses to build without the registrations. A dry run builds
+          # with empty ids: Nextcloud works, and Google Drive and Dropbox say they are not registered.
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            for name in SAVE_RELAY_GOOGLE_DESKTOP_ID SAVE_RELAY_GOOGLE_DESKTOP_SECRET \
+                        SAVE_RELAY_GOOGLE_DEVICE_ID SAVE_RELAY_GOOGLE_DEVICE_SECRET \
+                        SAVE_RELAY_DROPBOX_APP_KEY; do
+              if [ -z "${!name:-}" ]; then
+                echo "::error::$name is not set: a release needs the app registrations (#36)"
+                exit 1
+              fi
+            done
+          fi
+          cargo build --locked --release --target "$TARGET" --features panel-dist
       - name: Smoke test (the runner runs this target)
         shell: bash
         run: |
@@ -126,10 +147,63 @@ jobs:
           path: dist/${{ steps.name.outputs.binary }}
           if-no-files-found: error
 
+  decky:
+    # The Decky plugin zip (`decky/`) and the panel zip (`panel/dist`), both attached to the release
+    # (ADR 0003, M15). The panel comes from the same `panel-dist` artifact the binaries embed. The
+    # plugin carries the Linux binary as `bin/save-relay`, the first path `decky/main.py` runs: a
+    # Game Mode plugin has no PATH install to fall back on.
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4 # the version is package.json's packageManager
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --dir decky build
+      - uses: actions/download-artifact@v4
+        with:
+          name: panel-dist
+          path: panel/dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: save-relay-${{ needs.prepare.outputs.version }}-x86_64-unknown-linux-musl
+          path: linux-binary
+      - name: Zip the Decky plugin and the panel
+        shell: bash
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          out="$PWD/dist"
+          mkdir -p "$out" stage/save-relay/bin stage/save-relay/dist
+          # Decky Loader installs a zip by its top-level folder, so the plugin sits under save-relay/.
+          cp decky/plugin.json decky/main.py stage/save-relay/
+          cp -r decky/dist/. stage/save-relay/dist/
+          cp "linux-binary/save-relay-${VERSION}-x86_64-unknown-linux-musl" stage/save-relay/bin/save-relay
+          # The artifact may lose the executable bit, and main.py checks it before it runs the binary.
+          chmod +x stage/save-relay/bin/save-relay
+          (cd stage && zip -r -X "$out/save-relay-decky-${VERSION}.zip" save-relay)
+          (cd panel/dist && zip -X "$out/save-relay-panel-${VERSION}.zip" index.html app.js app.css)
+          unzip -l "$out/save-relay-decky-${VERSION}.zip"
+          unzip -l "$out/save-relay-panel-${VERSION}.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: save-relay-decky-${{ needs.prepare.outputs.version }}
+          path: dist/save-relay-decky-${{ needs.prepare.outputs.version }}.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: save-relay-panel-${{ needs.prepare.outputs.version }}
+          path: dist/save-relay-panel-${{ needs.prepare.outputs.version }}.zip
+          if-no-files-found: error
+
   publish:
     # Runs on a dry run too: the SHA256SUMS file is part of what the dry run must produce. Only a
     # tag attaches the files to a release.
-    needs: [prepare, build]
+    needs: [prepare, build, decky]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -155,6 +229,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         with:
+          # The glob also takes the Decky plugin zip and the panel zip (save-relay-decky-*, save-relay-panel-*).
           files: |
             dist/save-relay-*
             dist/SHA256SUMS
