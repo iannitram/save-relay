@@ -701,8 +701,12 @@ fn racing_push_on_a_stale_etag_is_refused_and_keeps_the_other_writers_bytes() {
     let (_, read_etag) = dav.get(&file).unwrap();
     assert_eq!(read_etag, mine);
 
-    // B writes over it while A still holds the etag it read.
-    let theirs = dav.put(&file, b"B's copy", &Precondition::Any).unwrap();
+    // B writes over it while A still holds the etag it read. The pause and the longer body
+    // make B's write differ from A's in time and in size, so the server's etag changes.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    let theirs = dav
+        .put(&file, b"B's longer copy", &Precondition::Any)
+        .unwrap();
     assert_ne!(theirs, mine);
 
     // A's push with the stale etag is refused and writes nothing.
@@ -711,6 +715,6 @@ fn racing_push_on_a_stale_etag_is_refused_and_keeps_the_other_writers_bytes() {
         .unwrap_err();
     assert!(matches!(err, Error::Changed), "{err:?}");
     let (bytes, etag) = dav.get(&file).unwrap();
-    assert_eq!(bytes, b"B's copy");
+    assert_eq!(bytes, b"B's longer copy");
     assert_eq!(etag, theirs);
 }
