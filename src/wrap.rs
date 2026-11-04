@@ -176,11 +176,22 @@ fn before_play(
         return;
     }
     note(choice_line(game, &choice));
+    // The whole wait, including a `Wait` answer's re-reads, ends this long after the hold.
+    let deadline = now() + ANSWER_WAIT_SECS;
     let answer = pending::wait_for_answer(store, game, ANSWER_WAIT_SECS, now, sleep);
     // The answer, if any, is in hand; the file goes either way, so a late answer is not kept.
     clear_pending(store, game);
     match answer {
-        Ok(Some(answer)) => act_on(engine, store, game, choice.kind, answer, now, sleep),
+        Ok(Some(answer)) => act_on(
+            engine,
+            store,
+            game,
+            choice.kind,
+            answer,
+            now,
+            deadline,
+            sleep,
+        ),
         Ok(None) => note(format!(
             "no answer in {ANSWER_WAIT_SECS} s; starting on this machine's saves"
         )),
@@ -188,6 +199,7 @@ fn before_play(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn act_on(
     engine: &dyn Engine,
     store: &LocalStore,
@@ -195,10 +207,11 @@ fn act_on(
     kind: ChoiceKind,
     answer: Answer,
     now: Clock,
+    deadline: u64,
     sleep: &dyn Fn(u64),
 ) {
     if answer == Answer::Wait {
-        wait_until_free(engine, store, game, now, sleep);
+        wait_until_free(engine, store, game, now, deadline, sleep);
         return;
     }
     let (resolve, anyway) = resolve_for(kind, answer);
@@ -212,19 +225,20 @@ fn act_on(
 }
 
 /// `Wait`: `pull` again, plainly, until another machine no longer has the game open, or
-/// `ANSWER_WAIT_SECS` have passed. Still open at the end: start on the local saves.
+/// `deadline` (the hold's report plus `ANSWER_WAIT_SECS`, set once in `before_play`) has passed.
+/// Still open at the end: start on the local saves.
 fn wait_until_free(
     engine: &dyn Engine,
     store: &LocalStore,
     game: &str,
     now: Clock,
+    deadline: u64,
     sleep: &dyn Fn(u64),
 ) {
-    let start = now();
     loop {
         match engine.pull(None, false) {
             Ok(report) if report.sync.action == Action::Held => {
-                if now().saturating_sub(start) >= ANSWER_WAIT_SECS {
+                if now() >= deadline {
                     note(format!(
                         "still open elsewhere after {ANSWER_WAIT_SECS} s; starting on this machine's saves"
                     ));

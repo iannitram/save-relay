@@ -6,9 +6,13 @@
 //! fixture program is needed, and the helper tests never run in a plain `cargo test`.
 
 use save_relay::api::{Action, Held, Side, SyncData, SyncReport};
-use save_relay::cli::run_with;
+use save_relay::cli::{run_with, run_with_env};
 use save_relay::creds::{self, CredentialStore, MemoryStore, Secret};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use save_relay::http::{Request, Response, Transport};
 use save_relay::local::{Config, LocalStore};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use save_relay::ludusavi;
 use save_relay::pending::{self, Answer, ChoiceKind, ANSWER_WAIT_SECS};
 use save_relay::platform::{AppDirs, PathVars};
 use save_relay::remote::MemoryRemote;
@@ -59,6 +63,19 @@ fn answer_then_tick(store: &LocalStore, answer: Answer) -> impl Fn(u64) + '_ {
     let answered = Cell::new(false);
     move |secs| {
         if !answered.get() {
+            answered.set(true);
+            pending::answer(store, GAME, answer).expect("the choice is pending");
+        }
+        tick(secs);
+    }
+}
+
+/// A `sleep` that answers the pending choice once the clock is `at` seconds past T0, and moves
+/// the clock on.
+fn answer_at_then_tick(store: &LocalStore, answer: Answer, at: u64) -> impl Fn(u64) + '_ {
+    let answered = Cell::new(false);
+    move |secs| {
+        if !answered.get() && clock() - T0 >= at {
             answered.set(true);
             pending::answer(store, GAME, answer).expect("the choice is pending");
         }
@@ -377,6 +394,29 @@ fn a_held_game_that_stays_held_starts_on_the_local_saves_after_the_wait() {
 }
 
 #[test]
+fn a_late_answer_to_a_held_game_ends_the_wait_120_s_after_the_hold() {
+    let _serial = serial();
+    let fx = Fixture::new("wait-late");
+    let fake = Fake::new(vec![Ok(held())], vec![Ok(report(Action::Noop, ""))]).holding_forever();
+    // The answer comes one second before the window ends; the re-reads after it stop at the
+    // window's end, not a full window after the answer.
+    let sleep = answer_at_then_tick(&fx.store, Answer::Wait, ANSWER_WAIT_SECS - 1);
+    let code = wrap::run(&fake, &fx.store, &child("child_exits_7"), clock, &sleep);
+    assert_eq!(code, 7);
+    let waited = clock() - T0;
+    assert!(
+        waited <= ANSWER_WAIT_SECS,
+        "the wait is at most {ANSWER_WAIT_SECS} s from the hold: {waited} s"
+    );
+    let calls = fake.calls();
+    assert_eq!(calls.last().map(String::as_str), Some("push none"));
+    assert!(
+        !calls.iter().any(|call| call == "pull none true"),
+        "waiting never plays past the mark"
+    );
+}
+
+#[test]
 fn a_conflict_found_at_exit_is_left_pending_and_not_waited_for() {
     let _serial = serial();
     let fx = Fixture::new("push-conflict");
@@ -647,4 +687,241 @@ fn wrap_on_a_set_up_machine_syncs_the_saves_and_exits_with_the_game_code() {
         "the save reached the server: {:?}",
         remote.file_paths()
     );
+}
+
+// ---- the front door: a failure before the sync still starts the game ------------------------
+
+/// `args` through `run_with` on a machine that is not set up: the exit code and standard output.
+fn run_on_a_fresh_machine(name: &str, args: &[String]) -> (i32, Vec<u8>) {
+    let fx = Fixture::new(name);
+    let vars = PathVars {
+        home: fx.root.join("home"),
+        data: fx.root.join("data"),
+        config: fx.root.join("config"),
+        documents: None,
+    };
+    let store = LocalStore::new(AppDirs::from_vars(&vars));
+    let remote = MemoryRemote::new();
+    let creds = MemoryStore::new();
+    let mut stdin = Cursor::new(Vec::<u8>::new());
+    let mut stdout = Vec::<u8>::new();
+    let code = run_with(
+        args,
+        &mut stdin,
+        &mut stdout,
+        &remote,
+        &creds,
+        &store,
+        &vars,
+        T0,
+    );
+    (code, stdout)
+}
+
+#[test]
+fn wrap_with_a_bad_argument_still_starts_the_game_and_prints_nothing() {
+    // `--bogus` is a flag wrap does not take; `--game=demo` is not the `--game demo` form.
+    let heads: [&[&str]; 2] = [&["--game", GAME, "--bogus"], &["--game=demo"]];
+    for head in heads {
+        let args = wrap_args(head, child("child_exits_7"));
+        let (code, stdout) = run_on_a_fresh_machine("bad-argument", &args);
+        assert_eq!(code, 7, "{head:?}: the game ran and its code is wrap's");
+        assert!(
+            stdout.is_empty(),
+            "{head:?}: {}",
+            String::from_utf8_lossy(&stdout)
+        );
+    }
+}
+
+#[test]
+fn wrap_with_no_folders_in_the_environment_still_starts_the_game() {
+    // `run` reads the platform folders from the environment; with none set, the game still runs
+    // unsynced and nothing reaches standard output.
+    let args = wrap_args(&["--game", GAME], child("child_exits_7"));
+    let no_folders = |_: &str| -> Option<String> { None };
+    let mut stdin = Cursor::new(Vec::<u8>::new());
+    let mut stdout = Vec::<u8>::new();
+    let code = run_with_env(&args, &mut stdin, &mut stdout, &no_folders);
+    assert_eq!(code, 7, "the game ran and its code is wrap's");
+    assert!(
+        stdout.is_empty(),
+        "wrap prints nothing on standard output: {}",
+        String::from_utf8_lossy(&stdout)
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn wrap_with_localappdata_unset_still_starts_the_game() {
+    let args = wrap_args(&["--game", GAME], child("child_exits_7"));
+    let without_local = |name: &str| -> Option<String> {
+        match name {
+            "USERPROFILE" | "APPDATA" => Some(r"C:\save-relay-test".to_string()),
+            _ => None,
+        }
+    };
+    let mut stdin = Cursor::new(Vec::<u8>::new());
+    let mut stdout = Vec::<u8>::new();
+    let code = run_with_env(&args, &mut stdin, &mut stdout, &without_local);
+    assert_eq!(code, 7, "the game ran and its code is wrap's");
+    assert!(stdout.is_empty(), "{}", String::from_utf8_lossy(&stdout));
+}
+
+#[test]
+fn wrap_without_a_dash_has_no_command_to_start_and_prints_nothing() {
+    // No `--`: there is no command to find, so nothing runs; the usage code is the result.
+    let args: Vec<String> = ["wrap", "--game", GAME, "child_exits_7"]
+        .iter()
+        .map(|arg| arg.to_string())
+        .collect();
+    let (code, stdout) = run_on_a_fresh_machine("no-dash", &args);
+    assert_eq!(code, 2, "a usage error");
+    assert!(
+        stdout.is_empty(),
+        "wrap prints nothing on standard output: {}",
+        String::from_utf8_lossy(&stdout)
+    );
+}
+
+#[test]
+fn another_commands_parse_failure_still_prints_on_standard_output() {
+    let args: Vec<String> = ["push", "--bogus", GAME]
+        .iter()
+        .map(|arg| arg.to_string())
+        .collect();
+    let (code, stdout) = run_on_a_fresh_machine("push-bogus", &args);
+    assert_eq!(code, 2);
+    assert!(
+        String::from_utf8_lossy(&stdout).contains("unknown flag '--bogus'"),
+        "{}",
+        String::from_utf8_lossy(&stdout)
+    );
+}
+
+// ---- the ludusavi fallback with --saves-dir -------------------------------------------------
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const LUDUSAVI_FIXTURE: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/ludusavi/manifest.yaml"
+);
+
+/// A transport that answers every request with the ludusavi data (the cache is filled once).
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+struct Canned(Vec<u8>);
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl Transport for Canned {
+    fn send(&self, _: &Request) -> Result<Response, Error> {
+        Ok(Response::new(200, self.0.clone()).header("ETag", "\"v1\""))
+    }
+}
+
+/// `wrap` on a Steam app with no manifest of the person's own: the ludusavi data is the game, and
+/// `--saves-dir` names the folder synced instead of the ludusavi one. The Steam folder is found
+/// by the platform's own rule, so this runs on Linux and macOS, as the `which` test does.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn wrap_syncs_the_saves_dir_given_over_the_ludusavi_folder() {
+    let fx = Fixture::new("ludusavi-saves-dir");
+    let vars = PathVars {
+        home: fx.root.join("home"),
+        data: fx.root.join("data"),
+        config: fx.root.join("config"),
+        documents: None,
+    };
+    let steam_home = if cfg!(target_os = "macos") {
+        "Library/Application Support/Steam"
+    } else {
+        ".local/share/Steam"
+    };
+    let library = fx.root.join("library");
+    let steamapps = vars.home.join(steam_home).join("steamapps");
+    fs::create_dir_all(&steamapps).unwrap();
+    fs::write(
+        steamapps.join("libraryfolders.vdf"),
+        format!(
+            "\"libraryfolders\"\n{{\n\t\"0\"\n\t{{\n\t\t\"path\"\t\t\"{}\"\n\t\t\"apps\"\n\t\t{{\n\t\t\t\"1000001\"\t\t\"1\"\n\t\t}}\n\t}}\n}}\n",
+            library.display()
+        ),
+    )
+    .unwrap();
+    fs::create_dir_all(library.join("steamapps/common/ExampleQuest")).unwrap();
+    fs::write(
+        library.join("steamapps/appmanifest_1000001.acf"),
+        "\"AppState\"\n{\n\t\"appid\"\t\t\"1000001\"\n\t\"installdir\"\t\t\"ExampleQuest\"\n}\n",
+    )
+    .unwrap();
+
+    // The ludusavi folder exists too, with its own save, so the synced folder shows which one ran.
+    let ludusavi_saves = vars.home.join("Example Quest Saves");
+    fs::create_dir_all(&ludusavi_saves).unwrap();
+    fs::write(ludusavi_saves.join("other.sav"), "ludusavi save").unwrap();
+    let named = fx.root.join("named-saves");
+    fs::create_dir_all(&named).unwrap();
+    fs::write(named.join("slot.sav"), "named save").unwrap();
+
+    // The ludusavi data is cached (a fresh copy, so `wrap` makes no request).
+    let cached = ludusavi::Cache::new(&AppDirs::from_vars(&vars))
+        .refresh(&Canned(fs::read(LUDUSAVI_FIXTURE).unwrap()), T0, false)
+        .unwrap();
+    assert!(cached, "the data was downloaded into the cache");
+
+    let store = LocalStore::new(AppDirs::from_vars(&vars));
+    store
+        .save_config(&Config {
+            format: 1,
+            server: SERVER.into(),
+            user: USER.into(),
+            root: "save-relay".into(),
+            device: "this-pc".into(),
+        })
+        .unwrap();
+    let creds = MemoryStore::new();
+    creds
+        .set(
+            &creds::account(SERVER, USER).unwrap(),
+            &Secret::new(PASSWORD),
+        )
+        .unwrap();
+
+    let remote = MemoryRemote::new();
+    let named_arg = named.to_string_lossy().into_owned();
+    let args = wrap_args(
+        &["--game", "steam-1000001", "--saves-dir", &named_arg],
+        child("child_exits_7"),
+    );
+    // The Steam app id the launcher passes; `wrap` reads it from the environment.
+    std::env::set_var("SteamAppId", "1000001");
+    let mut stdin = Cursor::new(Vec::<u8>::new());
+    let mut stdout = Vec::<u8>::new();
+    let code = run_with(
+        &args,
+        &mut stdin,
+        &mut stdout,
+        &remote,
+        &creds,
+        &store,
+        &vars,
+        T0,
+    );
+    std::env::remove_var("SteamAppId");
+
+    assert_eq!(code, 7, "{}", String::from_utf8_lossy(&stdout));
+    assert!(stdout.is_empty(), "{}", String::from_utf8_lossy(&stdout));
+    let paths = remote.file_paths();
+    assert!(
+        paths.iter().any(|path| path.ends_with("slot.sav")),
+        "the folder the person named is synced: {paths:?}"
+    );
+    assert!(
+        !paths.iter().any(|path| path.ends_with("other.sav")),
+        "the ludusavi folder is not synced: {paths:?}"
+    );
+    let record = store
+        .load_game("steam-1000001")
+        .unwrap()
+        .expect("the folder is remembered with the game");
+    assert_eq!(record.saves_dir, Some(named));
 }

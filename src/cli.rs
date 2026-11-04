@@ -779,16 +779,30 @@ pub struct Net<'a> {
 /// Run one command end to end: parse, load the config, the credential store and the game,
 /// connect, call `sync`, print text or the `--json` envelope to `stdout`, and return the exit
 /// code (`api::exit_code_for`, `api::exit_code`). A parse error with `--json` among the
-/// arguments is still printed as an envelope (command "unknown" when none was recognised).
+/// arguments is still printed as an envelope (command "unknown" when none was recognised), except
+/// for `wrap`, whose standard output is the game's: its failures are notes on standard error
+/// (`front_door_failure`).
 ///
 /// This is the real environment: the platform folders from the process environment, the system
-/// credential store, the real network and browser, and this session's Game Mode. `run_with_net`
-/// does the work.
+/// credential store, the real network and browser, and this session's Game Mode. `run_with_env`
+/// does the work with the environment passed in, and `run_with_net` the rest.
 pub fn run(args: &[String], stdin: &mut dyn Read, stdout: &mut dyn Write) -> i32 {
+    run_with_env(args, stdin, stdout, &|name| std::env::var(name).ok())
+}
+
+/// `run` with the environment passed in: the platform folders and Game Mode are read through
+/// `var`, not the process environment. A test passes its own (an empty one for the folders-not-
+/// found path); `run` passes the process environment.
+pub fn run_with_env(
+    args: &[String],
+    stdin: &mut dyn Read,
+    stdout: &mut dyn Write,
+    var: &dyn Fn(&str) -> Option<String>,
+) -> i32 {
     let json = args.iter().any(|arg| arg == "--json");
-    let vars = match PathVars::from_env(Platform::current(), &|name| std::env::var(name).ok()) {
+    let vars = match PathVars::from_env(Platform::current(), var) {
         Ok(vars) => vars,
-        Err(error) => return print_failure(stdout, json, &guess_command(args), &error),
+        Err(error) => return front_door_failure(stdout, json, args, &error),
     };
     let store = LocalStore::new(AppDirs::from_vars(&vars));
     let creds = real_credentials();
@@ -797,7 +811,7 @@ pub fn run(args: &[String], stdin: &mut dyn Read, stdout: &mut dyn Write) -> i32
         transport: real_transport(),
         open_browser: &crate::oauth::open_browser,
         clients: ClientSet::shipped(),
-        game_mode: crate::oauth::in_game_mode(&|name| std::env::var(name).ok()),
+        game_mode: crate::oauth::in_game_mode(var),
         clock: stamp::now,
     };
 
@@ -905,7 +919,7 @@ pub fn run_with_net(
         Ok(parsed) => parsed,
         Err(error) => {
             let json = args.iter().any(|arg| arg == "--json");
-            return print_failure(stdout, json, &guess_command(args), &error);
+            return front_door_failure(stdout, json, args, &error);
         }
     };
     let name = command_name(&parsed.command);
@@ -974,6 +988,42 @@ fn print_failure(stdout: &mut dyn Write, json: bool, command: &str, error: &Erro
         }
     }
     api::exit_code(error)
+}
+
+/// A failure before `wrap` could sync: the arguments did not parse, or the platform folders are
+/// not set. `wrap`'s standard output is the game's, so its failure is a note on standard error
+/// and the command after its first `--` still starts, unsynced (`start_unsynced`), with its exit
+/// code. With no command to start (no `--`, or nothing after it) the note and the usage code are
+/// the whole result. Any other command prints its failure on standard output (`print_failure`).
+fn front_door_failure(stdout: &mut dyn Write, json: bool, args: &[String], error: &Error) -> i32 {
+    if !is_wrap(args) {
+        return print_failure(stdout, json, &guess_command(args), error);
+    }
+    match wrap_child(args) {
+        Some(command) => start_unsynced(Some(error), command),
+        None => {
+            eprintln!("save-relay: {error}");
+            if matches!(error, Error::Usage(_)) {
+                eprintln!("Run `save-relay help` for the commands.");
+            }
+            api::exit_code(error)
+        }
+    }
+}
+
+/// True when the first argument other than `--json` is `wrap` (the rule `parse` uses).
+fn is_wrap(args: &[String]) -> bool {
+    args.iter()
+        .find(|arg| arg.as_str() != "--json")
+        .is_some_and(|arg| arg == "wrap")
+}
+
+/// The command after the first `--`, when there is one: what `wrap` starts after a front-door
+/// failure. None when there is no `--`, or nothing after it.
+fn wrap_child(args: &[String]) -> Option<&[String]> {
+    let dash = args.iter().position(|arg| arg == "--")?;
+    let command = &args[dash + 1..];
+    (!command.is_empty()).then_some(command)
 }
 
 /// The command word for an envelope when the arguments did not parse: the first argument that
@@ -1145,7 +1195,7 @@ fn wrap_remote(store: &LocalStore, creds: &dyn CredentialStore) -> Box<dyn Remot
 fn wrap_game(arg: &GameArg, app_id: Option<u32>, cx: &Context) -> Result<Game> {
     match load_game(arg, cx) {
         Err(Error::GameUnknown(_)) if arg.manifest.is_none() => match app_id {
-            Some(app_id) if steam::game_id(app_id) == arg.id => ludusavi_game(app_id, cx),
+            Some(app_id) if steam::game_id(app_id) == arg.id => ludusavi_game(arg, app_id, cx),
             _ => Err(Error::GameUnknown(arg.id.clone())),
         },
         other => other,
@@ -1153,16 +1203,28 @@ fn wrap_game(arg: &GameArg, app_id: Option<u32>, cx: &Context) -> Result<Game> {
 }
 
 /// The game for a Steam app with no manifest of the person's own: the ludusavi data, refreshed
-/// when a week old. A failed refresh is a note; the data already cached still serves.
-fn ludusavi_game(app_id: u32, cx: &Context) -> Result<Game> {
+/// when a week old. A failed refresh is a note; the data already cached still serves. A saves
+/// folder the person gave with `--saves-dir` is the one synced, and it is remembered with the
+/// game as `load_game` remembers it for `--manifest`, so later runs use it too.
+fn ludusavi_game(arg: &GameArg, app_id: u32, cx: &Context) -> Result<Game> {
     let cache = ludusavi::Cache::new(&AppDirs::from_vars(cx.vars));
     if let Err(error) = cache.refresh(&*cx.net.transport, cx.now, false) {
         eprintln!("save-relay: ludusavi data not refreshed: {error}");
     }
     let (_, located) = ludusavi_located(app_id, cx, &cache)?;
+    let Some(saves_dir) = arg.saves_dir.clone() else {
+        return Ok(Game {
+            manifest: located.manifest,
+            saves_dir: located.saves_dir,
+        });
+    };
+    cx.store.save_game(&GameRecord {
+        manifest: located.manifest.clone(),
+        saves_dir: Some(saves_dir.clone()),
+    })?;
     Ok(Game {
         manifest: located.manifest,
-        saves_dir: located.saves_dir,
+        saves_dir,
     })
 }
 
