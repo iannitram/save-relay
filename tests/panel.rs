@@ -661,13 +661,18 @@ fn an_api_post_runs_the_command_line_and_answers_its_envelope() {
 }
 
 #[test]
-fn an_api_refusal_is_a_200_failure_envelope_and_an_unknown_command_is_404() {
+fn an_api_refusal_is_a_400_failure_envelope_and_an_unknown_command_is_404() {
     let data = start(fake_run(Vec::new()));
     let header = format!("{TOKEN_HEADER}: {}", token_in(&data.url));
     let (status, body) = post(data.port, "/api/status", Some(header.clone()), "{}");
-    assert_eq!(status, "HTTP/1.1 200 OK");
+    assert_eq!(status, "HTTP/1.1 400 Bad Request");
     let envelope: Value = serde_json::from_slice(&body).expect("JSON");
     assert_eq!(envelope["ok"], false);
+    assert_eq!(envelope["error"]["code"], "usage");
+
+    let (status, body) = post(data.port, "/api/picture", Some(header.clone()), "{}");
+    assert_eq!(status, "HTTP/1.1 400 Bad Request");
+    let envelope: Value = serde_json::from_slice(&body).expect("JSON");
     assert_eq!(envelope["error"]["code"], "usage");
 
     let (status, _) = post(data.port, "/api/wrap", Some(header), "{}");
@@ -717,6 +722,22 @@ fn a_picture_is_served_as_its_image_type_or_not_found() {
     assert_eq!(status, "HTTP/1.1 404 Not Found");
 
     let (status, _) = get(data.port, "/picture/g/e", None);
+    assert_eq!(status, "HTTP/1.1 403 Forbidden");
+}
+
+#[test]
+fn the_picture_url_the_front_end_builds_loads_with_the_token_in_its_query() {
+    // The front end's `panelPicture(token)` (panel/src/App.tsx): `/picture/<game>/<entry>/<file>`
+    // with each segment percent-encoded and `?token=` for the `<img>`, which cannot send the header.
+    let data = start(fake_run(PNG.to_vec()));
+    let token = token_in(&data.url);
+    let built = format!("/picture/steam-1/2026-11-01/.save-relay-picture.png?token={token}");
+    let (status, body) = get(data.port, &built, None);
+    assert_eq!(status, "HTTP/1.1 200 OK");
+    assert_eq!(body, PNG.to_vec());
+
+    let without = "/picture/steam-1/2026-11-01/.save-relay-picture.png";
+    let (status, _) = get(data.port, without, None);
     assert_eq!(status, "HTTP/1.1 403 Forbidden");
 }
 

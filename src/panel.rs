@@ -10,7 +10,9 @@
 //!   `panel/placeholder/index.html`, so `cargo build` never needs Node. No build script.
 //! - `POST /api/<command>` with a JSON object body: runs the same code as the command line
 //!   (`api_args`, then `cli::run`) and answers its `--json` envelope with status 200, failures
-//!   included. A picture is not an API call: `POST /api/picture` answers a usage envelope.
+//!   included. A refused request (an unknown or missing field, a command the panel does not run)
+//!   is a usage envelope with status 400. A picture is not an API call: `POST /api/picture` is
+//!   refused the same way.
 //! - `GET /picture/<game>/<entry>` (or `.../<game>/<entry>/<file>`, which the front end sends):
 //!   a save card's picture, as `image/jpeg` or `image/png` by its magic bytes.
 //!
@@ -390,11 +392,11 @@ fn answer(request: &Request, token: &str, run: &RunCommand) -> Answer {
 fn api_answer(command: &str, body: &[u8], run: &RunCommand) -> Answer {
     if command == "picture" {
         let error = usage_error("read a picture with GET /picture/<game>/<entry>");
-        return (200, JSON, api::failure(command, &error).into_bytes());
+        return (400, JSON, api::failure(command, &error).into_bytes());
     }
     let argv = match api_args(command, body) {
         Ok(argv) => argv,
-        Err(error) => return (200, JSON, api::failure(command, &error).into_bytes()),
+        Err(error) => return (400, JSON, api::failure(command, &error).into_bytes()),
     };
     let (_, stdout) = run(&argv);
     if serde_json::from_slice::<Value>(&stdout).is_ok() {
