@@ -49,6 +49,7 @@ use crate::sync::{self, Game, Resolve, Session};
 use crate::webdav;
 #[cfg(feature = "http")]
 use crate::webdav::WebDav;
+use crate::wrap;
 use serde::Serialize;
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -828,6 +829,10 @@ pub fn run(args: &[String], stdin: &mut dyn Read, stdout: &mut dyn Write) -> i32
             }),
             Err(error) => Err(error),
         },
+        Ok(Args {
+            command: Command::Wrap { .. },
+            ..
+        }) => Ok((wrap_remote(&store, &*creds), None)),
         _ => Ok((Box::new(NoRemote), None)),
     };
     let (remote, password_line) = match connected {
@@ -933,6 +938,22 @@ pub fn run_with_net(
         now,
         net,
     };
+    // `wrap` starts the game itself: its stdout is the game's, and its exit code is the game's.
+    if let Command::Wrap {
+        game,
+        manifest,
+        saves_dir,
+        command: child,
+    } = &command
+    {
+        return wrap_command(
+            game.as_deref(),
+            manifest.as_ref(),
+            saves_dir.as_ref(),
+            child,
+            &context,
+        );
+    }
     match execute(command, stdin, &context) {
         Ok(done) => {
             let shown = if json { &done.json } else { &done.text };
@@ -1023,13 +1044,164 @@ fn execute(command: Command, stdin: &mut dyn Read, cx: &Context) -> Result<Outco
         Command::Restore { game, entry } => restore(&game, &entry, cx),
         // Each of these is filled in by the issue that builds it (docs/code-map.md).
         Command::PullAnyway { .. } => not_built("pull --anyway (F50)"),
-        Command::Wrap { .. } => not_built("wrap (F58)"),
+        Command::Wrap { .. } => unreachable!("run_with_net starts wrap itself"),
         Command::Which { app_id } => which(app_id, cx),
         Command::InstallWrap { .. } => not_built("install-wrap (F59)"),
         Command::Answer { .. } => not_built("answer (F57)"),
         Command::Where => where_command(cx),
         Command::Picture { game, entry, out } => picture_command(&game, &entry, &out, cx),
         Command::Panel { .. } => not_built("panel (F63)"),
+    }
+}
+
+/// `wrap`: start the game, synced around it when that can be done. The game is never refused:
+/// a setup or game problem is a note on standard error and an unsynced start. Nothing goes to
+/// standard output, so the game's own output is the only output. The exit code is the game's.
+fn wrap_command(
+    explicit: Option<&str>,
+    manifest: Option<&PathBuf>,
+    saves_dir: Option<&PathBuf>,
+    command: &[String],
+    cx: &Context,
+) -> i32 {
+    let env = |name: &str| std::env::var(name).ok();
+    let app_id = steam::app_id_from_env(&env);
+    let id = match wrap::game_id(explicit, &env) {
+        Ok(id) => id,
+        Err(error) => return start_unsynced(Some(&error), command),
+    };
+    let config = match load_config(cx) {
+        Ok(config) => config,
+        Err(error) => return start_unsynced(Some(&error), command),
+    };
+    let arg = GameArg {
+        id: id.clone(),
+        manifest: manifest.cloned(),
+        saves_dir: saves_dir.cloned(),
+    };
+    let target = match wrap_game(&arg, app_id, cx) {
+        Ok(target) => target,
+        Err(error) => return start_unsynced(Some(&error), command),
+    };
+    // Set once the game has run, so a failure after it (a rotated token that cannot be stored)
+    // is a note and never a second start of the game.
+    let mut ran: Option<i32> = None;
+    let pause = |secs: u64| std::thread::sleep(std::time::Duration::from_secs(secs));
+    let synced = with_remote(&config, cx, |remote| {
+        let s = session(&config, remote, cx)?;
+        let engine = SyncEngine {
+            s,
+            game: &target,
+            store: cx.store,
+            id: &id,
+        };
+        ran = Some(wrap::run(&engine, cx.store, command, cx.net.clock, &pause));
+        Ok(())
+    });
+    match ran {
+        Some(code) => {
+            if let Err(error) = synced {
+                eprintln!("save-relay: {error}");
+            }
+            code
+        }
+        None => start_unsynced(synced.as_ref().err(), command),
+    }
+}
+
+/// Start the game without sync. A note says why (when there is a reason), then the game runs
+/// with the command's standard streams. Its exit code, or 1 when it cannot start.
+fn start_unsynced(reason: Option<&Error>, command: &[String]) -> i32 {
+    if let Some(error) = reason {
+        eprintln!("save-relay: {error}; the game starts without sync");
+    }
+    match wrap::run_child(command) {
+        Ok(code) => code,
+        Err(error) => {
+            eprintln!("save-relay: {error}");
+            1
+        }
+    }
+}
+
+/// The connection a `wrap` works through. A connection that cannot be made is a remote that
+/// says why on every call (`FailedRemote`). Google Drive and Dropbox open their server inside
+/// the command (`with_remote`), so they get no connection here.
+fn wrap_remote(store: &LocalStore, creds: &dyn CredentialStore) -> Box<dyn Remote> {
+    let remote: Result<Box<dyn Remote>> = match uses_service_tokens(store) {
+        Ok(true) => Ok(Box::new(NoRemote)),
+        Ok(false) => connection(store, creds)
+            .and_then(|(config, secret)| connect(&config.server, &config.user, secret)),
+        Err(error) => Err(error),
+    };
+    match remote {
+        Ok(remote) => remote,
+        Err(error) => Box::new(FailedRemote(error)),
+    }
+}
+
+/// The game a `wrap` syncs: the manifest the person gave or remembered (`load_game`). With none,
+/// and a Steam app id from the environment that the game id names, the ludusavi entry for it.
+fn wrap_game(arg: &GameArg, app_id: Option<u32>, cx: &Context) -> Result<Game> {
+    match load_game(arg, cx) {
+        Err(Error::GameUnknown(_)) if arg.manifest.is_none() => match app_id {
+            Some(app_id) if steam::game_id(app_id) == arg.id => ludusavi_game(app_id, cx),
+            _ => Err(Error::GameUnknown(arg.id.clone())),
+        },
+        other => other,
+    }
+}
+
+/// The game for a Steam app with no manifest of the person's own: the ludusavi data, refreshed
+/// when a week old. A failed refresh is a note; the data already cached still serves.
+fn ludusavi_game(app_id: u32, cx: &Context) -> Result<Game> {
+    let cache = ludusavi::Cache::new(&AppDirs::from_vars(cx.vars));
+    if let Err(error) = cache.refresh(&*cx.net.transport, cx.now, false) {
+        eprintln!("save-relay: ludusavi data not refreshed: {error}");
+    }
+    let (_, located) = ludusavi_located(app_id, cx, &cache)?;
+    Ok(Game {
+        manifest: located.manifest,
+        saves_dir: located.saves_dir,
+    })
+}
+
+/// The game's name and where its saves are, from the ludusavi data: the entry (`lookup`)
+/// translated for this machine (`steam_facts`, `translate`).
+fn ludusavi_located(
+    app_id: u32,
+    cx: &Context,
+    cache: &ludusavi::Cache,
+) -> Result<(String, ludusavi::Located)> {
+    let (name, entry) = cache.lookup(app_id)?;
+    let facts = steam_facts(app_id, cx)?;
+    let located = ludusavi::translate(
+        &name,
+        &entry,
+        &facts,
+        &|path: &std::path::Path| path.exists(),
+        &|path: &std::path::Path| path.is_dir(),
+    )?;
+    Ok((name, located))
+}
+
+/// The engine a `wrap` runs for one game: `sync::pull` and `sync::push` over this session.
+struct SyncEngine<'a> {
+    s: Session<'a>,
+    game: &'a Game,
+    store: &'a LocalStore,
+    id: &'a str,
+}
+
+impl wrap::Engine for SyncEngine<'_> {
+    fn game(&self) -> &str {
+        self.id
+    }
+    fn pull(&self, resolve: Option<Resolve>, anyway: bool) -> Result<SyncReport> {
+        sync::pull(&self.s, self.game, self.store, resolve, anyway)
+    }
+    fn push(&self, resolve: Option<Resolve>) -> Result<SyncReport> {
+        sync::push(&self.s, self.game, self.store, resolve)
     }
 }
 
@@ -1541,15 +1713,7 @@ fn which(app_id: u32, cx: &Context) -> Result<Outcome> {
 
     let cache = ludusavi::Cache::new(&AppDirs::from_vars(cx.vars));
     cache.refresh(&*cx.net.transport, cx.now, false)?;
-    let (name, entry) = cache.lookup(app_id)?;
-    let facts = steam_facts(app_id, cx)?;
-    let located = ludusavi::translate(
-        &name,
-        &entry,
-        &facts,
-        &|path: &std::path::Path| path.exists(),
-        &|path: &std::path::Path| path.is_dir(),
-    )?;
+    let (name, located) = ludusavi_located(app_id, cx, &cache)?;
     let saves_dir = located.saves_dir.to_string_lossy().replace('\\', "/");
     let message = format!("{name}: saves are in {saves_dir} (ludusavi data)");
     let data = WhichData {
@@ -1694,6 +1858,34 @@ impl Remote for NoRemote {
 
 fn no_server() -> Error {
     Error::Io("this command has no server connection".into())
+}
+
+/// A remote for a `wrap` whose connection could not be made: every call says why, so the
+/// engine's error becomes a note and the game starts on the local saves.
+struct FailedRemote(Error);
+
+impl Remote for FailedRemote {
+    fn list(&self, _: &str) -> Result<Vec<RemoteEntry>> {
+        Err(self.0.clone())
+    }
+    fn get(&self, _: &str) -> Result<(Vec<u8>, String)> {
+        Err(self.0.clone())
+    }
+    fn put(&self, _: &str, _: &[u8], _: &Precondition) -> Result<String> {
+        Err(self.0.clone())
+    }
+    fn mkcol(&self, _: &str) -> Result<()> {
+        Err(self.0.clone())
+    }
+    fn copy(&self, _: &str, _: &str) -> Result<()> {
+        Err(self.0.clone())
+    }
+    fn move_to(&self, _: &str, _: &str) -> Result<()> {
+        Err(self.0.clone())
+    }
+    fn delete(&self, _: &str) -> Result<()> {
+        Err(self.0.clone())
+    }
 }
 
 #[cfg(feature = "keyring")]

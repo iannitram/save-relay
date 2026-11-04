@@ -14,17 +14,30 @@
 //! (`steam::app_id_from_env`); the saves folder is `--manifest` or a manifest remembered for
 //! that id (the person's own always wins), else `ludusavi`.
 
-use crate::api::SyncReport;
-use crate::error::{not_built, Result};
+use crate::api::{Action, SyncReport};
+use crate::error::{Error, Result};
 use crate::local::LocalStore;
-use crate::pending::{Answer, ChoiceKind, PendingChoice};
-use crate::stamp::Clock;
+use crate::pending::{self, Answer, ChoiceKind, PendingChoice, ANSWER_WAIT_SECS, POLL_SECS};
+use crate::stamp::{self, Clock};
+use crate::steam;
 use crate::sync::Resolve;
+use std::process::{Command, ExitStatus, Stdio};
 
 /// The game id: `explicit` when given, else `steam-<app id>` from the environment; neither is
 /// `Error::Usage("wrap: no --game and no Steam app id in the environment")`.
 pub fn game_id(explicit: Option<&str>, var: &dyn Fn(&str) -> Option<String>) -> Result<String> {
-    not_built("wrap::game_id")
+    if let Some(id) = explicit {
+        if id.is_empty() {
+            return Err(Error::Usage("wrap: --game is empty".into()));
+        }
+        return Ok(id.to_string());
+    }
+    match steam::app_id_from_env(var) {
+        Some(app_id) => Ok(steam::game_id(app_id)),
+        None => Err(Error::Usage(
+            "wrap: no --game and no Steam app id in the environment".into(),
+        )),
+    }
 }
 
 /// The engine as `wrap` uses it, so its flow is tested without a server or a game:
@@ -41,21 +54,77 @@ pub trait Engine {
 /// `Conflict` (sides and cards copied), `Action::Held` a `Held` (who has it open); anything
 /// else is `None`. `now` is the choice's `time`. Pure.
 pub fn choice_for(game: &str, report: &SyncReport, now: u64) -> Option<PendingChoice> {
-    crate::not_built!("wrap::choice_for")
+    let time = stamp::rfc3339(now);
+    match report.sync.action {
+        Action::Conflict => Some(PendingChoice {
+            format: pending::FORMAT,
+            game: game.to_string(),
+            kind: ChoiceKind::Conflict,
+            server: report.sync.server.clone(),
+            local: report.sync.local.clone(),
+            server_card: report.server_card.clone(),
+            local_card: report.local_card.clone(),
+            held: None,
+            time,
+            answer: None,
+        }),
+        Action::Held => Some(PendingChoice {
+            format: pending::FORMAT,
+            game: game.to_string(),
+            kind: ChoiceKind::Held,
+            server: None,
+            local: None,
+            server_card: None,
+            local_card: None,
+            held: report.held.clone(),
+            time,
+            answer: None,
+        }),
+        _ => None,
+    }
 }
 
 /// What an answer means before Play: `KeepServer`/`KeepLocal` call `pull` again with that
 /// resolve; `PlayAnyway` calls `pull` with `anyway`; `Wait` reads the mark again
 /// (`pull` once more, plain) until it is free or the wait ends. Pure.
 pub fn resolve_for(kind: ChoiceKind, answer: Answer) -> (Option<Resolve>, bool) {
-    crate::not_built!("wrap::resolve_for")
+    match (kind, answer) {
+        (ChoiceKind::Conflict, Answer::KeepServer) => (Some(Resolve::KeepServer), false),
+        (ChoiceKind::Conflict, Answer::KeepLocal) => (Some(Resolve::KeepLocal), false),
+        (ChoiceKind::Held, Answer::PlayAnyway) => (None, true),
+        _ => (None, false),
+    }
 }
 
 /// Start `command` (program and arguments, no shell) with inherited standard streams and wait.
 /// Its exit code; killed by a signal is 128 + the signal on Unix, 1 elsewhere. A program that
 /// cannot start is `Error::Io` naming it.
 pub fn run_child(command: &[String]) -> Result<i32> {
-    not_built("wrap::run_child")
+    let Some((program, arguments)) = command.split_first() else {
+        return Err(Error::Usage("wrap: no command after --".into()));
+    };
+    let status = Command::new(program)
+        .args(arguments)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .map_err(|error| Error::Io(format!("cannot start {program}: {error}")))?;
+    Ok(exit_code(status))
+}
+
+fn exit_code(status: ExitStatus) -> i32 {
+    if let Some(code) = status.code() {
+        return code;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signal) = status.signal() {
+            return 128 + signal;
+        }
+    }
+    1
 }
 
 /// The whole wrap: `pull`; on a choice, write it (`store.save_pending`) and
@@ -70,5 +139,169 @@ pub fn run(
     now: Clock,
     sleep: &dyn Fn(u64),
 ) -> i32 {
-    crate::not_built!("wrap::run")
+    let game = engine.game().to_string();
+    before_play(engine, store, &game, now, sleep);
+    let code = match run_child(command) {
+        Ok(code) => code,
+        Err(error) => {
+            note(error);
+            1
+        }
+    };
+    after_play(engine, store, &game, now());
+    code
+}
+
+/// `pull` before Play, and what the person's answer to a choice makes of it.
+fn before_play(
+    engine: &dyn Engine,
+    store: &LocalStore,
+    game: &str,
+    now: Clock,
+    sleep: &dyn Fn(u64),
+) {
+    let report = match engine.pull(None, false) {
+        Ok(report) => report,
+        Err(error) => {
+            note(format!("{error}; starting on this machine's saves"));
+            return;
+        }
+    };
+    let Some(choice) = choice_for(game, &report, now()) else {
+        report_note(&report);
+        return;
+    };
+    if let Err(error) = store.save_pending(&choice) {
+        note(format!("{error}; starting on this machine's saves"));
+        return;
+    }
+    note(choice_line(game, &choice));
+    let answer = pending::wait_for_answer(store, game, ANSWER_WAIT_SECS, now, sleep);
+    // The answer, if any, is in hand; the file goes either way, so a late answer is not kept.
+    clear_pending(store, game);
+    match answer {
+        Ok(Some(answer)) => act_on(engine, store, game, choice.kind, answer, now, sleep),
+        Ok(None) => note(format!(
+            "no answer in {ANSWER_WAIT_SECS} s; starting on this machine's saves"
+        )),
+        Err(error) => note(format!("{error}; starting on this machine's saves")),
+    }
+}
+
+fn act_on(
+    engine: &dyn Engine,
+    store: &LocalStore,
+    game: &str,
+    kind: ChoiceKind,
+    answer: Answer,
+    now: Clock,
+    sleep: &dyn Fn(u64),
+) {
+    if answer == Answer::Wait {
+        wait_until_free(engine, store, game, now, sleep);
+        return;
+    }
+    let (resolve, anyway) = resolve_for(kind, answer);
+    match engine.pull(resolve, anyway) {
+        Ok(report) => {
+            report_note(&report);
+            settle(store, game, &report, now());
+        }
+        Err(error) => note(error),
+    }
+}
+
+/// `Wait`: `pull` again, plainly, until another machine no longer has the game open, or
+/// `ANSWER_WAIT_SECS` have passed. Still open at the end: start on the local saves.
+fn wait_until_free(
+    engine: &dyn Engine,
+    store: &LocalStore,
+    game: &str,
+    now: Clock,
+    sleep: &dyn Fn(u64),
+) {
+    let start = now();
+    loop {
+        match engine.pull(None, false) {
+            Ok(report) if report.sync.action == Action::Held => {
+                if now().saturating_sub(start) >= ANSWER_WAIT_SECS {
+                    note(format!(
+                        "still open elsewhere after {ANSWER_WAIT_SECS} s; starting on this machine's saves"
+                    ));
+                    return;
+                }
+                sleep(POLL_SECS);
+            }
+            Ok(report) => {
+                report_note(&report);
+                settle(store, game, &report, now());
+                return;
+            }
+            Err(error) => {
+                note(error);
+                return;
+            }
+        }
+    }
+}
+
+/// After the game quits: `push`. A choice it finds is written and left pending.
+fn after_play(engine: &dyn Engine, store: &LocalStore, game: &str, now: u64) {
+    match engine.push(None) {
+        Ok(report) => {
+            report_note(&report);
+            settle(store, game, &report, now);
+        }
+        Err(error) => note(error),
+    }
+}
+
+/// A report that is not a choice clears any pending choice for `game` (it is settled); a
+/// report that is one is written, left pending, and named on standard error.
+fn settle(store: &LocalStore, game: &str, report: &SyncReport, now: u64) {
+    match choice_for(game, report, now) {
+        Some(choice) => match store.save_pending(&choice) {
+            Ok(()) => note(choice_line(game, &choice)),
+            Err(error) => note(error),
+        },
+        None => clear_pending(store, game),
+    }
+}
+
+fn clear_pending(store: &LocalStore, game: &str) {
+    if let Err(error) = store.clear_pending(game) {
+        note(error);
+    }
+}
+
+/// The one line that names a choice and how to answer it. The panel lists it too.
+fn choice_line(game: &str, choice: &PendingChoice) -> String {
+    match choice.kind {
+        ChoiceKind::Conflict => format!(
+            "{game}: saves changed on this machine and on the server; answer keep-server or keep-local (the panel lists it), or the game starts on this machine's saves"
+        ),
+        ChoiceKind::Held => {
+            let device = choice
+                .held
+                .as_ref()
+                .map_or("another machine", |held| held.device.as_str());
+            format!(
+                "{game}: open on {device}; answer play-anyway or wait (the panel lists it), or the game starts on this machine's saves"
+            )
+        }
+    }
+}
+
+/// A report's message as one note. A conflict or a hold has its own line (`choice_line`).
+fn report_note(report: &SyncReport) {
+    if matches!(report.sync.action, Action::Conflict | Action::Held)
+        || report.sync.message.is_empty()
+    {
+        return;
+    }
+    note(&report.sync.message);
+}
+
+fn note(text: impl std::fmt::Display) {
+    eprintln!("save-relay: {text}");
 }
