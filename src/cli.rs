@@ -240,7 +240,7 @@ pub fn parse(args: &[String]) -> Result<Args> {
             Some(idx) => &args[..idx],
             None => args,
         };
-        if before_dash.iter().any(|arg| arg.as_str() == "--password") {
+        if before_dash.iter().any(|arg| is_password_flag(arg.as_str())) {
             return Err(Error::Usage(
                 "the password is read from standard input, not from --password".to_string(),
             ));
@@ -275,7 +275,7 @@ pub fn parse(args: &[String]) -> Result<Args> {
         });
     }
 
-    if args.iter().any(|arg| arg == "--password") {
+    if args.iter().any(|arg| is_password_flag(arg.as_str())) {
         return Err(Error::Usage(
             "the password is read from standard input, not from --password".to_string(),
         ));
@@ -619,7 +619,9 @@ fn split<'a>(
                 flags.values.push((arg, value));
                 index += 2;
             } else {
-                return Err(Error::Usage(format!("unknown flag '{arg}'")));
+                // The name only: `--flag=VALUE` may carry a secret, and this message is printed.
+                let name = arg.split('=').next().unwrap_or(arg);
+                return Err(Error::Usage(format!("unknown flag '{name}'")));
             }
         } else {
             flags.positionals.push(arg);
@@ -627,6 +629,12 @@ fn split<'a>(
         }
     }
     Ok(flags)
+}
+
+/// `--password` in either form, `--password VALUE` or `--password=VALUE`. Either is refused by
+/// name only: the value must never reach an output (SPEC.md M6).
+fn is_password_flag(arg: &str) -> bool {
+    arg == "--password" || arg.starts_with("--password=")
 }
 
 fn parse_app_id(text: &str) -> Result<u32> {
@@ -644,10 +652,10 @@ fn require(positionals: &[&str], count: usize, missing: &[&str]) -> Result<()> {
         return missing_value(missing[positionals.len()]);
     }
     if positionals.len() > count {
-        return Err(Error::Usage(format!(
-            "unexpected argument '{}'",
-            positionals[count]
-        )));
+        // No word is named: a secret typed in the wrong place must not be echoed (SPEC.md M6).
+        return Err(Error::Usage(
+            "unexpected argument (its value is not shown)".into(),
+        ));
     }
     Ok(())
 }
