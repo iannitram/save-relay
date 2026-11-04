@@ -27,8 +27,8 @@
 //! ```
 
 use crate::api::{
-    self, Action, HistoryData, SetupData, Side, SignInPrompt, SyncReport, WhereData, WhichData,
-    WhichSource,
+    self, Action, AnswerData, HistoryData, SetupData, Side, SignInPrompt, SyncReport, WhereData,
+    WhichData, WhichSource,
 };
 use crate::clients::{self, Client, ClientSet};
 use crate::creds::{self, CredentialStore, Secret};
@@ -39,7 +39,7 @@ use crate::local::{self, Config, GameRecord, LocalStore};
 use crate::ludusavi::{self, Facts};
 use crate::manifest::Manifest;
 use crate::oauth::{self, Pending, TokenSource, Tokens};
-use crate::pending::Answer;
+use crate::pending::{self, Answer};
 use crate::platform::{AppDirs, PathVars, Platform};
 use crate::remote::{self, Precondition, Remote, RemoteEntry};
 use crate::service::{self, Service};
@@ -814,6 +814,7 @@ pub fn run(args: &[String], stdin: &mut dyn Read, stdout: &mut dyn Write) -> i32
         Ok(Args {
             command:
                 Command::Pull { .. }
+                | Command::PullAnyway { .. }
                 | Command::Push { .. }
                 | Command::Status { .. }
                 | Command::History { .. }
@@ -1016,17 +1017,17 @@ fn execute(command: Command, stdin: &mut dyn Read, cx: &Context) -> Result<Outco
                 "choose a service: nextcloud, gdrive or dropbox".into(),
             )),
         },
-        Command::Pull { game, resolve } => sync_command("pull", &game, resolve, cx),
-        Command::Push { game, resolve } => sync_command("push", &game, resolve, cx),
+        Command::Pull { game, resolve } => sync_command("pull", &game, resolve, false, cx),
+        Command::PullAnyway { game, resolve } => sync_command("pull", &game, resolve, true, cx),
+        Command::Push { game, resolve } => sync_command("push", &game, resolve, false, cx),
         Command::Status { game } => status(&game, cx),
         Command::History { game } => history(&game, cx),
         Command::Restore { game, entry } => restore(&game, &entry, cx),
         // Each of these is filled in by the issue that builds it (docs/code-map.md).
-        Command::PullAnyway { .. } => not_built("pull --anyway (F50)"),
         Command::Wrap { .. } => not_built("wrap (F58)"),
         Command::Which { app_id } => which(app_id, cx),
         Command::InstallWrap { .. } => not_built("install-wrap (F59)"),
-        Command::Answer { .. } => not_built("answer (F57)"),
+        Command::Answer { game, answer } => answer_command(&game, answer, cx),
         Command::Where => where_command(cx),
         Command::Picture { game, entry, out } => picture_command(&game, &entry, &out, cx),
         Command::Panel { .. } => not_built("panel (F63)"),
@@ -1119,10 +1120,13 @@ fn load_game(arg: &GameArg, cx: &Context) -> Result<Game> {
     Ok(game)
 }
 
+/// `pull` and `push`. `anyway` is `pull --anyway` (M11): play past another machine's open-elsewhere
+/// mark; a push decides without the mark and ignores it.
 fn sync_command(
     command: &str,
     arg: &GameArg,
     resolve: Option<Resolve>,
+    anyway: bool,
     cx: &Context,
 ) -> Result<Outcome> {
     let config = load_config(cx)?;
@@ -1130,7 +1134,7 @@ fn sync_command(
     let report = with_remote(&config, cx, |remote| {
         let s = session(&config, remote, cx)?;
         if command == "pull" {
-            sync::pull(&s, &game, cx.store, resolve, false)
+            sync::pull(&s, &game, cx.store, resolve, anyway)
         } else {
             sync::push(&s, &game, cx.store, resolve)
         }
@@ -1209,6 +1213,32 @@ fn where_command(cx: &Context) -> Result<Outcome> {
     })?;
     let text = where_text(&data);
     Ok(outcome("where", &data, text, 0))
+}
+
+/// `answer <game> <answer>` (M12): records the choice for the `wrap` that waits on it
+/// (`pending::answer`, which refuses an answer that does not fit the choice). Local only: no
+/// server call, and the exit code is 0.
+fn answer_command(game: &str, answer: Answer, cx: &Context) -> Result<Outcome> {
+    let choice = pending::answer(cx.store, game, answer)?;
+    let message = answer_text(&choice.game, answer);
+    let data = AnswerData {
+        game: choice.game,
+        kind: choice.kind,
+        answer,
+        message: message.clone(),
+    };
+    Ok(outcome("answer", &data, message, 0))
+}
+
+/// What `answer` says back: the answer on record, and what the waiting `wrap` does with it.
+fn answer_text(game: &str, answer: Answer) -> String {
+    let effect = match answer {
+        Answer::KeepServer => "the server's saves win the conflict",
+        Answer::KeepLocal => "this machine's saves win the conflict",
+        Answer::PlayAnyway => "the game starts past the open-elsewhere mark",
+        Answer::Wait => "the game waits until the open-elsewhere mark clears",
+    };
+    format!("Recorded {} for {game}: {effect}.", answer.key())
 }
 
 /// Switching service or account starts fresh (docs/adr/0002-storage-backends.md): the credentials

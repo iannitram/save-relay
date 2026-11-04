@@ -2,9 +2,11 @@
 //! `--json` envelope (field names exactly as docs/code-map.md § API shape), the exit codes, a
 //! parse error printed as an envelope, and the app password never reaching stdout or a file.
 
+use save_relay::api::{Held, Side};
 use save_relay::cli::{connection, run_with};
 use save_relay::creds::{CredentialStore, MemoryStore, Secret};
 use save_relay::local::LocalStore;
+use save_relay::pending::{Answer, ChoiceKind, PendingChoice};
 use save_relay::platform::{AppDirs, PathVars};
 use save_relay::remote::{MemoryRemote, Precondition, Remote, RemoteEntry};
 use save_relay::{Error, Result};
@@ -689,12 +691,201 @@ fn help_and_version_and_commands_not_built_yet() {
     assert_eq!(code, 0);
     assert!(out.starts_with("save-relay <command>"));
 
-    // Each of these arrives with its own issue; until then it says so, exit 1.
-    for line in ["answer demo-game wait", "panel"] {
-        let (code, out) = machine.run(&format!("{line} --json"), "", T0);
-        assert_eq!(code, 1, "{line}: {out}");
-        assert_eq!(one_envelope(&out)["error"]["code"], "not_built", "{line}");
+    // This arrives with its own issue; until then it says so, exit 1.
+    let (code, out) = machine.run("panel --json", "", T0);
+    assert_eq!(code, 1, "panel: {out}");
+    assert_eq!(one_envelope(&out)["error"]["code"], "not_built", "panel");
+}
+
+/// A conflict `wrap` wrote for `GAME`, waiting for an answer.
+fn waiting_conflict() -> PendingChoice {
+    PendingChoice {
+        format: 1,
+        game: GAME.into(),
+        kind: ChoiceKind::Conflict,
+        server: Some(Side {
+            device: "strix-tablet".into(),
+            time: "2026-10-31T19:53:00Z".into(),
+            revision: Some(2),
+        }),
+        local: Some(Side {
+            device: "amd-handheld".into(),
+            time: "2026-10-31T19:51:00Z".into(),
+            revision: None,
+        }),
+        server_card: None,
+        local_card: None,
+        held: None,
+        time: "2026-10-31T19:54:00Z".into(),
+        answer: None,
     }
+}
+
+/// A held game `wrap` wrote for `GAME`, waiting for an answer.
+fn waiting_held() -> PendingChoice {
+    PendingChoice {
+        format: 1,
+        game: GAME.into(),
+        kind: ChoiceKind::Held,
+        server: None,
+        local: None,
+        server_card: None,
+        local_card: None,
+        held: Some(Held {
+            device: "strix-tablet".into(),
+            since: "2026-10-31T19:52:00Z".into(),
+        }),
+        time: "2026-10-31T19:54:00Z".into(),
+        answer: None,
+    }
+}
+
+#[test]
+fn pull_anyway_in_text_mode_plays_past_the_other_machines_mark() {
+    let remote = Arc::new(MemoryRemote::new());
+    let amd = pushed_machine(&remote, "amd-handheld");
+    // amd has the game open: its pull writes the open-elsewhere mark.
+    let (code, out) = amd.run(&format!("pull {}", amd.game_flags()), "", T0 + 60);
+    assert_eq!(code, 0, "{out}");
+    let tablet = Machine::new(&remote);
+    tablet.setup("strix-tablet");
+
+    let (code, out) = tablet.run(&format!("pull {}", tablet.game_flags()), "", T0 + 120);
+    assert_eq!(code, 6, "{out}");
+    assert!(
+        !tablet.root.join("saves/slot1.sav").exists(),
+        "a held game touches nothing"
+    );
+
+    let (code, out) = tablet.run(
+        &format!("pull {} --anyway", tablet.game_flags()),
+        "",
+        T0 + 180,
+    );
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(
+        out,
+        "Pulled revision 1 from amd-handheld (2026-10-31T19:51:00Z).\n"
+    );
+    assert_eq!(
+        fs::read_to_string(tablet.root.join("saves/slot1.sav")).unwrap(),
+        "chapter one"
+    );
+}
+
+#[test]
+fn pull_anyway_with_json_returns_the_pull_envelope() {
+    let remote = Arc::new(MemoryRemote::new());
+    let amd = pushed_machine(&remote, "amd-handheld");
+    let (code, out) = amd.run(&format!("pull {}", amd.game_flags()), "", T0 + 60);
+    assert_eq!(code, 0, "{out}");
+    let tablet = Machine::new(&remote);
+    tablet.setup("strix-tablet");
+
+    let (code, envelope) = tablet.json(&format!("pull {}", tablet.game_flags()), T0 + 120);
+    assert_eq!(code, 6, "{envelope}");
+    assert_eq!(envelope["data"]["action"], "held");
+
+    let (code, envelope) = tablet.json(&format!("pull {} --anyway", tablet.game_flags()), T0 + 180);
+    assert_eq!(code, 0, "{envelope}");
+    assert_eq!(keys(&envelope), set(&["ok", "command", "data"]));
+    assert_eq!(envelope["ok"], true);
+    assert_eq!(envelope["command"], "pull");
+    let data = &envelope["data"];
+    assert_eq!(
+        keys(data),
+        set(&[
+            "game",
+            "action",
+            "revision",
+            "server",
+            "local",
+            "backup",
+            "counts",
+            "message",
+            "held",
+            "server_card",
+            "local_card",
+        ])
+    );
+    assert_eq!(data["game"], GAME);
+    assert_eq!(data["action"], "pulled");
+    assert_eq!(data["revision"], 1);
+    assert!(data["held"].is_null());
+    assert_eq!(
+        fs::read_to_string(tablet.root.join("saves/slot1.sav")).unwrap(),
+        "chapter one"
+    );
+}
+
+#[test]
+fn answer_with_nothing_waiting_is_no_pending_choice_exit_2() {
+    let remote = Arc::new(MemoryRemote::new());
+    let machine = Machine::new(&remote);
+
+    let (code, envelope) = machine.json(&format!("answer {GAME} keep-server"), T0);
+    assert_eq!(code, 2, "{envelope}");
+    assert_eq!(envelope["ok"], false);
+    assert_eq!(envelope["command"], "answer");
+    assert_eq!(envelope["error"]["code"], "no_pending_choice");
+}
+
+#[test]
+fn answer_records_a_conflict_choice_in_text_mode() {
+    let remote = Arc::new(MemoryRemote::new());
+    let machine = Machine::new(&remote);
+    machine.store.save_pending(&waiting_conflict()).unwrap();
+
+    let (code, out) = machine.run(&format!("answer {GAME} keep-local"), "", T0 + 180);
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(
+        out,
+        "Recorded keep-local for demo-game: this machine's saves win the conflict.\n"
+    );
+    let stored = machine.store.load_pending(GAME).unwrap().unwrap();
+    assert_eq!(stored.kind, ChoiceKind::Conflict);
+    assert_eq!(stored.answer, Some(Answer::KeepLocal));
+}
+
+#[test]
+fn answer_records_a_held_choice_with_json() {
+    let remote = Arc::new(MemoryRemote::new());
+    let machine = Machine::new(&remote);
+    machine.store.save_pending(&waiting_held()).unwrap();
+
+    let (code, envelope) = machine.json(&format!("answer {GAME} play-anyway"), T0 + 180);
+    assert_eq!(code, 0, "{envelope}");
+    assert_eq!(keys(&envelope), set(&["ok", "command", "data"]));
+    assert_eq!(envelope["command"], "answer");
+    let data = &envelope["data"];
+    assert_eq!(keys(data), set(&["game", "kind", "answer", "message"]));
+    assert_eq!(data["game"], GAME);
+    assert_eq!(data["kind"], "held");
+    assert_eq!(data["answer"], "play_anyway");
+    assert_eq!(
+        data["message"],
+        "Recorded play-anyway for demo-game: the game starts past the open-elsewhere mark."
+    );
+    let stored = machine.store.load_pending(GAME).unwrap().unwrap();
+    assert_eq!(stored.answer, Some(Answer::PlayAnyway));
+}
+
+#[test]
+fn answer_that_does_not_fit_the_choice_is_usage_and_changes_nothing() {
+    let remote = Arc::new(MemoryRemote::new());
+    let machine = Machine::new(&remote);
+    machine.store.save_pending(&waiting_conflict()).unwrap();
+
+    let (code, envelope) = machine.json(&format!("answer {GAME} wait"), T0 + 180);
+    assert_eq!(code, 2, "{envelope}");
+    assert_eq!(envelope["command"], "answer");
+    assert_eq!(envelope["error"]["code"], "usage");
+    assert_eq!(
+        envelope["error"]["message"],
+        "wait does not answer a conflict choice"
+    );
+    let stored = machine.store.load_pending(GAME).unwrap().unwrap();
+    assert_eq!(stored.answer, None);
 }
 
 #[test]
