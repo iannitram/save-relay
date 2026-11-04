@@ -1602,7 +1602,7 @@ fn install_wrap(
         let libraries = steam::parse_libraries(&std::fs::read_to_string(
             root.join("steamapps/libraryfolders.vdf"),
         )?)?;
-        steam::installed_among(&libraries, known)
+        steam::launch::installed_among(&libraries, known)
     } else {
         app_ids
     };

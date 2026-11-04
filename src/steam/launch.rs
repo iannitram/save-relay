@@ -14,6 +14,7 @@ use crate::platform::Platform;
 use crate::stamp;
 use crate::steam;
 use crate::steam::vdf::{self, Vdf};
+use std::collections::BTreeSet;
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
@@ -67,12 +68,15 @@ pub fn is_wrapped(current: &str) -> bool {
 /// The inverse of `wrapped`: the launch option with save-relay's part taken out (`None` when
 /// nothing else was there). Not wrapped: `current` unchanged (`None` for an empty one).
 ///
-/// Exact for every text except two kinds, which come back shorter. `wrapped` writes the same text
-/// for each group named here, so no function can tell the members of a group apart:
+/// Exact for every text except these groups, which come back as shown. `wrapped` writes the same
+/// text for the members of each group, so no function can tell them apart:
 /// - `None`, `""` and `%command%` alone: all three come back `None`.
-/// - `%command%` followed by spaces and game arguments: one space fewer comes back, so
-///   `%command% -novid` comes back as `-novid` (the same text as `-novid` wrapped), and
-///   `%command% ` (one trailing space) comes back as `None`.
+/// - `%command%` at the start of the option, followed by a space: `unwrapped` drops that
+///   `%command%` and one space after it. So `%command% -novid` comes back as `-novid` (the text
+///   `-novid` wraps to too), `%command%  -novid` (two spaces) as ` -novid`, `%command% ` (one
+///   trailing space) as `None`, and `%command% %command% -fps` as `%command% -fps`.
+/// - An option `is_wrapped` already: `wrapped` keeps it, so `unwrapped` takes save-relay's part
+///   out. `/opt/save-relay/save-relay wrap -- %command%` comes back as `None`.
 pub fn unwrapped(current: &str) -> Option<String> {
     let Some((start, command)) = locate(current) else {
         return (!current.is_empty()).then(|| current.to_string());
@@ -113,6 +117,20 @@ pub fn backup_name(file_name: &str, now: u64) -> String {
     format!("{file_name}.save-relay-{}.bak", stamp::entry_stamp(now))
 }
 
+/// The ids in `known` that some library holds installed, sorted, without repeats. The ludusavi
+/// index knows every Steam game, installed or not: `install-wrap --all-known` writes only these.
+pub fn installed_among(
+    libraries: &[steam::Library],
+    known: impl IntoIterator<Item = u32>,
+) -> Vec<u32> {
+    let installed: BTreeSet<u32> = libraries
+        .iter()
+        .flat_map(|library| library.apps.iter().copied())
+        .collect();
+    let wanted: BTreeSet<u32> = known.into_iter().collect();
+    wanted.intersection(&installed).copied().collect()
+}
+
 /// True when Steam is running. Linux: a pid in one of `LINUX_PID_FILES` under `home` names a
 /// live process (`/proc/<pid>` exists). Mac: the pid in `MAC_PID_FILE` answers `kill -0`
 /// (unverified on a real Mac: the pid file's place is from Steam's usual layout). Windows:
@@ -142,6 +160,14 @@ pub fn steam_running(platform: Platform, home: &Path) -> Result<bool> {
             let listing = Command::new("tasklist")
                 .args(["/FI", "IMAGENAME eq steam.exe", "/NH"])
                 .output()?;
+            // A failed listing says nothing about Steam: it is an error, not "not running".
+            if !listing.status.success() {
+                return Err(Error::Io(format!(
+                    "tasklist failed ({}): {}",
+                    listing.status,
+                    String::from_utf8_lossy(&listing.stderr).trim()
+                )));
+            }
             Ok(String::from_utf8_lossy(&listing.stdout)
                 .lines()
                 .any(|line| {
@@ -159,9 +185,11 @@ pub fn steam_running(platform: Platform, home: &Path) -> Result<bool> {
 /// `localconfig.vdf` and every app in `app_ids`, apply `wrapped` (or `unwrapped` with
 /// `remove`); unless `dry_run`, write a backup (once per file per run) and then the file via a
 /// temp file and rename. Returns what changed, apps already in the wanted state left out.
-/// `binary` must be named `save-relay` or `save-relay.exe` (`Error::Usage` otherwise). A real
-/// run with a Steam user holds `<root>/userdata/.save-relay-install-wrap.lock` until it ends
-/// (`Error::Io` when it is already there).
+/// `binary` must be named `save-relay` or `save-relay.exe` (`Error::Usage` otherwise). A wrap
+/// refuses (`Error::Io`, naming the path, before any write) when there is no Steam user or a
+/// user has no `localconfig.vdf`; `remove` skips such a user. A real run with a Steam user holds
+/// `<root>/userdata/.save-relay-install-wrap.lock` until it ends (`Error::Io` when it is already
+/// there).
 pub fn install(
     root: &Path,
     app_ids: &[u32],
@@ -178,6 +206,11 @@ pub fn install(
         )));
     }
     let users = steam::user_ids(root)?;
+    // A wrap with no Steam user to write to is refused, not reported as done. `--remove` has
+    // nothing to take out, so it reports and succeeds.
+    if users.is_empty() && !remove {
+        return Err(no_user(root));
+    }
     // A real run with a Steam user holds the lock until it has written, or failed, so a second
     // run refuses instead of rewriting a file this run is changing.
     let _lock = if dry_run || users.is_empty() {
@@ -196,7 +229,15 @@ pub fn install(
             .join("localconfig.vdf");
         let bytes = match fs::read(&path) {
             Ok(bytes) => bytes,
-            Err(error) if error.kind() == ErrorKind::NotFound => continue,
+            // Nothing to take out of a missing file. A wrap cannot write one, so it refuses
+            // before any file is written: its launch option would be missing with no report.
+            Err(error) if error.kind() == ErrorKind::NotFound && remove => continue,
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                return Err(Error::Io(format!(
+                    "{}: no localconfig.vdf: sign in to Steam once, then run install-wrap again",
+                    path.display()
+                )));
+            }
             Err(error) => return Err(error.into()),
         };
         let text = String::from_utf8(bytes.clone())
@@ -240,11 +281,9 @@ pub fn install(
         (true, false) => "removed save-relay from",
         (true, true) => "would remove save-relay from",
     };
+    // Only a `--remove` gets here with no Steam user; a wrap was refused above.
     let message = if users.is_empty() {
-        format!(
-            "no Steam user under {}/userdata: sign in to Steam once, then run install-wrap again",
-            root.display()
-        )
+        no_user(root).to_string()
     } else if count == 0 {
         "no launch option needed a change".to_string()
     } else {
@@ -256,6 +295,14 @@ pub fn install(
         backups,
         message,
     })
+}
+
+/// The refusal for a wrap when `<root>/userdata` has no Steam user.
+fn no_user(root: &Path) -> Error {
+    Error::Io(format!(
+        "no Steam user under {}/userdata: sign in to Steam once, then run install-wrap again",
+        root.display()
+    ))
 }
 
 /// Where save-relay's part starts in `current` (its program path's first byte) and the byte
@@ -375,6 +422,8 @@ fn write_backup(path: &Path, bytes: &[u8], now: u64) -> Result<PathBuf> {
         {
             Ok(mut file) => {
                 file.write_all(bytes)?;
+                // On disk before the rewrite of the file it backs up.
+                file.sync_all()?;
                 return Ok(backup);
             }
             Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
@@ -387,10 +436,15 @@ fn write_backup(path: &Path, bytes: &[u8], now: u64) -> Result<PathBuf> {
     )))
 }
 
-/// Write `config` to `path` through a temp file beside it and a rename.
+/// Write `config` to `path` through a temp file beside it and a rename. The temp file is flushed
+/// to disk and closed before the rename, so a power cut cannot leave `path` empty.
 fn write_config(path: &Path, config: &Vdf) -> Result<()> {
     let temp = path.with_file_name(format!("{}.save-relay-tmp", file_name_of(path)));
-    fs::write(&temp, vdf::to_text(config))?;
+    {
+        let mut file = fs::File::create(&temp)?;
+        file.write_all(vdf::to_text(config).as_bytes())?;
+        file.sync_all()?;
+    }
     fs::rename(&temp, path)?;
     Ok(())
 }

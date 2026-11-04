@@ -5,11 +5,11 @@
 
 use save_relay::platform::Platform;
 use save_relay::steam::launch::{
-    backup_name, install, is_wrapped, launch_options, set_launch_options, steam_running, unwrapped,
-    wrapped,
+    backup_name, install, installed_among, is_wrapped, launch_options, set_launch_options,
+    steam_running, unwrapped, wrapped,
 };
+use save_relay::steam::parse_libraries;
 use save_relay::steam::vdf::{parse, to_text};
-use save_relay::steam::{installed_among, parse_libraries};
 use save_relay::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -183,6 +183,44 @@ fn unwrapped_of_bare_arguments_with_command_is_the_same_for_steam() {
     // `%command% -fps` and `-fps` both mean "the game with -fps": the second comes back.
     let text = wrapped(Some("%command% -fps"), BIN, Platform::Linux);
     assert_eq!(unwrapped(&text), Some("-fps".to_string()));
+}
+
+#[test]
+fn lossy_inputs_share_their_wrapped_text() {
+    // `None`, `""` and `%command%` alone wrap to the same text, so `unwrapped` cannot tell them apart.
+    for current in [None, Some(""), Some("%command%")] {
+        assert_eq!(wrapped(current, BIN, Platform::Linux), WRAP, "{current:?}");
+    }
+    // `-novid` and `%command% -novid` wrap to the same text too.
+    let novid = "/opt/save-relay/save-relay wrap -- %command% -novid";
+    assert_eq!(wrapped(Some("-novid"), BIN, Platform::Linux), novid);
+    assert_eq!(
+        wrapped(Some("%command% -novid"), BIN, Platform::Linux),
+        novid
+    );
+}
+
+#[test]
+fn unwrapped_of_each_lossy_input_is_pinned() {
+    // Each input, and what `unwrapped` gives back from its wrapped text (the `unwrapped` doc).
+    let cases = [
+        (None, None),
+        (Some("%command%"), None),
+        (Some("%command% "), None),
+        (Some("%command% -novid"), Some("-novid")),
+        (Some("%command%  -novid"), Some(" -novid")),
+        (Some("%command% %command%"), None),
+        (Some("%command% %command% -fps"), Some("%command% -fps")),
+        (Some(WRAP), None),
+    ];
+    for (current, expected) in cases {
+        let text = wrapped(current, BIN, Platform::Linux);
+        assert_eq!(
+            unwrapped(&text),
+            expected.map(str::to_string),
+            "{current:?} via {text}"
+        );
+    }
 }
 
 #[test]
@@ -556,13 +594,88 @@ fn install_remove_takes_only_save_relay_back_out() {
 }
 
 #[test]
-fn install_writes_every_user_and_skips_one_without_a_file() {
+fn install_remove_restores_the_file_byte_for_byte_when_the_key_was_there() {
+    // Both apps had a `LaunchOptions` key (`""` and a command line): the file comes back as it was.
+    let root = temp_root();
+    let file = add_user(&root, "42", LOCALCONFIG);
+    install(
+        &root,
+        &[480, 1145360],
+        Path::new(BIN),
+        false,
+        false,
+        Platform::Linux,
+        NOW,
+    )
+    .unwrap();
+    assert_ne!(fs::read(&file).unwrap(), LOCALCONFIG.as_bytes());
+    install(
+        &root,
+        &[480, 1145360],
+        Path::new(BIN),
+        true,
+        false,
+        Platform::Linux,
+        NOW,
+    )
+    .unwrap();
+    assert_eq!(fs::read(&file).unwrap(), LOCALCONFIG.as_bytes());
+}
+
+#[test]
+fn install_refuses_a_user_with_no_file_and_writes_nothing() {
     let root = temp_root();
     let first = add_user(&root, "42", LOCALCONFIG);
     let second = add_user(&root, "43", LOCALCONFIG);
     fs::create_dir_all(root.join("userdata").join("44")).unwrap();
+    let missing = root
+        .join("userdata")
+        .join("44")
+        .join("config")
+        .join("localconfig.vdf");
 
+    // Refused for a real run and a dry run alike, before any file is written.
+    for dry_run in [false, true] {
+        let error = install(
+            &root,
+            &[480],
+            Path::new(BIN),
+            false,
+            dry_run,
+            Platform::Linux,
+            NOW,
+        )
+        .unwrap_err();
+        assert!(matches!(error, Error::Io(_)), "{error:?}");
+        assert!(
+            error.to_string().contains(&missing.display().to_string()),
+            "{error}"
+        );
+    }
+    assert_eq!(fs::read(&first).unwrap(), LOCALCONFIG.as_bytes());
+    assert_eq!(fs::read(&second).unwrap(), LOCALCONFIG.as_bytes());
+    assert_eq!(fs::read_dir(first.parent().unwrap()).unwrap().count(), 1);
+    assert!(!root.join("userdata/.save-relay-install-wrap.lock").exists());
+
+    // `--remove` skips the missing file; no option here is wrapped, so nothing changes.
     let data = install(
+        &root,
+        &[480],
+        Path::new(BIN),
+        true,
+        false,
+        Platform::Linux,
+        NOW,
+    )
+    .unwrap();
+    assert!(data.changed.is_empty());
+    assert_eq!(fs::read(&first).unwrap(), LOCALCONFIG.as_bytes());
+}
+
+#[test]
+fn install_without_a_steam_user_refuses_a_wrap_and_says_so() {
+    let root = temp_root();
+    let error = install(
         &root,
         &[480],
         Path::new(BIN),
@@ -571,22 +684,20 @@ fn install_writes_every_user_and_skips_one_without_a_file() {
         Platform::Linux,
         NOW,
     )
-    .unwrap();
-    let users: Vec<&str> = data.changed.iter().map(|c| c.user_id.as_str()).collect();
-    assert_eq!(users, ["42", "43"]);
-    assert_eq!(option_in(&first, 480), Some(WRAP.to_string()));
-    assert_eq!(option_in(&second, 480), Some(WRAP.to_string()));
-    assert_eq!(data.backups.len(), 2);
-}
+    .unwrap_err();
+    assert!(matches!(error, Error::Io(_)), "{error:?}");
+    assert!(
+        error.to_string().contains("sign in to Steam once"),
+        "{error}"
+    );
+    assert!(!root.join("userdata/.save-relay-install-wrap.lock").exists());
 
-#[test]
-fn install_without_a_steam_user_says_so() {
-    let root = temp_root();
+    // A removal has nothing to take out, so it reports and succeeds.
     let data = install(
         &root,
         &[480],
         Path::new(BIN),
-        false,
+        true,
         false,
         Platform::Linux,
         NOW,
