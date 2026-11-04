@@ -323,7 +323,7 @@ fn sync(
     };
     let local_card = has_local.then(|| card_of(s, &found, None));
     for note in &found.notes {
-        data.message = format!("{} {note}.", data.message);
+        data.message = format!("{} {}.", data.message, one_line(note));
     }
     Ok(SyncReport {
         sync: data,
@@ -341,6 +341,14 @@ struct Found {
     place: Option<String>,
     picture: Option<(PictureKind, Vec<u8>)>,
     notes: Vec<String>,
+}
+
+/// A note as one line of `message`: each control character, a newline included, becomes a space.
+/// A note can quote the sidecar's picture path, and that path is not checked for control characters.
+fn one_line(note: &str) -> String {
+    note.chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect()
 }
 
 /// Read the sidecar (`card::SIDECAR`) in `saves_dir` and the picture it names. Nothing there is
@@ -703,9 +711,16 @@ pub fn restore(s: &Session, game: &Game, store: &LocalStore, entry: &str) -> Res
     let last = store.load_last(id)?;
     let mut taken = listed;
     let mut counts = transfer::Counts::default();
+    // Notes from the backup's card (sidecar, picture, a failed card write); never an error.
+    let mut notes = Vec::new();
     let backup = if local_changed(&local, last.as_ref()) {
         let name = fresh_entry(s.now, &s.device, &taken);
         counts = transfer::upload_entry(s.remote, &s.layout, id, &name, &game.saves_dir, &local)?;
+        // The backup carries this machine's card, as `pull`'s keep-server backup does; no playtime.
+        let mut found = found_in(&game.saves_dir);
+        let card = card_of(s, &found, None);
+        write_card(s, id, &name, &card, &mut found);
+        notes = found.notes;
         taken.push(name.clone());
         Some(name)
     } else {
@@ -762,11 +777,15 @@ pub fn restore(s: &Session, game: &Game, store: &LocalStore, entry: &str) -> Res
     for old in retention::to_drop(&entries, keep, &new_entry) {
         s.remote.delete(&s.layout.entry_dir(id, &old))?;
     }
+    let mut message = format!("Restored {entry} as revision {revision}.");
+    for note in &notes {
+        message = format!("{message} {}.", one_line(note));
+    }
     Ok(RestoreData {
         game: id.clone(),
         entry: entry.to_string(),
         revision,
-        message: format!("Restored {entry} as revision {revision}."),
+        message,
         new_entry,
         backup,
         counts,
