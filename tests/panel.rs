@@ -396,7 +396,7 @@ fn each_command_becomes_its_command_line_with_json_last() {
     assert_eq!(
         args(
             "setup",
-            r#"{"service":"dropbox","finish":true,"device":"deck"}"#
+            r#"{"service":"dropbox","no-browser":true,"device":"deck"}"#
         ),
         [
             "setup",
@@ -404,7 +404,7 @@ fn each_command_becomes_its_command_line_with_json_last() {
             "dropbox",
             "--device",
             "deck",
-            "--finish",
+            "--no-browser",
             "--json"
         ]
     );
@@ -481,6 +481,11 @@ fn setup_signs_in_to_drive_or_dropbox_without_a_browser_of_its_own() {
         r#"{"service":"gdrive","no-browser":true,"server":"https://x.test"}"#,
     );
     refused("setup", r#"{"service":"other","no-browser":true}"#);
+    refused("setup", r#"{"service":"dropbox","finish":true}"#);
+    refused(
+        "setup",
+        r#"{"service":"dropbox","no-browser":true,"finish":true}"#,
+    );
 }
 
 #[test]

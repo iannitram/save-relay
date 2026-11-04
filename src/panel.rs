@@ -68,9 +68,9 @@ pub mod assets {
 /// The header that carries the token.
 pub const TOKEN_HEADER: &str = "X-Save-Relay-Token";
 
-/// The commands `POST /api/<command>` may run. `setup` only for Google Drive and Dropbox with
-/// `no-browser` or `finish` (the code sign-in); never `wrap`, `install-wrap`, `panel` or a
-/// Nextcloud setup (its password stays on standard input).
+/// The commands `POST /api/<command>` may run. `setup` only for Google Drive with `no-browser`
+/// or `finish`, and for Dropbox with `no-browser` (its `finish` needs a terminal); never `wrap`,
+/// `install-wrap`, `panel` or a Nextcloud setup (its password stays on standard input).
 pub const API_COMMANDS: [&str; 10] = [
     "status", "history", "restore", "pull", "push", "answer", "where", "which", "picture", "setup",
 ];
@@ -248,8 +248,8 @@ pub fn served_page(token: &str, html: &[u8]) -> Vec<u8> {
 /// The command-line arguments for an API call: `<command>` with its fields as flags
 /// (`{"game":"g","entry":"e"}` for `restore` -> `["restore","g","e","--json"]`), always ending
 /// in `--json`. An empty body is `{}`. A field the command does not take, or a missing one, is
-/// `Error::Usage`; so is a Nextcloud setup, a setup without `no-browser` or `finish`, and any
-/// command not in `API_COMMANDS`.
+/// `Error::Usage`; so is a Nextcloud setup, a setup without `no-browser` (Google Drive may use
+/// `finish`), a Dropbox `finish`, and any command not in `API_COMMANDS`.
 pub fn api_args(command: &str, body: &[u8]) -> Result<Vec<String>> {
     if !API_COMMANDS.contains(&command) {
         return Err(usage_error(format!("'{command}' is not a panel command")));
@@ -604,16 +604,23 @@ fn fields_of(command: &str) -> (&'static [&'static str], &'static [&'static str]
 }
 
 /// A panel setup signs in to Google Drive or Dropbox without a browser of its own: it needs
-/// `no-browser` or `finish`. The Nextcloud password is never sent through the panel.
+/// `no-browser`, or `finish` for Google Drive. A Dropbox `finish` reads its code from standard
+/// input, which the panel cannot supply, so it is refused. The Nextcloud password is never sent
+/// through the panel.
 fn check_setup(fields: &serde_json::Map<String, Value>) -> Result<()> {
-    match fields.get("service").and_then(Value::as_str) {
-        Some("gdrive" | "dropbox") => {}
+    let service = match fields.get("service").and_then(Value::as_str) {
+        Some(service @ ("gdrive" | "dropbox")) => service,
         Some("nextcloud") => {
             return Err(usage_error(
                 "the Nextcloud password is read from standard input: run `save-relay setup` in a terminal",
             ));
         }
         _ => return Err(usage_error("setup needs service gdrive or dropbox")),
+    };
+    if service == "dropbox" && fields.get("finish") == Some(&Value::Bool(true)) {
+        return Err(usage_error(
+            "setup from the panel cannot finish a Dropbox sign-in: run `save-relay setup --service dropbox --finish` in a terminal",
+        ));
     }
     let code_sign_in = ["no-browser", "finish"]
         .iter()
