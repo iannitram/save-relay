@@ -689,12 +689,11 @@ fn help_and_version_and_commands_not_built_yet() {
     assert_eq!(code, 0);
     assert!(out.starts_with("save-relay <command>"));
 
-    // Each of these arrives with its own issue; until then it says so, exit 1.
-    for line in ["answer demo-game wait", "panel"] {
-        let (code, out) = machine.run(&format!("{line} --json"), "", T0);
-        assert_eq!(code, 1, "{line}: {out}");
-        assert_eq!(one_envelope(&out)["error"]["code"], "not_built", "{line}");
-    }
+    // `answer` arrives with its own issue (F57); until then it says so, exit 1. (`panel` is
+    // built by F63 and serves instead; see tests/panel.rs.)
+    let (code, out) = machine.run("answer demo-game wait --json", "", T0);
+    assert_eq!(code, 1, "answer: {out}");
+    assert_eq!(one_envelope(&out)["error"]["code"], "not_built", "answer");
 }
 
 #[test]
