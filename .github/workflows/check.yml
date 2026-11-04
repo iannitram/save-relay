@@ -72,9 +72,11 @@ jobs:
       - name: Start Nextcloud (Linux)
         if: runner.os == 'Linux'
         run: |
+          # SQLITE_DATABASE makes the first start install Nextcloud on SQLite, without the web installer.
           docker run -d --name nextcloud -p 8080:80 \
             -e NEXTCLOUD_ADMIN_USER=admin \
             -e NEXTCLOUD_ADMIN_PASSWORD=ci-admin-password \
+            -e SQLITE_DATABASE=nextcloud \
             -e NEXTCLOUD_TRUSTED_DOMAINS="localhost 127.0.0.1" \
             nextcloud:33-apache
           for _ in $(seq 1 120); do
