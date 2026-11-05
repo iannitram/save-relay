@@ -652,8 +652,8 @@ fn m5_a_deferred_save_goes_up_at_the_next_launch_when_the_server_has_not_moved()
 /// password reaches its stdout or stderr. A password on standard input stays out of the setup and
 /// status envelopes, and out of every file under both machines' folders.
 ///
-/// Not covered, and still printed by a usage error on main: the `--password=VALUE` form (the whole
-/// argument reaches the unknown-flag message); a secret typed as the command word, as an unknown
+/// The `--password=VALUE` form is refused the same way (`tests/cli_password_eq.rs`). Not covered,
+/// and still printed by a usage error on main: a secret typed as the command word, as an unknown
 /// flag or as a bare positional argument; and a secret typed as the service, answer or `--resolve`
 /// value. A value typed as `--device` or `--root` is kept in `config.json`. Each of those needs a
 /// change to the CLI's messages, which this test does not make.

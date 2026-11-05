@@ -220,14 +220,20 @@ pub struct Args {
     pub json: bool,
 }
 
+/// True for `--password` and for `--password=<value>` (both are refused).
+fn is_password_flag(arg: &str) -> bool {
+    arg == "--password" || arg.starts_with("--password=")
+}
+
 /// Parse the arguments after the program name. Flags may come in any order after the command;
 /// `--json` anywhere. A flag's value is the next argument (`--flag=value` is not accepted).
 /// No arguments is `Command::Help`. Errors are `Error::Usage` with one line saying what is
 /// wrong: an unknown command or flag, a missing `<game>` or `<entry>`, an extra positional, a
 /// flag given twice or without its value, a `--resolve` other than `keep-server`/`keep-local`,
 /// `--manifest`/`--saves-dir`/`--resolve` on a command that does not take them, `setup` without
-/// `--server` or `--user`, and `--password` (the message says the password is read from
-/// standard input, so it never shows in a process list). `--root` defaults to `DEFAULT_ROOT`.
+/// `--server` or `--user`, and `--password` or `--password=<value>` (the message says the
+/// password is read from standard input, so it never shows in a process list). `--root`
+/// defaults to `DEFAULT_ROOT`.
 ///
 /// `setup` and the service (docs/code-map.md § API shape): `--service nextcloud`, or no
 /// `--service` with `--server` or `--user`, is `Command::Setup` (both needed, as above);
@@ -248,7 +254,7 @@ pub fn parse(args: &[String]) -> Result<Args> {
             Some(idx) => &args[..idx],
             None => args,
         };
-        if before_dash.iter().any(|arg| arg.as_str() == "--password") {
+        if before_dash.iter().any(|arg| is_password_flag(arg)) {
             return Err(Error::Usage(
                 "the password is read from standard input, not from --password".to_string(),
             ));
@@ -283,7 +289,7 @@ pub fn parse(args: &[String]) -> Result<Args> {
         });
     }
 
-    if args.iter().any(|arg| arg == "--password") {
+    if args.iter().any(|arg| is_password_flag(arg)) {
         return Err(Error::Usage(
             "the password is read from standard input, not from --password".to_string(),
         ));
