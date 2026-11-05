@@ -138,7 +138,8 @@ fn sync(
     if decision == Decision::Conflict {
         match resolve {
             Some(Resolve::KeepServer) => {
-                let entry = entry_name(&stamp::entry_stamp(s.now), &s.device);
+                let taken = history_names(s, id)?;
+                let entry = fresh_entry(s.now, &s.device, &taken);
                 data.counts = transfer::upload_entry(
                     s.remote,
                     &s.layout,
@@ -203,7 +204,8 @@ fn sync(
                 .map_or(0, |state| state.revision)
                 .checked_add(1)
                 .ok_or_else(|| Error::StateInvalid("revision overflow".into()))?;
-            let entry = entry_name(&stamp::entry_stamp(s.now), &s.device);
+            let taken = history_names(s, id)?;
+            let entry = fresh_entry(s.now, &s.device, &taken);
             data.counts =
                 transfer::upload_entry(s.remote, &s.layout, id, &entry, &game.saves_dir, &local)?;
             // The playtime is the session's, and only an exit has one: a launch's push is no play.
@@ -557,6 +559,14 @@ fn fresh_entry(now: u64, device: &str, taken: &[String]) -> String {
         }
         at += 1;
     }
+}
+
+/// The entry names under `history/`; none yet is an empty list.
+fn history_names(s: &Session, game: &str) -> Result<Vec<String>> {
+    Ok(history_children(s, game)?
+        .into_iter()
+        .map(|entry| entry.name)
+        .collect())
 }
 
 /// The folder names under `history/`. No folder yet (nothing pushed) is an empty list.
