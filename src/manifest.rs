@@ -79,24 +79,7 @@ impl Manifest {
         if self.format != FORMAT {
             return Err(Error::ManifestInvalid(format!("format: expected {FORMAT}")));
         }
-        if self.id.is_empty()
-            || self.id.len() > 64
-            || self.id.starts_with('-')
-            || !self
-                .id
-                .bytes()
-                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-        {
-            return Err(Error::ManifestInvalid(
-                "id: must be 1-64 lowercase letters, digits, or hyphens, starting with a letter or digit".into(),
-            ));
-        }
-        if is_windows_reserved(&self.id) {
-            return Err(Error::ManifestInvalid(
-                "id: is a name Windows reserves for devices (con, prn, aux, nul, com0-9, lpt0-9)"
-                    .into(),
-            ));
-        }
+        check_id(&self.id)?;
         if self.name.is_empty() {
             return Err(Error::ManifestInvalid("name: must not be empty".into()));
         }
@@ -188,6 +171,29 @@ fn validate_pattern(pattern: &str, field: &str) -> Result<()> {
         return Err(Error::ManifestInvalid(format!(
             "{field}: invalid relative pattern {pattern:?}"
         )));
+    }
+    Ok(())
+}
+
+/// The id rule: 1-64 lowercase letters, digits or hyphens, not starting with a hyphen, and not
+/// a name Windows reserves for devices. The error is `Error::ManifestInvalid` as `validate` gives.
+pub fn check_id(id: &str) -> Result<()> {
+    if id.is_empty()
+        || id.len() > 64
+        || id.starts_with('-')
+        || !id
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    {
+        return Err(Error::ManifestInvalid(
+            "id: must be 1-64 lowercase letters, digits, or hyphens, starting with a letter or digit".into(),
+        ));
+    }
+    if is_windows_reserved(id) {
+        return Err(Error::ManifestInvalid(
+            "id: is a name Windows reserves for devices (con, prn, aux, nul, com0-9, lpt0-9)"
+                .into(),
+        ));
     }
     Ok(())
 }

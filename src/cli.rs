@@ -74,7 +74,14 @@ impl GameArg {
     /// folder is `--saves-dir` verbatim; else, for a `saves_from` game, `Error::Usage` naming
     /// `--saves-dir` (never a remembered or guessed folder, #48); else the remembered
     /// `--saves-dir`, else the manifest's template for `platform`.
+    /// A `<game>` outside the manifest id rule is `Error::Usage`, before any file is read.
     pub fn load(&self, store: &LocalStore, platform: Platform, vars: &PathVars) -> Result<Game> {
+        if crate::manifest::check_id(&self.id).is_err() {
+            return Err(Error::Usage(format!(
+                "<game> must be 1-64 lowercase letters, digits, or hyphens, not '{}'",
+                self.id
+            )));
+        }
         let record = store.load_game(&self.id)?;
         let manifest = match &self.manifest {
             Some(path) => {
@@ -693,21 +700,9 @@ fn resolve(flags: &Flags<'_>) -> Result<Option<Resolve>> {
     }
 }
 
-/// A game id as the manifest id rule has it (`Manifest::validate` in src/manifest.rs): 1-64 of
-/// `a-z`, `0-9` or `-`, starting with a letter or digit, and not a Windows device name. The
-/// reserved-name check is private to manifest.rs, so the `answer` arm repeats the rule here.
+/// A game id as the manifest id rule has it (`manifest::check_id`).
 fn is_game_id(id: &str) -> bool {
-    let reserved = matches!(id, "con" | "prn" | "aux" | "nul")
-        || (id.len() == 4
-            && (id.starts_with("com") || id.starts_with("lpt"))
-            && id.as_bytes()[3].is_ascii_digit());
-    !id.is_empty()
-        && id.len() <= 64
-        && !id.starts_with('-')
-        && id
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-        && !reserved
+    crate::manifest::check_id(id).is_ok()
 }
 
 /// Whether `run` connects to the server before the command, through the saved setup: the commands
