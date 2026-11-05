@@ -57,6 +57,29 @@ A launcher that lets the player move the saves folder passes `--saves-dir <folde
 It wins over the template.
 A `saves_from` game requires it.
 
+## Sidecar
+
+The sidecar file is `.save-relay-meta.json`, in the saves folder. It is read at the start of each sync. If it is missing, nothing happens.
+
+Fields are `place` (text) and `picture` (path relative to the saves folder). Unknown fields are ignored.
+
+The `place` field has whitespace (including new lines) converted to one space, trimmed, and cut to 80 characters. An empty value means no place.
+
+The `picture` field must be a JPEG or PNG file (checked by the file's first bytes, not its name). It must be at most 512 KiB; larger files are left out with a note. The path must be inside the saves folder: no leading `/`, no `\`, no `:`, no `..`.
+
+The picture is copied into the save card in the history. It never stays in the saves folder.
+
+Files named `.save-relay-*` are never treated as saves: scan and transfer skip them. Use `.save-relay-` as the prefix for the picture file so it is never synced as a save. Example file: `.save-relay-cover.jpg`.
+
+A bad sidecar never fails a push: bad JSON or a bad picture path is left out and shows as a note in the message the push prints. A picture that cannot be read is left out with a note too.
+
+```jsonc
+{
+  "place": "Example place",
+  "picture": ".save-relay-cover.jpg"
+}
+```
+
 ## Examples
 
 ```json
