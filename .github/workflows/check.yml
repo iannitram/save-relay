@@ -60,8 +60,6 @@ jobs:
 
   integration:
     # The built CLI against a real WebDAV server (tests/cli_webdav.rs, ignored by `cargo test`).
-    # The test ignored for #148 (two_pushes_in_one_second_both_keep_a_dated_copy) is skipped here
-    # until that issue lands: it is known to fail.
     # Linux runs Nextcloud in a container; Windows and macOS run rclone's WebDAV server, pinned.
     # Every server answers at http://127.0.0.1:8080/remote.php/dav/files/admin/.
     strategy:
@@ -119,7 +117,7 @@ jobs:
           } >> "$GITHUB_ENV"
       - name: Integration tests (Linux, Nextcloud)
         if: runner.os == 'Linux'
-        run: cargo test --locked --test cli_webdav -- --ignored --test-threads=1 --skip two_pushes_in_one_second
+        run: cargo test --locked --test cli_webdav -- --ignored --test-threads=1
       - name: Integration tests (Windows, rclone)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -145,7 +143,7 @@ jobs:
               if ($LASTEXITCODE -eq 0) { break }
               Start-Sleep -Seconds 1
             }
-            cargo test --locked --test cli_webdav -- --ignored --test-threads=1 --skip two_pushes_in_one_second
+            cargo test --locked --test cli_webdav -- --ignored --test-threads=1
             $code = $LASTEXITCODE
           } finally {
             Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue
@@ -179,4 +177,4 @@ jobs:
             if curl -s -o /dev/null http://127.0.0.1:8080/remote.php/dav/files/admin/; then break; fi
             sleep 1
           done
-          cargo test --locked --test cli_webdav -- --ignored --test-threads=1 --skip two_pushes_in_one_second
+          cargo test --locked --test cli_webdav -- --ignored --test-threads=1

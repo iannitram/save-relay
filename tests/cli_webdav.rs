@@ -136,15 +136,6 @@ fn expect(result: (i32, Value), code: i32, action_name: &str) -> Value {
     envelope
 }
 
-/// A history entry is named to the second, so two entries from one device in the same second
-/// collide (the server answers `exists`). A call that writes an entry (a push, or a `--resolve`
-/// that keeps a backup) waits past the second first.
-fn pause_for_history_name(verb: &str, extra: &[&str]) {
-    if verb == "push" || extra.contains(&"--resolve") {
-        std::thread::sleep(std::time::Duration::from_millis(1100));
-    }
-}
-
 /// What one run of the binary printed and returned.
 #[derive(Debug)]
 struct Run {
@@ -296,14 +287,12 @@ impl Machine {
     }
 
     /// A game command (`pull`, `push`, `status`, `restore`) for `game`, with its manifest and
-    /// saves folder as a launcher passes them. It waits past the second first when it writes a
-    /// history entry (see `pause_for_history_name`).
+    /// saves folder as a launcher passes them.
     fn sync(&self, verb: &str, game: Game, extra: &[&str]) -> (i32, Value) {
-        pause_for_history_name(verb, extra);
         self.sync_now(verb, game, extra)
     }
 
-    /// `sync` without the pause: two writes in one second, which is the case #148 is about.
+    /// `sync`, called by this name where two writes land in one second (#148).
     fn sync_now(&self, verb: &str, game: Game, extra: &[&str]) -> (i32, Value) {
         let manifest = fixture_path(game.manifest);
         let saves = self.saves(game);
@@ -323,7 +312,6 @@ impl Machine {
     /// A game command with no `--saves-dir`: the saves folder comes from the manifest's template,
     /// as a launch with no override does. Nothing creates that folder first.
     fn sync_by_manifest(&self, verb: &str, game: Game) -> (i32, Value) {
-        pause_for_history_name(verb, &[]);
         let manifest = fixture_path(game.manifest);
         self.json(
             &[verb, game.id, "--manifest", manifest.to_str().unwrap()],
@@ -519,11 +507,9 @@ fn m4_keeps_the_last_ten_pushes_and_restores_any_of_them() {
 }
 
 /// M4 says every push keeps a dated copy. Two pushes from one device in the same second must both
-/// do so, but a history entry is named to the second, so the second push collides with the first
-/// (#148). The job skips this test until #148 lands, and `sync_now` takes no pause: that is the
-/// point of the test.
+/// do so (#148).
 #[test]
-#[ignore = "#148: same-second history entries collide"]
+#[ignore = "needs a WebDAV server: see the file comment"]
 fn two_pushes_in_one_second_both_keep_a_dated_copy() {
     let server = Server::from_env();
     let folder = server_folder("same-second");
@@ -652,8 +638,8 @@ fn m5_a_deferred_save_goes_up_at_the_next_launch_when_the_server_has_not_moved()
 /// password reaches its stdout or stderr. A password on standard input stays out of the setup and
 /// status envelopes, and out of every file under both machines' folders.
 ///
-/// Not covered, and still printed by a usage error on main: the `--password=VALUE` form (the whole
-/// argument reaches the unknown-flag message); a secret typed as the command word, as an unknown
+/// The `--password=VALUE` form is refused the same way (`tests/cli_password_eq.rs`). Not covered,
+/// and still printed by a usage error on main: a secret typed as the command word, as an unknown
 /// flag or as a bare positional argument; and a secret typed as the service, answer or `--resolve`
 /// value. A value typed as `--device` or `--root` is kept in `config.json`. Each of those needs a
 /// change to the CLI's messages, which this test does not make.
