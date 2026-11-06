@@ -16,7 +16,7 @@ All three send HTTP through one seam, `http::Transport`. The real transport (`ht
 
 The service is chosen once per machine at setup (`save-relay setup --service nextcloud|gdrive|dropbox`, or `setup` with no flag asks) and is the same on every machine (M6). It is recorded in `config.json`'s `server` field: the Nextcloud address (`https://...`), or the service key `gdrive` or `dropbox` (`service::Service::from_server`). Keeping format 1's shape means no config migration and no change to the issued locked tests. `status` and `setup` name the service in their `--json` (`service`).
 
-## Nextcloud revision markers (#149)
+## WebDAV revision markers (#149)
 
 A WebDAV server's ETag can repeat for same-second, same-size writes (an ETag built from the
 modification time in whole seconds and the size). Nextcloud 33 does not do this: every write gets
@@ -31,16 +31,13 @@ and restore prune markers numerically, keeping the newest 10 through their publi
 never deleting that revision's marker or later claims, and ignoring odd names. Drive, Dropbox
 and MemoryRemote create no `rev/` paths.
 
-**Recovery gap requiring a follow-up issue before relying on unattended recovery:** a crash
-between marker creation and the state write leaves `rev/<n+1>` while state still says `n`.
-Every later push or restore then gets `Changed`; retries and history pruning cannot free it.
-A failed marker DELETE, or a lost response to marker creation, can strand a claim the same way.
-There is no automatic expiry or recovery in #149. This is a permanent availability failure,
-not acceptable crash recovery. A follow-up must specify and test safe recovery, including a
-writer suspended mid-request and an ambiguous state-write failure. Merely deleting a marker
-after a timeout is unsafe: the original writer could resume and still pass an ETag that repeats on such a server.
-Until then, manual recovery requires stopping all writers, checking `state.json` and the marker's
-history entry, and removing only an unpublished next-revision marker. Published markers stay.
+`save-relay repair <game>` lists the claim files above the current revision `n`. It acts only on
+`rev/<n+1>`, and only after `state.json` is confirmed unchanged. Two cases:
+
+- The entry the claim names is missing or incomplete: nothing was published under it, so the claim is released.
+- The entry is complete. This is the usual crash (the push moves its entry into `history/` before it claims the revision): the entry is moved to `<game>/set-aside/rev<n+1>-<entry>`, never deleted, and then the claim is released. `state.json` is checked again after the move; if it moved, the entry goes back to `history/` and nothing is released.
+
+Claims above `n+1`, and claims whose body is not an entry name, are kept. Text mode asks before any change, and `--yes` approves. `--json` without `--yes` only reports; each marker carries `status` and, for a set-aside entry, `set_aside`. A server change during repair returns `changed_on_server` (exit 5). Repair is available for Nextcloud; Drive, Dropbox and MemoryRemote report "nothing to repair." Repair assumes no machine is pushing to that game: a writer that is still alive and has not written `state.json` can publish after its claim is released, and repair cannot stop a write that lands after its last check. There is no timer-based expiry: a claim is not removed merely because it is old. The rules are covered by `sync::repair_tests` and by `tests/repair.rs` (a push that dies at its state write, then repair, then a push; and the CLI prompt, `--json` and `--yes`), #159.
 
 ## Dropbox
 
