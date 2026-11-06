@@ -354,7 +354,7 @@ fn contract(tag: &str, live: &Live) {
 }
 
 /// M1-M3 and M5 on the real service: push, pull on a second config folder, conflict with
-/// keep-local, restore, and an offline pull and deferred push settled once back online.
+/// both conflict resolutions, restore, and an offline pull and deferred push settled online.
 fn round_trip(tag: &str, live: &Live) {
     let root = live_root(tag);
     let r: &dyn Remote = live.remote.as_ref();
@@ -376,6 +376,9 @@ fn round_trip(tag: &str, live: &Live) {
     let losing = server_state(r, &root).entry;
     two.write("two-edited");
     assert_eq!(two.pull(r, None).unwrap().action, Action::Conflict);
+    assert_eq!(two.push(r, None).unwrap().action, Action::Conflict);
+    assert_eq!(two.saves(), "two-edited");
+    assert_eq!(server_state(r, &root).revision, 2);
     let kept = two.push(r, Some(Resolve::KeepLocal)).unwrap();
     assert_eq!(kept.action, Action::Pushed);
     assert_eq!(kept.backup.as_deref(), Some(losing.as_str()));
@@ -392,6 +395,7 @@ fn round_trip(tag: &str, live: &Live) {
 
     live.gate.set(false);
     assert_eq!(two.pull(r, None).unwrap().action, Action::Offline);
+    assert_eq!(two.saves(), "two-edited");
     two.write("offline-edit");
     assert_eq!(two.push(r, None).unwrap().action, Action::Deferred);
     assert_eq!(two.saves(), "offline-edit");
@@ -407,6 +411,15 @@ fn round_trip(tag: &str, live: &Live) {
     assert_eq!(entry_saves(r, &root, &before), "one-after");
     let now_entry = server_state(r, &root).entry;
     assert_eq!(entry_saves(r, &root, &now_entry), "offline-edit");
+
+    // The other F43 resolution keeps the server and backs up this machine's losing saves.
+    one.write("local-losing");
+    assert_eq!(one.pull(r, None).unwrap().action, Action::Conflict);
+    let kept = one.pull(r, Some(Resolve::KeepServer)).unwrap();
+    assert_eq!(kept.action, Action::Pulled);
+    assert_eq!(one.saves(), "offline-edit");
+    assert_eq!(entry_saves(r, &root, &kept.backup.unwrap()), "local-losing");
+    assert_eq!(server_state(r, &root).revision, 6);
 }
 
 /// A remote that runs `before_state` once, just before the first write of `state.json` reaches
@@ -615,7 +628,11 @@ fn gdrive_refuses_a_reused_claim_id() {
 /// screen's own wording (and Dropbox's App folder name) is looked at by the owner.
 #[test]
 #[ignore = "live: builds the Google sign-in URL only; the owner checks the consent screen"]
-fn google_consent_asks_for_drive_file_only() {
+fn gdrive_consent_asks_for_drive_file_only() {
+    if env::var_os(GDRIVE_VAR).is_none() {
+        eprintln!("skipped: {GDRIVE_VAR} is not set (see docs/services.md, How to run)");
+        return;
+    }
     let url = authorize_url(&GOOGLE, GOOGLE_DESKTOP.id, "http://127.0.0.1:1/", "c", "s");
     assert!(url.contains(&form_encode(&[(
         "scope",

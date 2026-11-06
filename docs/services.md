@@ -72,7 +72,9 @@ SAVE_RELAY_LIVE_GDRIVE_CONFIG=/path/to/config/save-relay cargo test --test live_
 SAVE_RELAY_LIVE_DROPBOX_CONFIG=/path/to/config/save-relay cargo test --test live_services dropbox -- --ignored
 ```
 
-Each test works in its own `save-relay-live-test-<name>` folder on the service and deletes it at the end, so your real saves are not touched. A variable that is not set skips its tests with a message. Tokens are never printed. On Windows, set the variable with `$env:SAVE_RELAY_LIVE_GDRIVE_CONFIG = "..."` before the same `cargo test` line.
+Each test works in its own `save-relay-live-test-<name>` folder on the service and clears it before and after the test, including after an assertion fails. Cleanup failures are reported; rerun once the service is reachable to remove leftovers. Your configured saves root is never used. A variable that is not set skips its tests with a message (add `--nocapture` to see it). Tokens are never printed. Tests serialize sign-ins within a run; do not run separate live-test processes against the same account at once. On Windows, set the variable with `$env:SAVE_RELAY_LIVE_GDRIVE_CONFIG = "..."` before the same `cargo test` line.
+
+The Drive 409 check uses two token-source sessions on this machine. Using an id generated on another physical machine, the consent screens, and Game Mode sign-in remain owner device checks.
 
 ## Switching services
 
