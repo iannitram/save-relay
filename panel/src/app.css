@@ -204,6 +204,7 @@ footer {
 .address {
   font-family: var(--font-mono);
   font-size: 20px;
+  line-height: 28px;
   font-weight: 500;
   word-break: break-all;
 }
