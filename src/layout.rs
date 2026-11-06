@@ -81,18 +81,6 @@ impl Layout {
     pub fn rev_path(&self, game: &str, name: &str) -> String {
         format!("{}/{}", self.rev_dir(game), name)
     }
-
-    /// `<root>/<game>/set-aside`: complete history entries that `repair` moved out of `history/`
-    /// with their stranded claim (#159). Nothing reads this folder; it is kept for recovery by hand.
-    pub fn set_aside_dir(&self, game: &str) -> String {
-        format!("{}/set-aside", self.game_dir(game))
-    }
-
-    /// `<root>/<game>/set-aside/rev<number>-<entry>`: where `repair` put the entry `entry` that the
-    /// claim `rev/<number>` named.
-    pub fn set_aside_path(&self, game: &str, number: u64, entry: &str) -> String {
-        format!("{}/rev{}-{}", self.set_aside_dir(game), number, entry)
-    }
 }
 
 /// `"<stamp>-<device>"`: `entry_name("20261031T195100Z", "amd-handheld")` ->

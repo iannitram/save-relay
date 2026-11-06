@@ -917,14 +917,7 @@ fn a_taken_revision_claim_refuses_the_push_on_nextcloud() {
         None,
     )
     .unwrap_err();
-    // The racer's claim looks stranded until it writes state.json, so the push may name `repair`
-    // (#159). Both variants are the same conflict to callers: exit 5, code `changed_on_server`.
-    assert!(
-        matches!(error, Error::Changed | Error::ChangedRepair(_)),
-        "{error:?}"
-    );
-    assert_eq!(save_relay::api::exit_code(&error), 5);
-    assert_eq!(error.code(), "changed_on_server");
+    assert_eq!(error, Error::Changed);
 
     // state.json is still revision 1 from dev-c; the racer's claim and revision 1's stay; dev-b's
     // history entry is gone.

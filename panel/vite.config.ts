@@ -10,6 +10,10 @@ export default defineConfig({
     outDir: "dist",
     emptyOutDir: true,
     cssCodeSplit: false,
+    // The two fonts go into app.css as data URLs: `save-relay panel` serves only the three files
+    // above, so a separate font file would never reach the browser (and its token-less request
+    // would be refused).
+    assetsInlineLimit: 1_000_000,
     rollupOptions: {
       output: {
         entryFileNames: "app.js",

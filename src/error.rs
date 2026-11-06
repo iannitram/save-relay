@@ -23,8 +23,6 @@ pub enum Error {
     StateInvalid(String),
     /// The server's state changed between read and write (HTTP 412): another machine pushed.
     Changed,
-    /// A refused write is associated with a stranded Nextcloud revision claim.
-    ChangedRepair(String),
     /// `restore` named a history entry that does not exist.
     NoSuchEntry(String),
     /// A remote path does not exist.
@@ -66,7 +64,7 @@ impl Error {
             Error::Unreachable(_) => "server_unreachable",
             Error::Server(_) => "server_error",
             Error::StateInvalid(_) => "state_invalid",
-            Error::Changed | Error::ChangedRepair(_) => "changed_on_server",
+            Error::Changed => "changed_on_server",
             Error::NoSuchEntry(_) => "no_such_entry",
             Error::NotFound(_) => "not_found",
             Error::Credentials(_) => "credentials",
@@ -95,7 +93,6 @@ impl fmt::Display for Error {
             Error::Unreachable(m) => write!(f, "the server is unreachable: {m}"),
             Error::Server(m) => write!(f, "server error: {m}"),
             Error::StateInvalid(m) => write!(f, "state file: {m}"),
-            Error::ChangedRepair(message) => write!(f, "{message}"),
             Error::Changed => write!(
                 f,
                 "another machine changed the saves on the server meanwhile"

@@ -81,10 +81,29 @@ it("loads the real panel through callable(run), navigates by controller, and rea
   expect(host.run).toHaveBeenCalledWith("setup", { service: "gdrive", "no-browser": true });
   expect(container.querySelector('svg[role="img"]')).not.toBeNull();
   expect(container.querySelector("style")?.textContent).not.toMatch(/(?:^|\})\s*(?:body|header|:root)\s*\{/);
+  const scopedCss = container.querySelector("style")?.textContent ?? "";
+  expect(scopedCss).toContain(".save-relay-decky[data-theme=\"dark\"]");
+  expect(scopedCss).toContain("--surface: #11151b;");
+  expect(scopedCss).toContain("font-size: 40px");
+  expect(scopedCss).toContain("data:font/ttf;base64,");
+  expect(scopedCss).not.toContain("font-size: 16px");
+  expect(scopedCss).not.toContain("font-size: 18px");
 });
 
 it("shows backend errors in the shared games view", async () => {
   host.run.mockResolvedValue('{"ok":false,"command":"where","error":{"code":"io","message":"save-relay binary not found"}}');
   await act(async () => root.render(plugin().content!));
   expect(container.querySelector('[role="alert"]')?.textContent).toBe("save-relay binary not found");
+});
+
+it("locks Game Mode style floors at >= 20px font size and >= 64px min-height", async () => {
+  await act(async () => root.render(plugin().content!));
+  const scopedCss = container.querySelector("style")?.textContent ?? "";
+  const fontSizes = [...scopedCss.matchAll(/font-size:\s*(\d+)px/g)].map((match) => Number(match[1]));
+  expect(fontSizes.length).toBeGreaterThan(0);
+  expect(fontSizes.every((size) => size >= 20)).toBe(true);
+
+  const minHeights = [...scopedCss.matchAll(/min-height:\s*(\d+)px/g)].map((match) => Number(match[1]));
+  expect(minHeights.length).toBeGreaterThan(0);
+  expect(minHeights.every((height) => height >= 64)).toBe(true);
 });
