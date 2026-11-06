@@ -60,7 +60,7 @@ impl ServerState {
         )
     }
 
-    /// The file list as a save set. Built in the skeleton.
+    /// The file list as a save set.
     pub fn save_set(&self) -> SaveSet {
         SaveSet {
             files: self.files.clone(),
@@ -97,7 +97,7 @@ impl LastSynced {
         )
     }
 
-    /// The file list as a save set. Built in the skeleton.
+    /// The file list as a save set.
     pub fn save_set(&self) -> SaveSet {
         SaveSet {
             files: self.files.clone(),

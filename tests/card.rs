@@ -5,7 +5,7 @@ use save_relay::Error;
 
 const GOOD: &str = r#"{"format":1,"device":"amd-handheld","time":"2026-10-31T19:51:00Z","playtime_secs":5400,"place":"Chapter 7: The Fortress","picture":".save-relay-picture.jpg"}"#;
 
-/// `GOOD`, read with serde's derive (built in the skeleton), not with `from_json`.
+/// `GOOD`, read with serde's derive, not with `from_json`.
 fn card() -> Card {
     serde_json::from_str(GOOD).unwrap()
 }

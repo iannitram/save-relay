@@ -15,7 +15,7 @@ use std::sync::Mutex;
 pub const SERVICE: &str = "save-relay";
 
 /// A password or token. `Debug` and `Display` print `***`, so it cannot leak through a log line.
-/// Built in the skeleton, on purpose: the redaction must exist before anything can print one.
+/// On purpose: the redaction must exist before anything can print one.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Secret(String);
 
