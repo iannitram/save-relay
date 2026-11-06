@@ -20,6 +20,7 @@ use save_relay::pending::{self, Answer, ChoiceKind};
 use save_relay::platform::{AppDirs, PathVars};
 use save_relay::presence::{self, Mark};
 use save_relay::remote::{MemoryRemote, Precondition, Remote};
+use save_relay::state::ServerState;
 use save_relay::{stamp, Error};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -366,16 +367,18 @@ fn error_code(text: &str) -> String {
 }
 
 fn server_has_save(remote: &MemoryRemote, bytes: &str) -> bool {
-    remote
-        .file_paths()
-        .iter()
-        .filter(|path| path.ends_with("slot1.sav"))
-        .any(|path| remote.read(path).as_deref() == Some(bytes.as_bytes()))
+    let layout = layout();
+    let state = remote
+        .read(&layout.state_path(GAME))
+        .expect("current revision");
+    let state = ServerState::from_json(std::str::from_utf8(&state).unwrap()).unwrap();
+    let path = format!("{}/slot1.sav", layout.entry_dir(GAME, &state.entry));
+    remote.read(&path).as_deref() == Some(bytes.as_bytes())
 }
 
 fn mark_on_server(remote: &MemoryRemote) -> Option<Mark> {
     let bytes = remote.read(&layout().playing_path(GAME))?;
-    Mark::from_json(std::str::from_utf8(&bytes).unwrap()).ok()
+    Some(Mark::from_json(std::str::from_utf8(&bytes).unwrap()).expect("valid server mark"))
 }
 
 /// The handheld wraps the game once on an empty server: its save is on the server afterwards.
