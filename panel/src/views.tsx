@@ -103,12 +103,12 @@ export function GamesView(props: {
               className="btn row"
               onClick={() => props.onOpen(g.game)}
             >
-              <span className="name">{g.game}</span>
+              <span className="name label">{g.game}</span>
               <span className="meta">
                 {g.held ? `Open on ${g.held.device} since ${when(g.held.since)}` : "Not open"}
                 {g.server ? ` · saved by ${g.server.device}` : " · nothing saved yet"}
               </span>
-              {g.pending && <span className="badge">Choice waiting</span>}
+              {g.pending && <span className="badge badge-warning">Choice waiting</span>}
             </button>
           </li>
         ))}
@@ -227,7 +227,7 @@ export function PendingView(props: {
               className="btn row"
               onClick={() => props.onOpen(c)}
             >
-              <span className="name">{c.game}</span>
+              <span className="name label">{c.game}</span>
               <span className="meta">
                 {c.kind === "conflict"
                   ? "Both sides changed"
