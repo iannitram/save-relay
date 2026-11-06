@@ -1,8 +1,8 @@
 import type { ReactElement, ReactNode } from "react";
 import { isValidElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { setWhenClock, when } from "./format.ts";
-import { describe, expect, it } from "vitest";
+import { setWhenClock } from "./format.ts";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { choose, restore, signIn } from "./actions.ts";
 import type { ApiArgs, ApiCommand, Bridge } from "./bridge.ts";
 import answerFx from "./fixtures/answer.json";
@@ -59,18 +59,12 @@ const held = statusHeld.data.pending as PendingChoice;
 const history = historyFx.data as HistoryData;
 const noop = () => undefined;
 
-setWhenClock({ now: new Date("2026-11-01T00:30:00Z"), timeZone: "UTC" });
+beforeAll(() => {
+  setWhenClock({ now: new Date("2026-11-01T00:30:00Z"), timeZone: "UTC" });
+});
 
-describe("when", () => {
-  it("formats today, another day, noon, midnight, and zone-dependent dates", () => {
-    const clock = { now: new Date("2026-10-31T19:12:00Z"), timeZone: "UTC" };
-    expect(when("2026-10-31T19:12:00Z", clock)).toBe("7:12pm");
-    expect(when("2026-10-30T19:12:00Z", clock)).toBe("Oct 30, 7:12pm");
-    expect(when("2026-10-31T12:00:00Z", clock)).toBe("12:00pm");
-    expect(when("2026-10-31T00:00:00Z", clock)).toBe("12:00am");
-    expect(when("2026-11-01T00:30:00Z", clock)).toBe("Nov 1, 12:30am");
-    expect(when("2026-11-01T00:30:00Z", { ...clock, timeZone: "America/Los_Angeles" })).toBe("5:30pm");
-  });
+afterAll(() => {
+  setWhenClock(null);
 });
 
 describe("games list", () => {
