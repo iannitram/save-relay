@@ -84,6 +84,7 @@ describe("games list", () => {
     const html = renderToStaticMarkup(
       <GamesView games={rows} error={null} onOpen={noop} onPending={noop} onSignIn={noop} />,
     );
+    expect(html).toContain('<span class="name label">celeste</span>');
     expect(html).toContain("Open on steam-deck since Oct 31, 7:12pm");
     expect(html).toContain("Choice waiting");
     expect(html).toContain('class="badge badge-warning"');
