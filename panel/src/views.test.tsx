@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import type { ReactElement, ReactNode } from "react";
 import { isValidElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -54,6 +55,13 @@ function press(view: ReactElement, id: string) {
   el!.props.onClick();
 }
 
+/** The markup inside every banner of one tone: the words a tone wraps, and nothing after the banner. */
+function wrapped(html: string, tone: string): string {
+  return [...html.matchAll(new RegExp(`class="banner banner-${tone}"[^>]*>([\\s\\S]*?)</div></div>`, "g"))]
+    .map((m) => m[1])
+    .join("");
+}
+
 const conflict = statusPending.data.pending as PendingChoice;
 const held = statusHeld.data.pending as PendingChoice;
 const history = historyFx.data as HistoryData;
@@ -96,31 +104,40 @@ describe("banners", () => {
   it("uses danger alerts for errors, success for notices, and info for explanatory text", () => {
     const error = renderToStaticMarkup(<ErrorBanner message="Could not save" />);
     expect(error).toContain('class="banner banner-danger" role="alert"');
-    expect(error).toMatch(/banner-danger[\s\S]*?Could not save/);
+    expect(wrapped(error, "danger")).toContain("Could not save");
     const conflictHtml = renderToStaticMarkup(
       <ConflictView choice={conflict} error={null} notice="Saved" onAnswer={noop} onBack={noop} />,
     );
-    expect(conflictHtml).toMatch(/class="banner banner-success"[^>]*>[\s\S]*?Saved/);
-    expect(conflictHtml).toMatch(/class="banner banner-info"[^>]*>[\s\S]*?Nothing is overwritten until you choose\./);
+    expect(wrapped(conflictHtml, "success")).toContain("Saved");
+    expect(wrapped(conflictHtml, "info")).toContain("Nothing is overwritten until you choose.");
   });
 
   it("uses the warning banner for held saves and info for Nextcloud", () => {
     const heldHtml = renderToStaticMarkup(
       <HeldView game="celeste" held={held.held!} error={null} notice="Saved" onAnswer={noop} onBack={noop} />,
     );
-    expect(heldHtml).toMatch(/class="banner banner-warning"[^>]*>[\s\S]*?Open on steam-deck[\s\S]*?Playing anyway can lose the other machine&#x27;s newest saves\./);
-    expect(heldHtml).toMatch(/class="banner banner-success"[^>]*>[\s\S]*?Saved/);
+    expect(wrapped(heldHtml, "warning")).toContain("Open on steam-deck since");
+    expect(wrapped(heldHtml, "warning")).toContain("Playing anyway can lose the other machine&#x27;s newest saves.");
+    expect(wrapped(heldHtml, "success")).toContain("Saved");
     const signInHtml = renderToStaticMarkup(
       <SignInView prompt={null} error={null} onPick={noop} onBack={noop} />,
     );
-    expect(signInHtml).toMatch(/class="banner banner-info"[^>]*>[\s\S]*?Nextcloud is set up on the command line, not here\./);
+    expect(wrapped(signInHtml, "info")).toContain("Nextcloud is set up on the command line, not here.");
   });
 
   it("uses the success banner for notices on timeline history", () => {
     const timelineHtml = renderToStaticMarkup(
       <TimelineView history={history} pictureUrl={() => null} confirm={null} error={null} notice="Restored" onAsk={noop} onConfirm={noop} onCancel={noop} onBack={noop} />,
     );
-    expect(timelineHtml).toMatch(/class="banner banner-success"[^>]*>[\s\S]*?Restored/);
+    expect(wrapped(timelineHtml, "success")).toContain("Restored");
+  });
+
+  it("styles each tone's border and the icon's 2.5 stroke in app.css", () => {
+    const css = readFileSync(new URL("./app.css", import.meta.url), "utf8");
+    expect(css).toMatch(/\.banner-icon\s*\{[^}]*stroke-width:\s*2\.5;/);
+    for (const tone of ["info", "warning", "danger", "success"]) {
+      expect(css).toMatch(new RegExp(`\\.banner-${tone}\\s*\\{[^}]*border-color:`));
+    }
   });
 });
 
