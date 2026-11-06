@@ -148,6 +148,7 @@ function Timeline(props: {
 }) {
   const [history, setHistory] = useState<HistoryData | null>(null);
   const [confirm, setConfirm] = useState<string | null>(null);
+  const [opener, setOpener] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const { bridge, game } = props;
@@ -171,9 +172,11 @@ function Timeline(props: {
       confirm={confirm}
       error={error}
       notice={notice}
+      initial={opener ? `restore:${opener}` : undefined}
       onAsk={(entry) => {
         setError(null);
         setConfirm(entry);
+        setOpener(entry);
       }}
       onCancel={() => setConfirm(null)}
       onConfirm={() => {
