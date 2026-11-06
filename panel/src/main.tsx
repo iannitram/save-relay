@@ -9,9 +9,11 @@ import { httpBridge } from "./bridge.ts";
 import { fixtureBridge, fixturePicture } from "./fixtureBridge.ts";
 import { applyTheme } from "./theme.ts";
 
-const colorScheme = window.matchMedia("(prefers-color-scheme: light)");
-applyTheme(document.documentElement, colorScheme.matches);
-colorScheme.addEventListener("change", (event) => applyTheme(document.documentElement, event.matches));
+const colorScheme = typeof window !== "undefined" && typeof window.matchMedia === "function"
+  ? window.matchMedia("(prefers-color-scheme: light)")
+  : undefined;
+applyTheme(document.documentElement, Boolean(colorScheme?.matches));
+colorScheme?.addEventListener("change", (event) => applyTheme(document.documentElement, event.matches));
 
 const params = new URLSearchParams(window.location.search);
 const token = params.get("token");
