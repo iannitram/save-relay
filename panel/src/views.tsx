@@ -356,10 +356,12 @@ export function SignInView(props: {
     <Screen title={`Sign in to ${prompt.service === "gdrive" ? "Google Drive" : "Dropbox"}`} onBack={props.onBack}>
       <ErrorBanner message={props.error} />
       <div className="signin">
-        <QrCode text={prompt.url} />
+        <div className="qr-box">
+          <QrCode text={prompt.url} />
+        </div>
         <div>
           <p>Scan with a phone, or open:</p>
-          <p className="big url">{prompt.url}</p>
+          <p className="address">{prompt.url}</p>
           {prompt.code && (
             <p>
               Code: <strong className="code">{prompt.code}</strong>
