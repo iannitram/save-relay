@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>Pending choices (dark)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=JetBrains+Mono:wght@500;700&display=swap">
+<style>
+/* Shared design system v1: tokens.css and components/bundle.css, unchanged. */
+/* Shared design system — generated from tokens.json */
+:root, [data-theme="dark"] {
+  --surface: #11151b;
+  --surface-raised: #1b212a;
+  --surface-sunken: #0b0e12;
+  --surface-focus: #2a3544;
+  --border: #818ea3;
+  --border-subtle: #2c3644;
+  --ink: #f4f6f9;
+  --ink-muted: #b6c0ce;
+  --accent: #7cc0ff;
+  --on-accent: #08131f;
+  --focus: #ffd84d;
+  --danger: #ff8f86;
+  --on-danger: #2b0805;
+  --danger-surface: #3b1514;
+  --danger-ink: #ffd6d2;
+  --danger-border: #ff8f86;
+  --warning-surface: #3a2b06;
+  --warning-ink: #ffe29a;
+  --warning-border: #e0a82e;
+  --success-surface: #0f3322;
+  --success-ink: #a6efc9;
+  --success-border: #4fc58a;
+  --info-surface: #12304d;
+  --info-ink: #bfe1ff;
+  --info-border: #7cc0ff;
+  --scrim: #000000b3;
+  --qr-paper: #ffffff;
+  --qr-ink: #000000;
+  --shadow-dialog: 0 24px 64px #000000cc;
+}
+[data-theme="light"] {
+  --surface: #f5f3ee;
+  --surface-raised: #ffffff;
+  --surface-sunken: #e9e6df;
+  --surface-focus: #dde9f7;
+  --border: #6a7280;
+  --border-subtle: #cfcbc2;
+  --ink: #12161c;
+  --ink-muted: #465163;
+  --accent: #0b5cad;
+  --on-accent: #ffffff;
+  --focus: #a83800;
+  --danger: #b3261e;
+  --on-danger: #ffffff;
+  --danger-surface: #fdeceb;
+  --danger-ink: #7a1510;
+  --danger-border: #b3261e;
+  --warning-surface: #fff4d6;
+  --warning-ink: #5c3d00;
+  --warning-border: #8a5d00;
+  --success-surface: #e1f4ea;
+  --success-ink: #0d4a2c;
+  --success-border: #1f7a4d;
+  --info-surface: #dcecfb;
+  --info-ink: #0a3c73;
+  --info-border: #0b5cad;
+  --scrim: #12161c99;
+  --qr-paper: #ffffff;
+  --qr-ink: #000000;
+  --shadow-dialog: 0 24px 64px #12161c66;
+}
+:root {
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-8: 48px;
+  --control-height: 64px;
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --radius-pill: 999px;
+  --font-sans: "Atkinson Hyperlegible", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+.display { font-family: var(--font-sans); font-size: 56px; line-height: 60px; font-weight: 700; }
+.title { font-family: var(--font-sans); font-size: 40px; line-height: 48px; font-weight: 700; }
+.heading { font-family: var(--font-sans); font-size: 30px; line-height: 38px; font-weight: 700; }
+.body-lg { font-family: var(--font-sans); font-size: 24px; line-height: 34px; font-weight: 400; }
+.body { font-family: var(--font-sans); font-size: 22px; line-height: 32px; font-weight: 400; }
+.label { font-family: var(--font-sans); font-size: 22px; line-height: 28px; font-weight: 700; }
+.meta { font-family: var(--font-sans); font-size: 20px; line-height: 28px; font-weight: 400; }
+.code { font-family: var(--font-mono); font-size: 40px; line-height: 48px; font-weight: 700; letter-spacing: 0.12em; }
+.code-sm { font-family: var(--font-mono); font-size: 20px; line-height: 28px; font-weight: 500; }
+
+
+/* Components of the shared design system. Every value is a token from tokens.json. */
+
+.ds-root, .ds-screen {
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 22px;
+  line-height: 32px;
+  -webkit-font-smoothing: antialiased;
+}
+.ds-root *, .ds-screen * { box-sizing: border-box; }
+.ds-screen {
+  position: relative;
+  width: 1280px;
+  height: 800px;
+  padding: var(--space-6) var(--space-8);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  overflow: hidden;
+}
+.ds-header { display: flex; align-items: center; gap: var(--space-5); }
+.ds-header h1 { margin: 0; font-size: 40px; line-height: 48px; font-weight: 700; }
+.ds-footer { display: flex; gap: var(--space-5); margin-top: auto; }
+.ds-stack { display: flex; flex-direction: column; gap: var(--space-4); }
+.ds-muted { color: var(--ink-muted); }
+
+/* Focus: the primary state. The ring has a gap so it always sits on the surface, never on a fill.
+   Keep 24px between focusable neighbours so rings never overlap. */
+.ds-focusable { cursor: pointer; }
+.ds-focusable:focus { outline: none; }
+.ds-focusable:focus-visible,
+.ds-focusable[data-focused] {
+  outline: 6px solid var(--focus);
+  outline-offset: 4px;
+}
+.ds-btn.ds-focusable:focus-visible,
+.ds-btn.ds-focusable[data-focused] { background-color: var(--surface-focus); }
+.ds-btn-primary.ds-focusable:focus-visible,
+.ds-btn-primary.ds-focusable[data-focused] { background-color: var(--accent); }
+.ds-btn-danger.ds-focusable:focus-visible,
+.ds-btn-danger.ds-focusable[data-focused] { background-color: var(--danger); }
+.ds-row.ds-focusable:focus-visible, .ds-row.ds-focusable[data-focused],
+.ds-save.ds-focusable:focus-visible, .ds-save.ds-focusable[data-focused],
+.ds-choice-card.ds-focusable:focus-visible, .ds-choice-card.ds-focusable[data-focused] { background: var(--surface-focus); }
+
+/* Button */
+.ds-btn {
+  font: inherit;
+  font-size: 22px;
+  line-height: 28px;
+  font-weight: 700;
+  min-height: var(--control-height);
+  padding: 0 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  color: var(--ink);
+  background: var(--surface-raised);
+  border: 2px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.ds-btn-primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.ds-btn-danger { background: var(--danger); color: var(--on-danger); border-color: var(--danger); }
+
+/* Badge: always a word, colour is secondary */
+.ds-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 2px 16px;
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 700;
+  border-radius: var(--radius-pill);
+  border: 2px solid var(--info-border);
+  background: var(--info-surface);
+  color: var(--info-ink);
+  white-space: nowrap;
+}
+.ds-badge-warning { background: var(--warning-surface); color: var(--warning-ink); border-color: var(--warning-border); }
+.ds-badge-success { background: var(--success-surface); color: var(--success-ink); border-color: var(--success-border); }
+.ds-badge-danger { background: var(--danger-surface); color: var(--danger-ink); border-color: var(--danger-border); }
+
+/* Icons */
+.ds-icon { width: 28px; height: 28px; flex: none; fill: none; stroke: currentColor; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+
+/* List row / game row */
+.ds-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-4); }
+.ds-row {
+  font: inherit;
+  width: 100%;
+  min-height: 80px;
+  padding: var(--space-3) var(--space-5);
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  text-align: left;
+  color: var(--ink);
+  background: var(--surface-raised);
+  border: 2px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.ds-row-name { font-size: 22px; line-height: 28px; font-weight: 700; min-width: 220px; }
+.ds-row-meta { flex: 1; font-size: 20px; line-height: 28px; color: var(--ink-muted); }
+
+/* Save card */
+.ds-save {
+  font: inherit;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  padding: var(--space-3) var(--space-5) var(--space-3) var(--space-3);
+  text-align: left;
+  color: var(--ink);
+  background: var(--surface-raised);
+  border: 2px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.ds-picture {
+  width: 192px;
+  height: 108px;
+  flex: none;
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  border: 2px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-muted);
+  overflow: hidden;
+}
+.ds-picture img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ds-picture .ds-icon { width: 40px; height: 40px; }
+.ds-save-body { flex: 1; min-width: 0; }
+.ds-save-place { font-size: 24px; line-height: 34px; margin: 0; font-weight: 700; }
+.ds-save-facts { margin: 0; font-size: 20px; line-height: 28px; color: var(--ink-muted); }
+.ds-save-side { display: flex; align-items: center; gap: var(--space-4); }
+
+/* Two-card choice */
+.ds-choice { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-5); }
+.ds-choice-card {
+  font: inherit;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-5);
+  text-align: left;
+  color: var(--ink);
+  background: var(--surface-raised);
+  border: 2px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.ds-choice-eyebrow { font-size: 20px; line-height: 28px; font-weight: 700; color: var(--ink-muted); margin: 0; }
+.ds-choice-place { font-size: 30px; line-height: 38px; font-weight: 700; margin: 0; }
+.ds-choice-facts { font-size: 20px; line-height: 28px; color: var(--ink-muted); margin: 0; }
+.ds-choice-action { margin-top: var(--space-4); align-self: stretch; }
+.ds-choice-action .ds-btn { width: 100%; }
+
+/* Confirm dialog */
+.ds-scrim { position: absolute; inset: 0; background: var(--scrim); display: flex; align-items: center; justify-content: center; padding: var(--space-8); z-index: 10; }
+.ds-dialog {
+  width: 760px;
+  max-width: 100%;
+  padding: var(--space-6);
+  background: var(--surface-raised);
+  color: var(--ink);
+  border: 2px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-dialog);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.ds-dialog h2 { margin: 0; font-size: 30px; line-height: 38px; font-weight: 700; }
+.ds-dialog p { margin: 0; font-size: 22px; line-height: 32px; }
+.ds-dialog-actions { display: flex; gap: var(--space-5); margin-top: var(--space-5); padding: 0 var(--space-2) var(--space-2); }
+
+/* Banner */
+.ds-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  border-radius: var(--radius-lg);
+  border: 2px solid var(--info-border);
+  background: var(--info-surface);
+  color: var(--info-ink);
+  font-size: 22px;
+  line-height: 32px;
+}
+.ds-banner .ds-icon { margin-top: 2px; width: 32px; height: 32px; }
+.ds-banner-title { font-weight: 700; margin: 0; }
+.ds-banner-text { margin: 0; }
+.ds-banner-warning { background: var(--warning-surface); color: var(--warning-ink); border-color: var(--warning-border); }
+.ds-banner-danger { background: var(--danger-surface); color: var(--danger-ink); border-color: var(--danger-border); }
+.ds-banner-success { background: var(--success-surface); color: var(--success-ink); border-color: var(--success-border); }
+
+/* QR sign-in */
+.ds-qr-block { display: flex; gap: 48px; align-items: flex-start; }
+.ds-qr-box { width: 320px; height: 320px; flex: none; padding: var(--space-4); background: var(--qr-paper); color: var(--qr-ink); border-radius: var(--radius-md); border: 2px solid var(--border); }
+.ds-qr-box svg { width: 100%; height: 100%; display: block; }
+.ds-qr-side { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.ds-qr-label { margin: 0; font-size: 20px; line-height: 28px; font-weight: 700; color: var(--ink-muted); }
+.ds-qr-address { margin: 0; font-family: var(--font-mono); font-weight: 500; font-size: 20px; line-height: 28px; word-break: break-all; }
+.ds-qr-code { margin: 0; font-family: var(--font-mono); font-weight: 700; font-size: 40px; line-height: 48px; letter-spacing: 0.12em; }
+
+/* Empty and error states */
+.ds-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--space-3);
+  padding: var(--space-6) var(--space-8);
+  border-radius: var(--radius-lg);
+  border: 2px solid var(--border-subtle);
+}
+.ds-state-icon { width: 72px; height: 72px; border-radius: var(--radius-pill); display: flex; align-items: center; justify-content: center; background: var(--surface-sunken); color: var(--ink-muted); border: 2px solid var(--border); }
+.ds-state-icon .ds-icon { width: 40px; height: 40px; }
+.ds-state h2 { margin: 0; font-size: 30px; line-height: 38px; font-weight: 700; }
+.ds-state p { margin: 0; font-size: 22px; line-height: 32px; max-width: 640px; }
+.ds-state-detail { font-family: var(--font-mono); font-weight: 500; font-size: 20px; line-height: 28px; color: var(--ink-muted); }
+.ds-state-actions { display: flex; gap: var(--space-5); margin-top: var(--space-4); padding: var(--space-2); }
+.ds-state-error { background: var(--danger-surface); color: var(--danger-ink); border: 2px solid var(--danger-border); }
+.ds-state-error .ds-state-icon { background: transparent; color: var(--danger-ink); border-color: var(--danger-border); }
+.ds-state-error .ds-state-detail { color: var(--danger-ink); }
+
+html, body { margin: 0; background: var(--surface); }
+body { width: 1280px; height: 800px; overflow: hidden; }
+</style>
+</head>
+<body>
+<main class="ds-screen" aria-label="Pending choices">
+<header class="ds-header"><button type="button" class="ds-btn ds-focusable" data-focused><svg class="ds-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 12 H5"/><path d="M11 6 L5 12 L11 18"/></svg>Back</button><h1>Pending choices</h1></header><ul class="ds-list"><li><button type="button" class="ds-row ds-focusable"><span class="ds-row-name">celeste</span><span class="ds-row-meta">Open on steam-deck · Oct 31, 7:30pm</span></button></li><li><button type="button" class="ds-row ds-focusable"><span class="ds-row-name">hades</span><span class="ds-row-meta">Both sides changed · Oct 31, 8:41pm</span></button></li></ul>
+</main>
+</body>
+</html>

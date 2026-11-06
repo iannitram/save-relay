@@ -1,0 +1,47 @@
+# Design pass, 2026-11-06
+
+I redrew the nine panel screens from the shared design system v1, using its tokens and component markup. Each capture was taken from the panel running on its fixtures at 1280x800. Each mockup is a static page of the same size and content, dark theme, with a light copy of two screens.
+
+## Screens
+
+- Games: [capture](current/01-games.png), [mockup](01-games.html), [light](01-games-light.html)
+- Pending choices: [capture](current/02-pending-choices.png), [mockup](02-pending-choices.html)
+- Open elsewhere: [capture](current/03-held-choice.png), [mockup](03-held-choice.html)
+- Two versions: [capture](current/04-conflict-choice.png), [mockup](04-conflict-choice.html)
+- History: [capture](current/05-timeline.png), [mockup](05-timeline.html), [light](05-timeline-light.html)
+- Restore confirm: [capture](current/06-restore-confirm.png), [mockup](06-restore-confirm.html)
+- Sign in: [capture](current/07-sign-in.png), [mockup](07-sign-in.html)
+- Sign in to Google Drive: [capture](current/08-sign-in-google-drive.png), [mockup](08-sign-in-google-drive.html)
+- Sign in to Dropbox: [capture](current/09-sign-in-dropbox.png), [mockup](09-sign-in-dropbox.html)
+
+The mockups show a machine's real fixture names (steam-deck, amd-handheld). Times are written for a person ("Oct 31, 7:12pm") because that is what the system asks for. The captures write them as UTC.
+
+## Differences
+
+Sizes follow the RUBRIC. The same rows are in [differences.json](differences.json).
+
+| Screen(s) | What differs now | What the mockup does | Size | Files |
+| --- | --- | --- | --- | --- |
+| 01 to 09 | **Adopt the shared tokens, fonts and type scale.** app.css has its own palette (#14181f, #1f2631, #6cb4ff), system-ui at 18px, h1 36px, row meta and badges 18px, the sign-in code 32px bold in the text face. Text below the 20px floor, no mono face for addresses and codes. | tokens.css and the Atkinson Hyperlegible and JetBrains Mono links. Body 22/32, label 22/28, meta 20/28 (the floor), title 40/48, heading 30/38, code 40 mono, code-sm 20 mono. Every color is a token by name. | medium | `panel/index.html`, `panel/src/app.css`, `panel/src/tokens.css (new, a copy of the system file)` |
+| 01 to 09 | **Focus ring: 6px yellow, 4px off, filled.** A 5px blue (#6cb4ff) outline 3px off the control, with a #2a3647 fill. Neighbouring rows are 12px apart, so the ring reaches the next row (visible on 02). | A solid 6px outline in `focus` (yellow #ffd84d dark, burnt orange #a83800 light), 4px off, on `:focus-visible` and `[data-focused]`, plus the `surface-focus` fill. Primary and destructive buttons keep their own fill. Every target carries `ds-focusable`. | easy | `panel/src/app.css` |
+| 01 to 09 | **Buttons and edges: radius, border contrast, variants.** Buttons are 10px radius, 28px side padding, with a #3a4558 border at about 1.9:1 on the page (the system needs 3:1). Every button looks the same, so nothing marks the safe or the risky action. | Buttons 64px tall, 14px radius, 32px side padding, a 2px `border` edge (3:1 or better). Variants: primary (Wait, Restore, the two card actions), destructive (Play anyway), secondary for the rest. One primary per screen, never disabled. | easy | `panel/src/app.css`, `panel/src/views.tsx` |
+| 01 to 09 | **Spacing: 16px between rows, 24px between buttons.** Lists have a 12px gap, footers 16px, cards 24px; the header gap is 24px but the page gaps are 16px. | Screen padding 32px top and bottom, 48px left and right; rows and cards 16px apart, buttons 24px apart (the ring reaches 10px). Header row and content 24px apart. | easy | `panel/src/app.css` |
+| all, in Game Mode (the captures are browser captures) | **Game Mode wrapper shrinks the panel below the system floor.** decky/src/index.tsx overrides the stylesheet: 16px text, 24px titles, 20px headings, 18px buttons 48px tall. It is below the 20px floor and the 64px control height. | No size overrides. The panel runs at the same 1280x800 styles in Game Mode as in the browser. The wrapper only scopes the selectors so Steam is not restyled, and loads the tokens inside the scope. | medium | `decky/src/index.tsx`, `decky/src/index.test.tsx`, `panel/src/app.css` |
+| 01, 02, 03, 05, 06, 08, 09 | **Times for a person, not UTC stamps.** `when()` writes "2026-10-31 19:12 UTC" in lists, the held line, the confirm and the sign-in expiry. | "Oct 31, 7:12pm" (12-hour, am or pm, short date when it is not today, no UTC). The fixtures need a fixed clock and zone so a capture reads the same everywhere. | medium | `panel/src/format.ts`, `panel/src/views.tsx`, `panel/src/views.test.tsx`, `panel/src/fixtureBridge.ts` |
+| 01, 02 | **Games and pending lists become ListRow.** A 2px #3a4558 outlined button 64px tall, name in 600 weight, meta at 18px, a flat brown "Choice waiting" pill with no edge. On 01 the focus is on the footer button. | ListRow: `surface-raised`, `border` edge, 20px radius, 80px minimum, name in `label`, meta in `meta` and `ink-muted`, the badge as a warning pill with a `warning-border` edge. On 01 the first row has focus; on 02 the Back button. | medium | `panel/src/views.tsx`, `panel/src/app.css`, `panel/src/views.test.tsx` |
+| 03, 04, 07 (and the error or notice line on every view) | **Banners replace the flat error and notice bars and the loose sentences.** `.error` is a red bar and `.notice` a green bar with no icon and no edge, and the open-elsewhere line, the "nothing is overwritten" line and the Nextcloud line are plain paragraphs. | Banner with an icon, words, a tone border and the `-ink` on `-surface` pair: warning for "Open on steam-deck since Oct 31, 7:12pm" (03), info for the two plain sentences (04, 07), danger and success for the error and notice lines. Banners never carry a button. | medium | `panel/src/views.tsx`, `panel/src/app.css`, `panel/src/views.test.tsx` |
+| 03 | **Open-elsewhere: Wait is the safe primary, Play anyway is destructive.** Both buttons look the same, in a footer. The first focus is on Back. | Wait is primary and holds the first focus; Play anyway is destructive and never first. The 24px gap keeps the rings apart. B still goes back. | easy | `panel/src/views.tsx` |
+| 04 | **Two versions become ChoiceCards.** Two flat cards with a muted title, a 24px place line and facts in 18px. The choice is two buttons in the footer, far from the facts they pick. | ChoiceCards: each whole card is one focus target with an eyebrow, a 30px place, device and time, playtime, revision, and its own action (Keep server, Keep local). Same facts in the same order, server on the left. No footer, and the first focus stays on Back (the intro banner says nothing is overwritten). | medium | `panel/src/views.tsx`, `panel/src/app.css`, `panel/src/views.test.tsx` |
+| 05, 06 | **History entries become SaveCard.** A 160x90 picture with a 6px radius, no edge on an empty picture, place at 24px, a brown "Current" pill without an icon, a "Restore" button, and "No card (older save)" for an entry with no card. The focus is on the second Restore. | SaveCard: a 192x108 picture with an 8px radius and a `border-subtle` edge (an icon when empty), place in `body-lg`, facts in `meta`, a "Current" badge with a check icon, a secondary Restore button. An entry with no card reads "No place recorded". First focus on Back. | medium | `panel/src/views.tsx`, `panel/src/app.css`, `panel/src/views.test.tsx` |
+| 06 | **Restore confirm becomes a ConfirmDialog over the history.** A separate screen with a title, two paragraphs and Cancel and Restore buttons at the bottom edge, far from the question. | ConfirmDialog on a `scrim` over the history screen: the title as the question, the entry in bold, what happens and what is kept, Cancel (first focus) on the left and a primary Restore on the right, 24px apart. B cancels. | medium | `panel/src/views.tsx`, `panel/src/app.css`, `panel/src/views.test.tsx` |
+| 08, 09 | **Sign-in code becomes QrSignIn.** A bare 360px QR code, the address in 24px text, "Code:" with a 32px bold code in the text face, the message and "Expires" in muted 18px text. | QrSignIn: a 320px white box with a `border` edge and a 16px quiet zone (the code is drawn in black on white in both themes), the address in `code-sm` mono, the code in `code` (40px mono, 0.12em spacing), the message as the hint and the expiry on its own line in `meta`. | easy | `panel/src/views.tsx`, `panel/src/app.css` |
+| 01-light, 05-light | **Light theme.** Dark only; `color-scheme: dark` and fixed hexes. | `data-theme="light"` on the root swaps every token (burnt orange ring, white raised surfaces, `#f5f3ee` page). Dark stays the default; the choice follows the system setting in the browser panel. | easy | `panel/src/main.tsx`, `panel/src/app.css` |
+
+## Not covered
+
+The captures do not show the empty Games list, the empty Pending list, a loading view or a failed load, so there are no mockups for them. The system has EmptyState and ErrorState for them.
+
+## System gaps
+
+- QrSignIn has no line for an expiry time. The mockup writes it as a plain `meta` paragraph under the hint.
+- QrSignIn says the quiet zone is 16px. That is under the four modules a scanner expects, so the mockup draws four modules of quiet zone inside the 16px padding, as the panel does now.

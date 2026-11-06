@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>Sign in to Dropbox (dark)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=JetBrains+Mono:wght@500;700&display=swap">
+<style>
+/* Shared design system v1: tokens.css and components/bundle.css, unchanged. */
+/* Shared design system — generated from tokens.json */
+:root, [data-theme="dark"] {
+  --surface: #11151b;
+  --surface-raised: #1b212a;
+  --surface-sunken: #0b0e12;
+  --surface-focus: #2a3544;
+  --border: #818ea3;
+  --border-subtle: #2c3644;
+  --ink: #f4f6f9;
+  --ink-muted: #b6c0ce;
+  --accent: #7cc0ff;
+  --on-accent: #08131f;
+  --focus: #ffd84d;
+  --danger: #ff8f86;
+  --on-danger: #2b0805;
+  --danger-surface: #3b1514;
+  --danger-ink: #ffd6d2;
+  --danger-border: #ff8f86;
+  --warning-surface: #3a2b06;
+  --warning-ink: #ffe29a;
+  --warning-border: #e0a82e;
+  --success-surface: #0f3322;
+  --success-ink: #a6efc9;
+  --success-border: #4fc58a;
+  --info-surface: #12304d;
+  --info-ink: #bfe1ff;
+  --info-border: #7cc0ff;
+  --scrim: #000000b3;
+  --qr-paper: #ffffff;
+  --qr-ink: #000000;
+  --shadow-dialog: 0 24px 64px #000000cc;
+}
+[data-theme="light"] {
+  --surface: #f5f3ee;
+  --surface-raised: #ffffff;
+  --surface-sunken: #e9e6df;
+  --surface-focus: #dde9f7;
+  --border: #6a7280;
+  --border-subtle: #cfcbc2;
+  --ink: #12161c;
+  --ink-muted: #465163;
+  --accent: #0b5cad;
+  --on-accent: #ffffff;
+  --focus: #a83800;
+  --danger: #b3261e;
+  --on-danger: #ffffff;
+  --danger-surface: #fdeceb;
+  --danger-ink: #7a1510;
+  --danger-border: #b3261e;
+  --warning-surface: #fff4d6;
+  --warning-ink: #5c3d00;
+  --warning-border: #8a5d00;
+  --success-surface: #e1f4ea;
+  --success-ink: #0d4a2c;
+  --success-border: #1f7a4d;
+  --info-surface: #dcecfb;
+  --info-ink: #0a3c73;
+  --info-border: #0b5cad;
+  --scrim: #12161c99;
+  --qr-paper: #ffffff;
+  --qr-ink: #000000;
+  --shadow-dialog: 0 24px 64px #12161c66;
+}
+:root {
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-8: 48px;
+  --control-height: 64px;
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --radius-pill: 999px;
+  --font-sans: "Atkinson Hyperlegible", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+.display { font-family: var(--font-sans); font-size: 56px; line-height: 60px; font-weight: 700; }
+.title { font-family: var(--font-sans); font-size: 40px; line-height: 48px; font-weight: 700; }
+.heading { font-family: var(--font-sans); font-size: 30px; line-height: 38px; font-weight: 700; }
+.body-lg { font-family: var(--font-sans); font-size: 24px; line-height: 34px; font-weight: 400; }
+.body { font-family: var(--font-sans); font-size: 22px; line-height: 32px; font-weight: 400; }
+.label { font-family: var(--font-sans); font-size: 22px; line-height: 28px; font-weight: 700; }
+.meta { font-family: var(--font-sans); font-size: 20px; line-height: 28px; font-weight: 400; }
+.code { font-family: var(--font-mono); font-size: 40px; line-height: 48px; font-weight: 700; letter-spacing: 0.12em; }
+.code-sm { font-family: var(--font-mono); font-size: 20px; line-height: 28px; font-weight: 500; }
+
+
+/* Components of the shared design system. Every value is a token from tokens.json. */
+
+.ds-root, .ds-screen {
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 22px;
+  line-height: 32px;
+  -webkit-font-smoothing: antialiased;
+}
+.ds-root *, .ds-screen * { box-sizing: border-box; }
+.ds-screen {
+  position: relative;
+  width: 1280px;
+  height: 800px;
+  padding: var(--space-6) var(--space-8);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  overflow: hidden;
+}
+.ds-header { display: flex; align-items: center; gap: var(--space-5); }
+.ds-header h1 { margin: 0; font-size: 40px; line-height: 48px; font-weight: 700; }
+.ds-footer { display: flex; gap: var(--space-5); margin-top: auto; }
+.ds-stack { display: flex; flex-direction: column; gap: var(--space-4); }
+.ds-muted { color: var(--ink-muted); }
+
+/* Focus: the primary state. The ring has a gap so it always sits on the surface, never on a fill.
+   Keep 24px between focusable neighbours so rings never overlap. */
+.ds-focusable { cursor: pointer; }
+.ds-focusable:focus { outline: none; }
+.ds-focusable:focus-visible,
+.ds-focusable[data-focused] {
+  outline: 6px solid var(--focus);
+  outline-offset: 4px;
+}
+.ds-btn.ds-focusable:focus-visible,
+.ds-btn.ds-focusable[data-focused] { background-color: var(--surface-focus); }
+.ds-btn-primary.ds-focusable:focus-visible,
+.ds-btn-primary.ds-focusable[data-focused] { background-color: var(--accent); }
+.ds-btn-danger.ds-focusable:focus-visible,
+.ds-btn-danger.ds-focusable[data-focused] { background-color: var(--danger); }
+.ds-row.ds-focusable:focus-visible, .ds-row.ds-focusable[data-focused],
+.ds-save.ds-focusable:focus-visible, .ds-save.ds-focusable[data-focused],
+.ds-choice-card.ds-focusable:focus-visible, .ds-choice-card.ds-focusable[data-focused] { background: var(--surface-focus); }
+
+/* Button */
+.ds-btn {
+  font: inherit;
+  font-size: 22px;
+  line-height: 28px;
+  font-weight: 700;
+  min-height: var(--control-height);
+  padding: 0 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  color: var(--ink);
+  background: var(--surface-raised);
+  border: 2px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.ds-btn-primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.ds-btn-danger { background: var(--danger); color: var(--on-danger); border-color: var(--danger); }
+
+/* Badge: always a word, colour is secondary */
+.ds-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 2px 16px;
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 700;
+  border-radius: var(--radius-pill);
+  border: 2px solid var(--info-border);
+  background: var(--info-surface);
+  color: var(--info-ink);
+  white-space: nowrap;
+}
+.ds-badge-warning { background: var(--warning-surface); color: var(--warning-ink); border-color: var(--warning-border); }
+.ds-badge-success { background: var(--success-surface); color: var(--success-ink); border-color: var(--success-border); }
+.ds-badge-danger { background: var(--danger-surface); color: var(--danger-ink); border-color: var(--danger-border); }
+
+/* Icons */
+.ds-icon { width: 28px; height: 28px; flex: none; fill: none; stroke: currentColor; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+
+/* List row / game row */
+.ds-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-4); }
+.ds-row {
+  font: inherit;
+  width: 100%;
+  min-height: 80px;
+  padding: var(--space-3) var(--space-5);
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  text-align: left;
+  color: var(--ink);
+  background: var(--surface-raised);
+  border: 2px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.ds-row-name { font-size: 22px; line-height: 28px; font-weight: 700; min-width: 220px; }
+.ds-row-meta { flex: 1; font-size: 20px; line-height: 28px; color: var(--ink-muted); }
+
+/* Save card */
+.ds-save {
+  font: inherit;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  padding: var(--space-3) var(--space-5) var(--space-3) var(--space-3);
+  text-align: left;
+  color: var(--ink);
+  background: var(--surface-raised);
+  border: 2px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.ds-picture {
+  width: 192px;
+  height: 108px;
+  flex: none;
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  border: 2px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-muted);
+  overflow: hidden;
+}
+.ds-picture img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ds-picture .ds-icon { width: 40px; height: 40px; }
+.ds-save-body { flex: 1; min-width: 0; }
+.ds-save-place { font-size: 24px; line-height: 34px; margin: 0; font-weight: 700; }
+.ds-save-facts { margin: 0; font-size: 20px; line-height: 28px; color: var(--ink-muted); }
+.ds-save-side { display: flex; align-items: center; gap: var(--space-4); }
+
+/* Two-card choice */
+.ds-choice { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-5); }
+.ds-choice-card {
+  font: inherit;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-5);
+  text-align: left;
+  color: var(--ink);
+  background: var(--surface-raised);
+  border: 2px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.ds-choice-eyebrow { font-size: 20px; line-height: 28px; font-weight: 700; color: var(--ink-muted); margin: 0; }
+.ds-choice-place { font-size: 30px; line-height: 38px; font-weight: 700; margin: 0; }
+.ds-choice-facts { font-size: 20px; line-height: 28px; color: var(--ink-muted); margin: 0; }
+.ds-choice-action { margin-top: var(--space-4); align-self: stretch; }
+.ds-choice-action .ds-btn { width: 100%; }
+
+/* Confirm dialog */
+.ds-scrim { position: absolute; inset: 0; background: var(--scrim); display: flex; align-items: center; justify-content: center; padding: var(--space-8); z-index: 10; }
+.ds-dialog {
+  width: 760px;
+  max-width: 100%;
+  padding: var(--space-6);
+  background: var(--surface-raised);
+  color: var(--ink);
+  border: 2px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-dialog);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.ds-dialog h2 { margin: 0; font-size: 30px; line-height: 38px; font-weight: 700; }
+.ds-dialog p { margin: 0; font-size: 22px; line-height: 32px; }
+.ds-dialog-actions { display: flex; gap: var(--space-5); margin-top: var(--space-5); padding: 0 var(--space-2) var(--space-2); }
+
+/* Banner */
+.ds-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  border-radius: var(--radius-lg);
+  border: 2px solid var(--info-border);
+  background: var(--info-surface);
+  color: var(--info-ink);
+  font-size: 22px;
+  line-height: 32px;
+}
+.ds-banner .ds-icon { margin-top: 2px; width: 32px; height: 32px; }
+.ds-banner-title { font-weight: 700; margin: 0; }
+.ds-banner-text { margin: 0; }
+.ds-banner-warning { background: var(--warning-surface); color: var(--warning-ink); border-color: var(--warning-border); }
+.ds-banner-danger { background: var(--danger-surface); color: var(--danger-ink); border-color: var(--danger-border); }
+.ds-banner-success { background: var(--success-surface); color: var(--success-ink); border-color: var(--success-border); }
+
+/* QR sign-in */
+.ds-qr-block { display: flex; gap: 48px; align-items: flex-start; }
+.ds-qr-box { width: 320px; height: 320px; flex: none; padding: var(--space-4); background: var(--qr-paper); color: var(--qr-ink); border-radius: var(--radius-md); border: 2px solid var(--border); }
+.ds-qr-box svg { width: 100%; height: 100%; display: block; }
+.ds-qr-side { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.ds-qr-label { margin: 0; font-size: 20px; line-height: 28px; font-weight: 700; color: var(--ink-muted); }
+.ds-qr-address { margin: 0; font-family: var(--font-mono); font-weight: 500; font-size: 20px; line-height: 28px; word-break: break-all; }
+.ds-qr-code { margin: 0; font-family: var(--font-mono); font-weight: 700; font-size: 40px; line-height: 48px; letter-spacing: 0.12em; }
+
+/* Empty and error states */
+.ds-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--space-3);
+  padding: var(--space-6) var(--space-8);
+  border-radius: var(--radius-lg);
+  border: 2px solid var(--border-subtle);
+}
+.ds-state-icon { width: 72px; height: 72px; border-radius: var(--radius-pill); display: flex; align-items: center; justify-content: center; background: var(--surface-sunken); color: var(--ink-muted); border: 2px solid var(--border); }
+.ds-state-icon .ds-icon { width: 40px; height: 40px; }
+.ds-state h2 { margin: 0; font-size: 30px; line-height: 38px; font-weight: 700; }
+.ds-state p { margin: 0; font-size: 22px; line-height: 32px; max-width: 640px; }
+.ds-state-detail { font-family: var(--font-mono); font-weight: 500; font-size: 20px; line-height: 28px; color: var(--ink-muted); }
+.ds-state-actions { display: flex; gap: var(--space-5); margin-top: var(--space-4); padding: var(--space-2); }
+.ds-state-error { background: var(--danger-surface); color: var(--danger-ink); border: 2px solid var(--danger-border); }
+.ds-state-error .ds-state-icon { background: transparent; color: var(--danger-ink); border-color: var(--danger-border); }
+.ds-state-error .ds-state-detail { color: var(--danger-ink); }
+
+html, body { margin: 0; background: var(--surface); }
+body { width: 1280px; height: 800px; overflow: hidden; }
+</style>
+</head>
+<body>
+<main class="ds-screen" aria-label="Sign in to Dropbox">
+<header class="ds-header"><button type="button" class="ds-btn ds-focusable" data-focused><svg class="ds-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 12 H5"/><path d="M11 6 L5 12 L11 18"/></svg>Back</button><h1>Sign in to Dropbox</h1></header><div class="ds-qr-block"><div class="ds-qr-box" role="img" aria-label="QR code for https://www.dropbox.com/oauth2/authorize?client_id=save-relay&response_type=code"><svg viewBox="0 0 45 45" shape-rendering="crispEdges" aria-hidden="true"><path d="M4 4h1v1h-1zM5 4h1v1h-1zM6 4h1v1h-1zM7 4h1v1h-1zM8 4h1v1h-1zM9 4h1v1h-1zM10 4h1v1h-1zM12 4h1v1h-1zM14 4h1v1h-1zM15 4h1v1h-1zM20 4h1v1h-1zM25 4h1v1h-1zM27 4h1v1h-1zM30 4h1v1h-1zM32 4h1v1h-1zM34 4h1v1h-1zM35 4h1v1h-1zM36 4h1v1h-1zM37 4h1v1h-1zM38 4h1v1h-1zM39 4h1v1h-1zM40 4h1v1h-1zM4 5h1v1h-1zM10 5h1v1h-1zM13 5h1v1h-1zM15 5h1v1h-1zM18 5h1v1h-1zM19 5h1v1h-1zM21 5h1v1h-1zM22 5h1v1h-1zM23 5h1v1h-1zM27 5h1v1h-1zM28 5h1v1h-1zM31 5h1v1h-1zM34 5h1v1h-1zM40 5h1v1h-1zM4 6h1v1h-1zM6 6h1v1h-1zM7 6h1v1h-1zM8 6h1v1h-1zM10 6h1v1h-1zM12 6h1v1h-1zM14 6h1v1h-1zM16 6h1v1h-1zM17 6h1v1h-1zM18 6h1v1h-1zM19 6h1v1h-1zM20 6h1v1h-1zM22 6h1v1h-1zM23 6h1v1h-1zM26 6h1v1h-1zM28 6h1v1h-1zM30 6h1v1h-1zM32 6h1v1h-1zM34 6h1v1h-1zM36 6h1v1h-1zM37 6h1v1h-1zM38 6h1v1h-1zM40 6h1v1h-1zM4 7h1v1h-1zM6 7h1v1h-1zM7 7h1v1h-1zM8 7h1v1h-1zM10 7h1v1h-1zM13 7h1v1h-1zM14 7h1v1h-1zM19 7h1v1h-1zM21 7h1v1h-1zM24 7h1v1h-1zM27 7h1v1h-1zM28 7h1v1h-1zM29 7h1v1h-1zM30 7h1v1h-1zM34 7h1v1h-1zM36 7h1v1h-1zM37 7h1v1h-1zM38 7h1v1h-1zM40 7h1v1h-1zM4 8h1v1h-1zM6 8h1v1h-1zM7 8h1v1h-1zM8 8h1v1h-1zM10 8h1v1h-1zM12 8h1v1h-1zM13 8h1v1h-1zM15 8h1v1h-1zM16 8h1v1h-1zM19 8h1v1h-1zM21 8h1v1h-1zM22 8h1v1h-1zM23 8h1v1h-1zM25 8h1v1h-1zM26 8h1v1h-1zM30 8h1v1h-1zM31 8h1v1h-1zM34 8h1v1h-1zM36 8h1v1h-1zM37 8h1v1h-1zM38 8h1v1h-1zM40 8h1v1h-1zM4 9h1v1h-1zM10 9h1v1h-1zM18 9h1v1h-1zM21 9h1v1h-1zM22 9h1v1h-1zM23 9h1v1h-1zM26 9h1v1h-1zM31 9h1v1h-1zM32 9h1v1h-1zM34 9h1v1h-1zM40 9h1v1h-1zM4 10h1v1h-1zM5 10h1v1h-1zM6 10h1v1h-1zM7 10h1v1h-1zM8 10h1v1h-1zM9 10h1v1h-1zM10 10h1v1h-1zM12 10h1v1h-1zM14 10h1v1h-1zM16 10h1v1h-1zM18 10h1v1h-1zM20 10h1v1h-1zM22 10h1v1h-1zM24 10h1v1h-1zM26 10h1v1h-1zM28 10h1v1h-1zM30 10h1v1h-1zM32 10h1v1h-1zM34 10h1v1h-1zM35 10h1v1h-1zM36 10h1v1h-1zM37 10h1v1h-1zM38 10h1v1h-1zM39 10h1v1h-1zM40 10h1v1h-1zM20 11h1v1h-1zM23 11h1v1h-1zM31 11h1v1h-1zM32 11h1v1h-1zM5 12h1v1h-1zM8 12h1v1h-1zM10 12h1v1h-1zM17 12h1v1h-1zM25 12h1v1h-1zM26 12h1v1h-1zM28 12h1v1h-1zM31 12h1v1h-1zM33 12h1v1h-1zM36 12h1v1h-1zM38 12h1v1h-1zM40 12h1v1h-1zM5 13h1v1h-1zM6 13h1v1h-1zM7 13h1v1h-1zM8 13h1v1h-1zM9 13h1v1h-1zM12 13h1v1h-1zM18 13h1v1h-1zM19 13h1v1h-1zM21 13h1v1h-1zM24 13h1v1h-1zM30 13h1v1h-1zM31 13h1v1h-1zM32 13h1v1h-1zM37 13h1v1h-1zM38 13h1v1h-1zM40 13h1v1h-1zM5 14h1v1h-1zM8 14h1v1h-1zM9 14h1v1h-1zM10 14h1v1h-1zM11 14h1v1h-1zM12 14h1v1h-1zM14 14h1v1h-1zM15 14h1v1h-1zM16 14h1v1h-1zM20 14h1v1h-1zM21 14h1v1h-1zM26 14h1v1h-1zM29 14h1v1h-1zM31 14h1v1h-1zM32 14h1v1h-1zM34 14h1v1h-1zM35 14h1v1h-1zM37 14h1v1h-1zM38 14h1v1h-1zM39 14h1v1h-1zM40 14h1v1h-1zM4 15h1v1h-1zM5 15h1v1h-1zM8 15h1v1h-1zM14 15h1v1h-1zM15 15h1v1h-1zM18 15h1v1h-1zM19 15h1v1h-1zM22 15h1v1h-1zM28 15h1v1h-1zM30 15h1v1h-1zM31 15h1v1h-1zM32 15h1v1h-1zM35 15h1v1h-1zM38 15h1v1h-1zM4 16h1v1h-1zM7 16h1v1h-1zM8 16h1v1h-1zM10 16h1v1h-1zM11 16h1v1h-1zM13 16h1v1h-1zM16 16h1v1h-1zM17 16h1v1h-1zM20 16h1v1h-1zM22 16h1v1h-1zM23 16h1v1h-1zM24 16h1v1h-1zM25 16h1v1h-1zM26 16h1v1h-1zM27 16h1v1h-1zM28 16h1v1h-1zM29 16h1v1h-1zM31 16h1v1h-1zM32 16h1v1h-1zM36 16h1v1h-1zM37 16h1v1h-1zM39 16h1v1h-1zM4 17h1v1h-1zM8 17h1v1h-1zM11 17h1v1h-1zM12 17h1v1h-1zM18 17h1v1h-1zM19 17h1v1h-1zM26 17h1v1h-1zM29 17h1v1h-1zM31 17h1v1h-1zM36 17h1v1h-1zM37 17h1v1h-1zM38 17h1v1h-1zM40 17h1v1h-1zM5 18h1v1h-1zM6 18h1v1h-1zM9 18h1v1h-1zM10 18h1v1h-1zM11 18h1v1h-1zM12 18h1v1h-1zM13 18h1v1h-1zM15 18h1v1h-1zM16 18h1v1h-1zM19 18h1v1h-1zM21 18h1v1h-1zM22 18h1v1h-1zM24 18h1v1h-1zM25 18h1v1h-1zM26 18h1v1h-1zM27 18h1v1h-1zM34 18h1v1h-1zM35 18h1v1h-1zM36 18h1v1h-1zM37 18h1v1h-1zM38 18h1v1h-1zM39 18h1v1h-1zM11 19h1v1h-1zM12 19h1v1h-1zM13 19h1v1h-1zM15 19h1v1h-1zM20 19h1v1h-1zM21 19h1v1h-1zM22 19h1v1h-1zM24 19h1v1h-1zM27 19h1v1h-1zM29 19h1v1h-1zM31 19h1v1h-1zM36 19h1v1h-1zM37 19h1v1h-1zM38 19h1v1h-1zM40 19h1v1h-1zM4 20h1v1h-1zM5 20h1v1h-1zM8 20h1v1h-1zM10 20h1v1h-1zM11 20h1v1h-1zM16 20h1v1h-1zM17 20h1v1h-1zM19 20h1v1h-1zM20 20h1v1h-1zM21 20h1v1h-1zM22 20h1v1h-1zM23 20h1v1h-1zM27 20h1v1h-1zM32 20h1v1h-1zM33 20h1v1h-1zM34 20h1v1h-1zM36 20h1v1h-1zM37 20h1v1h-1zM38 20h1v1h-1zM39 20h1v1h-1zM5 21h1v1h-1zM11 21h1v1h-1zM12 21h1v1h-1zM15 21h1v1h-1zM16 21h1v1h-1zM18 21h1v1h-1zM19 21h1v1h-1zM20 21h1v1h-1zM22 21h1v1h-1zM23 21h1v1h-1zM24 21h1v1h-1zM25 21h1v1h-1zM27 21h1v1h-1zM28 21h1v1h-1zM29 21h1v1h-1zM30 21h1v1h-1zM31 21h1v1h-1zM32 21h1v1h-1zM33 21h1v1h-1zM35 21h1v1h-1zM39 21h1v1h-1zM40 21h1v1h-1zM4 22h1v1h-1zM5 22h1v1h-1zM6 22h1v1h-1zM7 22h1v1h-1zM8 22h1v1h-1zM10 22h1v1h-1zM11 22h1v1h-1zM14 22h1v1h-1zM19 22h1v1h-1zM23 22h1v1h-1zM25 22h1v1h-1zM30 22h1v1h-1zM35 22h1v1h-1zM36 22h1v1h-1zM38 22h1v1h-1zM39 22h1v1h-1zM4 23h1v1h-1zM5 23h1v1h-1zM8 23h1v1h-1zM9 23h1v1h-1zM11 23h1v1h-1zM15 23h1v1h-1zM19 23h1v1h-1zM23 23h1v1h-1zM28 23h1v1h-1zM31 23h1v1h-1zM32 23h1v1h-1zM39 23h1v1h-1zM5 24h1v1h-1zM7 24h1v1h-1zM9 24h1v1h-1zM10 24h1v1h-1zM11 24h1v1h-1zM15 24h1v1h-1zM17 24h1v1h-1zM20 24h1v1h-1zM21 24h1v1h-1zM22 24h1v1h-1zM24 24h1v1h-1zM25 24h1v1h-1zM27 24h1v1h-1zM29 24h1v1h-1zM32 24h1v1h-1zM34 24h1v1h-1zM37 24h1v1h-1zM38 24h1v1h-1zM39 24h1v1h-1zM4 25h1v1h-1zM8 25h1v1h-1zM11 25h1v1h-1zM12 25h1v1h-1zM13 25h1v1h-1zM15 25h1v1h-1zM16 25h1v1h-1zM17 25h1v1h-1zM18 25h1v1h-1zM19 25h1v1h-1zM20 25h1v1h-1zM21 25h1v1h-1zM23 25h1v1h-1zM24 25h1v1h-1zM25 25h1v1h-1zM27 25h1v1h-1zM29 25h1v1h-1zM31 25h1v1h-1zM32 25h1v1h-1zM34 25h1v1h-1zM35 25h1v1h-1zM36 25h1v1h-1zM39 25h1v1h-1zM40 25h1v1h-1zM4 26h1v1h-1zM5 26h1v1h-1zM7 26h1v1h-1zM8 26h1v1h-1zM9 26h1v1h-1zM10 26h1v1h-1zM13 26h1v1h-1zM14 26h1v1h-1zM15 26h1v1h-1zM17 26h1v1h-1zM18 26h1v1h-1zM19 26h1v1h-1zM23 26h1v1h-1zM25 26h1v1h-1zM27 26h1v1h-1zM29 26h1v1h-1zM35 26h1v1h-1zM37 26h1v1h-1zM38 26h1v1h-1zM40 26h1v1h-1zM4 27h1v1h-1zM5 27h1v1h-1zM6 27h1v1h-1zM8 27h1v1h-1zM9 27h1v1h-1zM12 27h1v1h-1zM15 27h1v1h-1zM19 27h1v1h-1zM20 27h1v1h-1zM28 27h1v1h-1zM31 27h1v1h-1zM5 28h1v1h-1zM9 28h1v1h-1zM10 28h1v1h-1zM11 28h1v1h-1zM12 28h1v1h-1zM13 28h1v1h-1zM14 28h1v1h-1zM16 28h1v1h-1zM19 28h1v1h-1zM21 28h1v1h-1zM24 28h1v1h-1zM25 28h1v1h-1zM27 28h1v1h-1zM29 28h1v1h-1zM31 28h1v1h-1zM32 28h1v1h-1zM33 28h1v1h-1zM36 28h1v1h-1zM37 28h1v1h-1zM38 28h1v1h-1zM40 28h1v1h-1zM5 29h1v1h-1zM8 29h1v1h-1zM9 29h1v1h-1zM11 29h1v1h-1zM12 29h1v1h-1zM13 29h1v1h-1zM14 29h1v1h-1zM15 29h1v1h-1zM16 29h1v1h-1zM17 29h1v1h-1zM19 29h1v1h-1zM20 29h1v1h-1zM22 29h1v1h-1zM23 29h1v1h-1zM24 29h1v1h-1zM27 29h1v1h-1zM28 29h1v1h-1zM31 29h1v1h-1zM32 29h1v1h-1zM33 29h1v1h-1zM34 29h1v1h-1zM35 29h1v1h-1zM36 29h1v1h-1zM38 29h1v1h-1zM39 29h1v1h-1zM40 29h1v1h-1zM4 30h1v1h-1zM6 30h1v1h-1zM7 30h1v1h-1zM8 30h1v1h-1zM9 30h1v1h-1zM10 30h1v1h-1zM14 30h1v1h-1zM18 30h1v1h-1zM19 30h1v1h-1zM21 30h1v1h-1zM23 30h1v1h-1zM25 30h1v1h-1zM26 30h1v1h-1zM27 30h1v1h-1zM28 30h1v1h-1zM30 30h1v1h-1zM32 30h1v1h-1zM37 30h1v1h-1zM4 31h1v1h-1zM5 31h1v1h-1zM7 31h1v1h-1zM8 31h1v1h-1zM9 31h1v1h-1zM12 31h1v1h-1zM23 31h1v1h-1zM24 31h1v1h-1zM27 31h1v1h-1zM31 31h1v1h-1zM33 31h1v1h-1zM34 31h1v1h-1zM37 31h1v1h-1zM38 31h1v1h-1zM39 31h1v1h-1zM40 31h1v1h-1zM5 32h1v1h-1zM7 32h1v1h-1zM9 32h1v1h-1zM10 32h1v1h-1zM11 32h1v1h-1zM12 32h1v1h-1zM13 32h1v1h-1zM14 32h1v1h-1zM16 32h1v1h-1zM17 32h1v1h-1zM18 32h1v1h-1zM21 32h1v1h-1zM23 32h1v1h-1zM25 32h1v1h-1zM26 32h1v1h-1zM27 32h1v1h-1zM28 32h1v1h-1zM31 32h1v1h-1zM32 32h1v1h-1zM33 32h1v1h-1zM34 32h1v1h-1zM35 32h1v1h-1zM36 32h1v1h-1zM37 32h1v1h-1zM39 32h1v1h-1zM40 32h1v1h-1zM14 33h1v1h-1zM16 33h1v1h-1zM20 33h1v1h-1zM21 33h1v1h-1zM22 33h1v1h-1zM24 33h1v1h-1zM28 33h1v1h-1zM30 33h1v1h-1zM32 33h1v1h-1zM36 33h1v1h-1zM37 33h1v1h-1zM4 34h1v1h-1zM5 34h1v1h-1zM6 34h1v1h-1zM7 34h1v1h-1zM8 34h1v1h-1zM9 34h1v1h-1zM10 34h1v1h-1zM13 34h1v1h-1zM14 34h1v1h-1zM15 34h1v1h-1zM16 34h1v1h-1zM17 34h1v1h-1zM18 34h1v1h-1zM19 34h1v1h-1zM20 34h1v1h-1zM21 34h1v1h-1zM22 34h1v1h-1zM23 34h1v1h-1zM24 34h1v1h-1zM25 34h1v1h-1zM26 34h1v1h-1zM28 34h1v1h-1zM29 34h1v1h-1zM30 34h1v1h-1zM31 34h1v1h-1zM32 34h1v1h-1zM34 34h1v1h-1zM36 34h1v1h-1zM4 35h1v1h-1zM10 35h1v1h-1zM14 35h1v1h-1zM16 35h1v1h-1zM18 35h1v1h-1zM20 35h1v1h-1zM21 35h1v1h-1zM25 35h1v1h-1zM26 35h1v1h-1zM30 35h1v1h-1zM31 35h1v1h-1zM32 35h1v1h-1zM36 35h1v1h-1zM37 35h1v1h-1zM39 35h1v1h-1zM4 36h1v1h-1zM6 36h1v1h-1zM7 36h1v1h-1zM8 36h1v1h-1zM10 36h1v1h-1zM12 36h1v1h-1zM14 36h1v1h-1zM15 36h1v1h-1zM19 36h1v1h-1zM22 36h1v1h-1zM27 36h1v1h-1zM30 36h1v1h-1zM31 36h1v1h-1zM32 36h1v1h-1zM33 36h1v1h-1zM34 36h1v1h-1zM35 36h1v1h-1zM36 36h1v1h-1zM37 36h1v1h-1zM38 36h1v1h-1zM39 36h1v1h-1zM4 37h1v1h-1zM6 37h1v1h-1zM7 37h1v1h-1zM8 37h1v1h-1zM10 37h1v1h-1zM14 37h1v1h-1zM20 37h1v1h-1zM24 37h1v1h-1zM25 37h1v1h-1zM28 37h1v1h-1zM32 37h1v1h-1zM33 37h1v1h-1zM34 37h1v1h-1zM35 37h1v1h-1zM36 37h1v1h-1zM38 37h1v1h-1zM4 38h1v1h-1zM6 38h1v1h-1zM7 38h1v1h-1zM8 38h1v1h-1zM10 38h1v1h-1zM14 38h1v1h-1zM18 38h1v1h-1zM21 38h1v1h-1zM26 38h1v1h-1zM30 38h1v1h-1zM32 38h1v1h-1zM37 38h1v1h-1zM4 39h1v1h-1zM10 39h1v1h-1zM12 39h1v1h-1zM14 39h1v1h-1zM15 39h1v1h-1zM16 39h1v1h-1zM17 39h1v1h-1zM18 39h1v1h-1zM22 39h1v1h-1zM23 39h1v1h-1zM25 39h1v1h-1zM26 39h1v1h-1zM27 39h1v1h-1zM28 39h1v1h-1zM29 39h1v1h-1zM30 39h1v1h-1zM31 39h1v1h-1zM33 39h1v1h-1zM34 39h1v1h-1zM38 39h1v1h-1zM39 39h1v1h-1zM40 39h1v1h-1zM4 40h1v1h-1zM5 40h1v1h-1zM6 40h1v1h-1zM7 40h1v1h-1zM8 40h1v1h-1zM9 40h1v1h-1zM10 40h1v1h-1zM13 40h1v1h-1zM14 40h1v1h-1zM16 40h1v1h-1zM17 40h1v1h-1zM18 40h1v1h-1zM21 40h1v1h-1zM22 40h1v1h-1zM25 40h1v1h-1zM26 40h1v1h-1zM29 40h1v1h-1zM30 40h1v1h-1zM32 40h1v1h-1zM33 40h1v1h-1zM34 40h1v1h-1zM35 40h1v1h-1zM36 40h1v1h-1zM38 40h1v1h-1zM40 40h1v1h-1z" fill="currentColor"/></svg></div><div class="ds-qr-side"><p class="ds-qr-label">Scan it, or open this address</p><p class="ds-qr-address">https://www.dropbox.com/oauth2/authorize?client_id=save-relay&amp;response_type=code</p><p class="ds-muted" style="margin:16px 0 0;font-size:22px">Open the page, allow Save Relay, then run setup --service dropbox --finish and type the code it shows.</p><p class="meta ds-muted" style="margin:0">Expires Oct 31, 8:21pm.</p></div></div>
+</main>
+</body>
+</html>
