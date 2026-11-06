@@ -15,7 +15,8 @@ use std::io::Read;
 use std::time::Duration;
 
 /// One HTTP request. `Debug` prints `***` for the value of an `Authorization` header, so a
-/// token or password cannot leak through a log line. On purpose: the redaction must exist before anything can print one.
+/// token or password cannot leak through a log line. On purpose: the redaction must exist
+/// before anything can print one.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Request {
     /// `GET`, `PUT`, `POST`, `PROPFIND`, ...

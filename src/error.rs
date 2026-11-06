@@ -1,5 +1,5 @@
 //! The one error type. Every variant has a stable `code()`, which is the `error.code` of the
-//! `--json` envelope (docs/code-map.md, API shape).
+//! `--json` envelope (docs/code-map.md, API shape). Every module uses it.
 
 use std::fmt;
 
