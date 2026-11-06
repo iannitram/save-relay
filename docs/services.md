@@ -63,6 +63,19 @@ save-relay setup --service dropbox --finish
 
 The `--finish` step completes the sign-in on the machine where setup began. Keep the same service choice on this machine as on your other machines.
 
+## How to run the live checks
+
+The live tests run the real round trip on Dropbox and Google Drive with your own sign-in. They are ignored by default, so a normal test run never touches the services. Run them after `save-relay setup --service <s>` on the machine, pointing each variable at that service's config folder (the `save-relay` folder that holds `config.json`).
+
+```bash
+SAVE_RELAY_LIVE_GDRIVE_CONFIG=/path/to/config/save-relay cargo test --test live_services gdrive -- --ignored
+SAVE_RELAY_LIVE_DROPBOX_CONFIG=/path/to/config/save-relay cargo test --test live_services dropbox -- --ignored
+```
+
+Each test works in its own `save-relay-live-test-<name>` folder on the service and clears it before and after the test, including after an assertion fails. Cleanup failures are reported; rerun once the service is reachable to remove leftovers. Your configured saves root is never used. A variable that is not set skips its tests with a message (add `--nocapture` to see it). Tokens are never printed. Tests serialize sign-ins within a run; do not run separate live-test processes against the same account at once. On Windows, set the variable with `$env:SAVE_RELAY_LIVE_GDRIVE_CONFIG = "..."` before the same `cargo test` line.
+
+The Drive 409 check uses two token-source sessions on this machine. Using an id generated on another physical machine, the consent screens, and Game Mode sign-in remain owner device checks.
+
 ## Switching services
 
 Switching services starts fresh. Saves in the old service are not copied to the new one. Set up the new service on every machine. Then push again from the machine that has the newest saves, before syncing from the other machines.
