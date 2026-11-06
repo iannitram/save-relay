@@ -6,6 +6,8 @@
 //! <root>/<game>/history/<stamp>-<device>/...   one dated copy per push; the current saves are
 //!                                              the entry state.json names
 //! <root>/<game>/incoming/<stamp>-<device>/     an upload in progress (transfer)
+//! <root>/<game>/rev/<n>                        the claim on revision n, body: the entry it names
+//!                                              (WebDAV only, #149; `Remote::needs_rev_marker`)
 //! ```
 //!
 //! Paths are relative to the WebDAV files URL (`webdav::files_url`), `/`-separated, with no
@@ -68,6 +70,16 @@ impl Layout {
     /// `<root>/<game>/incoming/<id>`
     pub fn incoming_dir(&self, game: &str, id: &str) -> String {
         format!("{}/incoming/{}", self.game_dir(game), id)
+    }
+
+    /// `<root>/<game>/rev`: the revision claims (`rev_path`).
+    pub fn rev_dir(&self, game: &str) -> String {
+        format!("{}/rev", self.game_dir(game))
+    }
+
+    /// `<root>/<game>/rev/<name>`: the claim named `name`, a revision number in decimal.
+    pub fn rev_path(&self, game: &str, name: &str) -> String {
+        format!("{}/{}", self.rev_dir(game), name)
     }
 }
 

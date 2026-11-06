@@ -44,3 +44,24 @@ pub fn to_drop(entries: &[String], keep: usize, current: &str) -> Vec<String> {
         .cloned()
         .collect()
 }
+
+/// The revision claims to delete (`layout::rev_path`, #149), oldest first. `names` are the
+/// names under `rev/`: revision numbers in decimal. Keeps the newest `keep` by number (`keep` 0
+/// counts as 1) and returns the rest. A name that is not a canonical decimal number is not ours:
+/// never dropped and not counted. Pure.
+pub fn markers_to_drop(names: &[String], keep: usize) -> Vec<String> {
+    let mut ours: Vec<(u64, &String)> = names
+        .iter()
+        .filter_map(|name| {
+            let number = name.parse::<u64>().ok()?;
+            (number.to_string() == *name).then_some((number, name))
+        })
+        .collect();
+    ours.sort();
+    let keep = std::cmp::max(keep, 1);
+    let drop = ours.len().saturating_sub(keep);
+    ours[..drop]
+        .iter()
+        .map(|(_, name)| (*name).clone())
+        .collect()
+}

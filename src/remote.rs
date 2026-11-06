@@ -49,6 +49,13 @@ pub trait Remote {
     fn move_to(&self, from: &str, to: &str) -> Result<()>;
     /// Delete a file or a whole folder. Missing: `Error::NotFound(path)`.
     fn delete(&self, path: &str) -> Result<()>;
+    /// True when an etag can repeat for two writes of one file (Nextcloud's, built from the
+    /// modification time in whole seconds and the size, #149). Then `sync` first creates
+    /// `<game>/rev/<revision>` with `Precondition::Absent` and writes `state.json` only if that
+    /// create succeeded. Backends whose guard is exact keep the default.
+    fn needs_rev_marker(&self) -> bool {
+        false
+    }
 }
 
 /// `mkcol` `dir` and every missing folder above it, top down.

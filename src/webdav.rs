@@ -1,7 +1,8 @@
 //! Nextcloud over WebDAV, one of the three services (docs/adr/0002-storage-backends.md). The
 //! URL helpers and the PROPFIND parser are pure; `WebDav` sends its requests through a
 //! `http::Transport` (the real one is behind the `http` feature), so the core builds without a
-//! network stack. Its overwrite guard is the server's own `If-Match`.
+//! network stack. Its overwrite guard is the server's own `If-Match`, backed by the revision
+//! marker `sync` writes first (`Remote::needs_rev_marker`, #149).
 
 use crate::error::{Error, Result};
 use crate::remote::RemoteEntry;
@@ -440,5 +441,9 @@ impl crate::remote::Remote for WebDav {
     fn delete(&self, path: &str) -> Result<()> {
         self.send("DELETE", path, &[], vec![], &[200, 204])?;
         Ok(())
+    }
+    /// Nextcloud's etag repeats for two writes in one second with one size (#149).
+    fn needs_rev_marker(&self) -> bool {
+        true
     }
 }

@@ -1,9 +1,9 @@
 //! The engine: each CLI command as one function over a `Remote`, a `LocalStore` and the saves
 //! folder. It reads, asks `plan::decide`, then acts through `transfer`, writes `state.json` with
 //! `Precondition::Match` on the etag it read (so a second machine pushing at once gets
-//! `Error::Changed`, never a lost revision: If-Match on Nextcloud, the rev on Dropbox, the
-//! claim guard on Google Drive, M9), applies `retention`, and records `LastSynced`. It never
-//! knows which service it talks to.
+//! `Error::Changed`, never a lost revision: If-Match on Nextcloud, behind a `rev/<n>` claim there
+//! (#149), the rev on Dropbox, the claim guard on Google Drive, M9), applies `retention`, and
+//! records `LastSynced`. It never knows which service it talks to.
 //!
 //! `pull` reads the game's open-elsewhere mark (`presence`, M11), asks `plan::decide_with_mark` and
 //! writes this machine's mark after a launch that synced; `push` clears it again
@@ -224,17 +224,7 @@ fn sync(
                 entry: entry.clone(),
                 files: local.files.clone(),
             };
-            if let Err(error) =
-                s.remote
-                    .put(&s.layout.state_path(id), next.to_json().as_bytes(), &pre)
-            {
-                if error == Error::Changed {
-                    // A rejected conditional write cannot have published this entry.
-                    let _ = s.remote.delete(&s.layout.entry_dir(id, &entry));
-                }
-                // Other failures may be ambiguous: keep the complete entry in history.
-                return Err(error);
-            }
+            write_state(s, id, revision, &entry, &next, &pre)?;
             server_entry = Some(entry.clone());
             let entries = s
                 .remote
@@ -248,6 +238,7 @@ fn sync(
             for old in retention::to_drop(&entries, keep, &entry) {
                 s.remote.delete(&s.layout.entry_dir(id, &old))?;
             }
+            prune_markers(s, id)?;
             record_sync(s, store, id, revision, &local)?;
             data.action = Action::Pushed;
             data.revision = Some(revision);
@@ -561,6 +552,80 @@ fn fresh_entry(now: u64, device: &str, taken: &[String]) -> String {
     }
 }
 
+/// Writes `state.json` for revision `revision`, which names `entry`, with `pre`. On a backend that
+/// needs the revision claim (`Remote::needs_rev_marker`, #149) the write comes second: only the
+/// write that creates `rev/<revision>` may write `state.json`. A refused claim or write is
+/// `Error::Changed`, and `entry` is removed: a rejected conditional write cannot have published
+/// it. Other failures may be ambiguous, so `entry` stays in history. A failed state write releases
+/// the claim, so the next push is not refused by this one.
+fn write_state(
+    s: &Session,
+    id: &str,
+    revision: u64,
+    entry: &str,
+    next: &ServerState,
+    pre: &Precondition,
+) -> Result<()> {
+    let name = revision.to_string();
+    if let Err(error) = claim_revision(s, id, &name, entry) {
+        if error == Error::Changed {
+            let _ = s.remote.delete(&s.layout.entry_dir(id, entry));
+        }
+        return Err(error);
+    }
+    if let Err(error) = s
+        .remote
+        .put(&s.layout.state_path(id), next.to_json().as_bytes(), pre)
+    {
+        if error == Error::Changed {
+            let _ = s.remote.delete(&s.layout.entry_dir(id, entry));
+        }
+        if s.remote.needs_rev_marker() {
+            let _ = s.remote.delete(&s.layout.rev_path(id, &name));
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
+/// Creates `rev/<name>` (its body: the entry it names) with `Precondition::Absent`, on a backend
+/// that needs the claim (#149). Other backends: nothing. A refused create is `Error::Changed`.
+fn claim_revision(s: &Session, id: &str, name: &str, entry: &str) -> Result<()> {
+    if !s.remote.needs_rev_marker() {
+        return Ok(());
+    }
+    ensure_dir(s.remote, &s.layout.rev_dir(id))?;
+    s.remote
+        .put(
+            &s.layout.rev_path(id, name),
+            entry.as_bytes(),
+            &Precondition::Absent,
+        )
+        .map(|_| ())
+}
+
+/// Deletes the revision claims beyond the newest `retention::KEEP`, with the entries (#149). A
+/// claim older than the current revision is never needed again: a push reads the current
+/// revision and claims the next one. Other backends: nothing.
+fn prune_markers(s: &Session, id: &str) -> Result<()> {
+    if !s.remote.needs_rev_marker() {
+        return Ok(());
+    }
+    let names: Vec<String> = match s.remote.list(&s.layout.rev_dir(id)) {
+        Ok(children) => children
+            .into_iter()
+            .filter(|child| !child.is_dir)
+            .map(|child| child.name)
+            .collect(),
+        Err(Error::NotFound(_)) => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    for old in retention::markers_to_drop(&names, retention::KEEP) {
+        s.remote.delete(&s.layout.rev_path(id, &old))?;
+    }
+    Ok(())
+}
+
 /// The entry names under `history/`; none yet is an empty list.
 fn history_names(s: &Session, game: &str) -> Result<Vec<String>> {
     Ok(history_children(s, game)?
@@ -755,16 +820,7 @@ pub fn restore(s: &Session, game: &Game, store: &LocalStore, entry: &str) -> Res
         entry: new_entry.clone(),
         files: wanted.files.clone(),
     };
-    if let Err(error) = s
-        .remote
-        .put(&s.layout.state_path(id), next.to_json().as_bytes(), &pre)
-    {
-        if error == Error::Changed {
-            // A rejected conditional write cannot have published this copy.
-            let _ = s.remote.delete(&s.layout.entry_dir(id, &new_entry));
-        }
-        return Err(error);
-    }
+    write_state(s, id, revision, &new_entry, &next, &pre)?;
     let downloaded = transfer::download_entry(
         s.remote,
         &s.layout,
@@ -787,6 +843,7 @@ pub fn restore(s: &Session, game: &Game, store: &LocalStore, entry: &str) -> Res
     for old in retention::to_drop(&entries, keep, &new_entry) {
         s.remote.delete(&s.layout.entry_dir(id, &old))?;
     }
+    prune_markers(s, id)?;
     let mut message = format!("Restored {entry} as revision {revision}.");
     for note in &notes {
         message = format!("{message} {}.", one_line(note));
