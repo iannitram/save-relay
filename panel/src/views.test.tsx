@@ -17,7 +17,7 @@ import statusPending from "./fixtures/status-pending.json";
 import whereFx from "./fixtures/where.json";
 import type { Answer, Envelope, HistoryData, PendingChoice } from "./api.ts";
 import {
-  ConflictView, ErrorBanner, GamesView, HeldView, QrCode, Screen, SignInView, TimelineView,
+  Banner, ConflictView, ErrorBanner, GamesView, HeldView, QrCode, Screen, SignInView, TimelineView,
   type GameRow,
 } from "./views.tsx";
 
@@ -79,6 +79,42 @@ describe("games list", () => {
     expect(html).toContain("Open on steam-deck since Oct 31, 7:12pm");
     expect(html).toContain("Choice waiting");
     expect(html).toContain("Pending choices (1)");
+  });
+});
+
+describe("banners", () => {
+  it("renders each tone as an icon and text, never a button", () => {
+    for (const tone of ["info", "warning", "danger", "success"] as const) {
+      const html = renderToStaticMarkup(<Banner tone={tone}>Message</Banner>);
+      expect(html).toContain(`banner-${tone}`);
+      expect(html).toContain('aria-hidden="true"');
+      expect(html).toContain("Message");
+      expect(html).not.toContain("<button");
+    }
+  });
+
+  it("uses danger alerts for errors, success for notices, and info for explanatory text", () => {
+    const error = renderToStaticMarkup(<ErrorBanner message="Could not save" />);
+    expect(error).toContain('class="banner banner-danger" role="alert"');
+    const conflictHtml = renderToStaticMarkup(
+      <ConflictView choice={conflict} error={null} notice="Saved" onAnswer={noop} onBack={noop} />,
+    );
+    expect(conflictHtml).toContain('class="banner banner-success"');
+    expect(conflictHtml).toContain('class="banner banner-info"');
+    expect(conflictHtml).toContain("Nothing is overwritten until you choose.");
+  });
+
+  it("uses the warning banner for held saves and info for Nextcloud", () => {
+    const heldHtml = renderToStaticMarkup(
+      <HeldView game="celeste" held={held.held!} error={null} notice={null} onAnswer={noop} onBack={noop} />,
+    );
+    expect(heldHtml).toContain('class="banner banner-warning"');
+    expect(heldHtml).toContain("Playing anyway can lose the other machine&#x27;s newest saves.");
+    const signInHtml = renderToStaticMarkup(
+      <SignInView prompt={null} error={null} onPick={noop} onBack={noop} />,
+    );
+    expect(signInHtml).toContain('class="banner banner-info"');
+    expect(signInHtml).toContain("Nextcloud is set up on the command line, not here.");
   });
 });
 

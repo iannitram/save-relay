@@ -39,13 +39,32 @@ export function Screen(props: {
   );
 }
 
+export type BannerTone = "info" | "warning" | "danger" | "success";
+
+const bannerIcons: Record<BannerTone, ReactNode> = {
+  info: <><circle cx="12" cy="12" r="9.5" /><path d="M12 11 V17" /><path d="M12 7.2 V7.3" /></>,
+  warning: <><path d="M12 3 L22 20 H2 Z" /><path d="M12 10 V14" /><path d="M12 17.2 V17.3" /></>,
+  danger: <><circle cx="12" cy="12" r="9.5" /><path d="m9 9 6 6m0-6-6 6" /></>,
+  success: <><circle cx="12" cy="12" r="9.5" /><path d="m7.5 12.5 3 3 6-7" /></>,
+};
+
+export function Banner(props: { tone: BannerTone; children: ReactNode; title?: string; role?: "status" | "alert" }) {
+  return (
+    <div className={`banner banner-${props.tone}`} role={props.role ?? "status"}>
+      <svg className="banner-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        {bannerIcons[props.tone]}
+      </svg>
+      <div>
+        {props.title && <p className="banner-title">{props.title}</p>}
+        <p className="banner-text">{props.children}</p>
+      </div>
+    </div>
+  );
+}
+
 export function ErrorBanner(props: { message: string | null }) {
   if (!props.message) return null;
-  return (
-    <p className="error" role="alert">
-      {props.message}
-    </p>
-  );
+  return <Banner tone="danger" role="alert">{props.message}</Banner>;
 }
 
 export function LoadingView(props: { title: string; error: string | null; onBack: () => void }) {
@@ -140,8 +159,8 @@ export function ConflictView(props: {
   return (
     <Screen title={`${choice.game}: two versions`} onBack={props.onBack}>
       <ErrorBanner message={props.error} />
-      {props.notice && <p className="notice">{props.notice}</p>}
-      <p>Both this machine and the server changed. Nothing is overwritten until you choose.</p>
+      {props.notice && <Banner tone="success">{props.notice}</Banner>}
+      <Banner tone="info">Both this machine and the server changed. Nothing is overwritten until you choose.</Banner>
       <div className="cards">
         <CardView title="On the server" side={choice.server} card={choice.server_card} />
         <CardView title="On this machine" side={choice.local} card={choice.local_card} />
@@ -177,11 +196,10 @@ export function HeldView(props: {
   return (
     <Screen title={`${props.game} is open elsewhere`} onBack={props.onBack} initial="wait">
       <ErrorBanner message={props.error} />
-      {props.notice && <p className="notice">{props.notice}</p>}
-      <p className="big">
-        Open on {props.held.device} since {when(props.held.since)}
-      </p>
-      <p>Playing anyway can lose the other machine's newest saves.</p>
+      {props.notice && <Banner tone="success">{props.notice}</Banner>}
+      <Banner tone="warning" title={`Open on ${props.held.device} since ${when(props.held.since)}`}>
+        Playing anyway can lose the other machine's newest saves.
+      </Banner>
       <footer>
         <button data-focus="wait" className="btn btn-primary" onClick={() => props.onAnswer("wait")}>
           Wait
@@ -265,7 +283,7 @@ export function TimelineView(props: {
   return (
     <Screen title={`${history.game}: history`} onBack={props.onBack}>
       <ErrorBanner message={props.error} />
-      {props.notice && <p className="notice">{props.notice}</p>}
+      {props.notice && <Banner tone="success">{props.notice}</Banner>}
       <ul className="list">
         {history.entries.map((e) => {
           const src = e.card?.picture ? props.pictureUrl(history.game, e.entry, e.card.picture) : null;
@@ -340,7 +358,7 @@ export function SignInView(props: {
     return (
       <Screen title="Sign in" onBack={props.onBack}>
         <ErrorBanner message={props.error} />
-        <p>Nextcloud is set up on the command line, not here.</p>
+        <Banner tone="info">Nextcloud is set up on the command line, not here.</Banner>
         <footer>
           <button data-focus="gdrive" className="btn" onClick={() => props.onPick("gdrive")}>
             Google Drive
