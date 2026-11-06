@@ -183,10 +183,10 @@ export function HeldView(props: {
       </p>
       <p>Playing anyway can lose the other machine's newest saves.</p>
       <footer>
-        <button data-focus="wait" className="btn" onClick={() => props.onAnswer("wait")}>
+        <button data-focus="wait" className="btn btn-primary" onClick={() => props.onAnswer("wait")}>
           Wait
         </button>
-        <button data-focus="anyway" className="btn" onClick={() => props.onAnswer("play_anyway")}>
+        <button data-focus="anyway" className="btn btn-danger" onClick={() => props.onAnswer("play_anyway")}>
           Play anyway
         </button>
       </footer>
@@ -255,7 +255,7 @@ export function TimelineView(props: {
           <button data-focus="cancel" className="btn" onClick={props.onCancel}>
             Cancel
           </button>
-          <button data-focus="confirm" className="btn" onClick={props.onConfirm}>
+          <button data-focus="confirm" className="btn btn-primary" onClick={props.onConfirm}>
             Restore
           </button>
         </footer>
