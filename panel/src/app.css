@@ -67,6 +67,9 @@ p {
   line-height: 28px;
 }
 .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   font: inherit;
   font-size: 22px;
   line-height: 28px;
@@ -78,6 +81,16 @@ p {
   border: 2px solid var(--border);
   border-radius: 14px;
   cursor: pointer;
+}
+.icon {
+  width: 28px;
+  height: 28px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 /* Focus is the one thing a controller shows: a thick, high-contrast ring. `data-focused` is
    set by the focus scope (focus.ts) so the ring shows from the first load, not only after a key
