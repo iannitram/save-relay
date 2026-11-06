@@ -21,14 +21,21 @@ export function Screen(props: {
   title: string;
   onBack: (() => void) | null;
   initial?: string;
+  ariaLabel?: string;
+  inertBackground?: boolean;
   children: ReactNode;
 }) {
   const { ref, onKeyDown } = useFocusScope(props.onBack, props.initial);
   return (
-    <section className="screen" ref={ref} onKeyDown={onKeyDown} aria-label={props.title}>
-      <header>
+    <section className="screen" ref={ref} onKeyDown={onKeyDown} aria-label={props.ariaLabel ?? props.title}>
+      <header {...(props.inertBackground ? { inert: "" } : {})}>
         {props.onBack && (
-          <button data-focus="back" className="btn" onClick={props.onBack}>
+          <button
+            data-focus={props.inertBackground ? undefined : "back"}
+            tabIndex={props.inertBackground ? -1 : undefined}
+            className="btn"
+            onClick={props.onBack}
+          >
             <svg className="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 12 H5" /><path d="M11 6 L5 12 L11 18" /></svg>Back
           </button>
         )}
@@ -293,34 +300,18 @@ export function TimelineView(props: {
   onBack: () => void;
 }) {
   const { history, confirm } = props;
-  if (confirm) {
-    const entry = history.entries.find((e) => e.entry === confirm);
-    return (
-      <Screen title="Restore these saves?" onBack={props.onCancel} initial="cancel">
-        <ErrorBanner message={props.error} />
-        <p className="big">
-          {entry?.card?.place ?? confirm} · {entry ? when(entry.time) : ""}
-        </p>
-        <p>
-          Your saves on the server become a copy of this entry. Unsynced changes on this machine
-          are kept as a backup first.
-        </p>
-        <footer>
-          <button data-focus="cancel" className="btn" onClick={props.onCancel}>
-            Cancel
-          </button>
-          <button data-focus="confirm" className="btn btn-primary" onClick={props.onConfirm}>
-            Restore
-          </button>
-        </footer>
-      </Screen>
-    );
-  }
+  const entry = confirm ? history.entries.find((e) => e.entry === confirm) : null;
   return (
-    <Screen title={`${history.game}: history`} onBack={props.onBack} initial={props.initial ?? "back"}>
+    <Screen
+      title={`${history.game}: history`}
+      ariaLabel={confirm ? "Restore these saves?" : undefined}
+      onBack={confirm ? props.onCancel : props.onBack}
+      initial={confirm ? "cancel" : (props.initial ?? "back")}
+      inertBackground={Boolean(confirm)}
+    >
       <ErrorBanner message={props.error} />
       {props.notice && <Banner tone="success">{props.notice}</Banner>}
-      <ul className="list">
+      <ul className="list" {...(confirm ? { inert: "" } : {})}>
         {history.entries.map((e) => {
           const src = e.card?.picture ? props.pictureUrl(history.game, e.entry, e.card.picture) : null;
           const time = playtime(e.card?.playtime_secs ?? null);
@@ -355,7 +346,8 @@ export function TimelineView(props: {
                     </span>
                   ) : (
                     <button
-                      data-focus={`restore:${e.entry}`}
+                      data-focus={confirm ? undefined : `restore:${e.entry}`}
+                      tabIndex={confirm ? -1 : undefined}
                       className="btn"
                       onClick={() => props.onAsk(e.entry)}
                     >
@@ -368,6 +360,28 @@ export function TimelineView(props: {
           );
         })}
       </ul>
+      {confirm && (
+        <div className="scrim">
+          <div className="dialog" role="dialog" aria-modal="true" aria-label="Restore these saves?">
+            <h2>Restore these saves?</h2>
+            <p className="dialog-entry" style={{ fontWeight: 700 }}>
+              {entry?.card?.place ?? confirm} · {entry ? when(entry.time) : ""}
+            </p>
+            <p className="muted">
+              Your saves on the server become a copy of this entry. Unsynced changes on this machine
+              are kept as a backup first.
+            </p>
+            <div className="dialog-actions">
+              <button data-focus="cancel" className="btn" onClick={props.onCancel}>
+                Cancel
+              </button>
+              <button data-focus="confirm" className="btn btn-primary" onClick={props.onConfirm}>
+                Restore
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </Screen>
   );
 }
