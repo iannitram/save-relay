@@ -309,20 +309,33 @@ fn claims_beyond_keep_are_dropped_oldest_first_by_number() {
     use save_relay::retention::markers_to_drop;
     // By number, not text: 2, 3, 9, 10, 11.
     let all = claims(&["9", "10", "11", "2", "3"]);
-    assert_eq!(markers_to_drop(&all, 3), ["2", "3"]);
-    assert!(markers_to_drop(&all, 5).is_empty());
+    assert_eq!(markers_to_drop(&all, 3, 11), ["2", "3"]);
+    assert!(markers_to_drop(&all, 5, 11).is_empty());
 }
 
 #[test]
 fn names_that_are_not_canonical_revisions_are_kept_and_not_counted() {
     use save_relay::retention::markers_to_drop;
     // "007", "+4", "x" and "" are not revision names: only "1" and "2" count.
-    let all = claims(&["1", "2", "007", "x", "", "+4"]);
-    assert_eq!(markers_to_drop(&all, 1), ["1"]);
+    let all = claims(&["1", "2", "007", "x", "", "+4", "0"]);
+    assert_eq!(markers_to_drop(&all, 1, 2), ["1"]);
 }
 
 #[test]
 fn keep_zero_counts_as_one_claim() {
     use save_relay::retention::markers_to_drop;
-    assert_eq!(markers_to_drop(&claims(&["4", "5"]), 0), ["4"]);
+    assert_eq!(markers_to_drop(&claims(&["4", "5"]), 0, 5), ["4"]);
+}
+
+#[test]
+fn current_and_later_claims_are_never_pruned() {
+    use save_relay::retention::markers_to_drop;
+    let all = claims(&[
+        "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12",
+    ]);
+    assert_eq!(markers_to_drop(&all, 1, 2), ["1"]);
+    assert_eq!(
+        markers_to_drop(&claims(&["1", "1", "2"]), 2, 2),
+        Vec::<String>::new()
+    );
 }

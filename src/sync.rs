@@ -238,7 +238,7 @@ fn sync(
             for old in retention::to_drop(&entries, keep, &entry) {
                 s.remote.delete(&s.layout.entry_dir(id, &old))?;
             }
-            prune_markers(s, id)?;
+            prune_markers(s, id, revision)?;
             record_sync(s, store, id, revision, &local)?;
             data.action = Action::Pushed;
             data.revision = Some(revision);
@@ -607,7 +607,7 @@ fn claim_revision(s: &Session, id: &str, name: &str, entry: &str) -> Result<()> 
 /// Deletes the revision claims beyond the newest `retention::KEEP`, with the entries (#149). A
 /// claim older than the current revision is never needed again: a push reads the current
 /// revision and claims the next one. Other backends: nothing.
-fn prune_markers(s: &Session, id: &str) -> Result<()> {
+fn prune_markers(s: &Session, id: &str, revision: u64) -> Result<()> {
     if !s.remote.needs_rev_marker() {
         return Ok(());
     }
@@ -620,7 +620,7 @@ fn prune_markers(s: &Session, id: &str) -> Result<()> {
         Err(Error::NotFound(_)) => return Ok(()),
         Err(error) => return Err(error),
     };
-    for old in retention::markers_to_drop(&names, retention::KEEP) {
+    for old in retention::markers_to_drop(&names, retention::KEEP, revision) {
         s.remote.delete(&s.layout.rev_path(id, &old))?;
     }
     Ok(())
@@ -843,7 +843,7 @@ pub fn restore(s: &Session, game: &Game, store: &LocalStore, entry: &str) -> Res
     for old in retention::to_drop(&entries, keep, &new_entry) {
         s.remote.delete(&s.layout.entry_dir(id, &old))?;
     }
-    prune_markers(s, id)?;
+    prune_markers(s, id, revision)?;
     let mut message = format!("Restored {entry} as revision {revision}.");
     for note in &notes {
         message = format!("{message} {}.", one_line(note));

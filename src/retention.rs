@@ -47,17 +47,20 @@ pub fn to_drop(entries: &[String], keep: usize, current: &str) -> Vec<String> {
 
 /// The revision claims to delete (`layout::rev_path`, #149), oldest first. `names` are the
 /// names under `rev/`: revision numbers in decimal. Keeps the newest `keep` by number (`keep` 0
-/// counts as 1) and returns the rest. A name that is not a canonical decimal number is not ours:
-/// never dropped and not counted. Pure.
-pub fn markers_to_drop(names: &[String], keep: usize) -> Vec<String> {
+/// counts as 1) through `current` and returns the rest. Current and later claims are never
+/// dropped: another writer may already be publishing a later revision. A name that is not a
+/// canonical positive decimal number is not ours: never dropped and not counted. Pure.
+pub fn markers_to_drop(names: &[String], keep: usize, current: u64) -> Vec<String> {
     let mut ours: Vec<(u64, &String)> = names
         .iter()
         .filter_map(|name| {
             let number = name.parse::<u64>().ok()?;
-            (number.to_string() == *name).then_some((number, name))
+            (number > 0 && number <= current && number.to_string() == *name)
+                .then_some((number, name))
         })
         .collect();
     ours.sort();
+    ours.dedup();
     let keep = std::cmp::max(keep, 1);
     let drop = ours.len().saturating_sub(keep);
     ours[..drop]
