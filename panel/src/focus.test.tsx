@@ -41,7 +41,7 @@ const views: [string, React.ReactElement, string[]][] = [
   ["pending", <PendingView choices={[held, conflict]} onOpen={noop} onBack={noop} />,
     ["back", "choice:celeste", "choice:hades"]],
   ["timeline", timeline(null), ["back", `restore:${e1}`, `restore:${history.entries[2]!.entry}`]],
-  ["restore confirm", timeline(e1), ["back", "cancel", "confirm"]],
+  ["restore confirm", timeline(e1), ["cancel", "confirm"]],
   ["conflict", <ConflictView choice={conflict} error={null} notice={null} onAnswer={noop} onBack={noop} />,
     ["back", "keep-server", "keep-local"]],
   ["held", <HeldView game="celeste" held={held.held!} error={null} notice={null} onAnswer={noop} onBack={noop} />,

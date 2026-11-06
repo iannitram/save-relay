@@ -26,7 +26,9 @@ export function nextFocus(order: string[], current: string | null, key: string):
 const CONTROLS = "[data-focus]:not([hidden]):not([disabled]):not([aria-hidden=true])";
 
 function controls(root: HTMLElement): HTMLElement[] {
-  return Array.from(root.querySelectorAll<HTMLElement>(CONTROLS));
+  const modal = root.querySelector<HTMLElement>('[role="dialog"][aria-modal="true"]');
+  const scope = modal ?? root;
+  return Array.from(scope.querySelectorAll<HTMLElement>(CONTROLS));
 }
 
 /** Focus has fallen out of every control: it is on <body>, or nowhere. */
@@ -142,7 +144,9 @@ export function useFocusScope(onBack: (() => void) | null, initial?: string) {
     doc.addEventListener("pointerdown", markMoved, true);
     doc.addEventListener("keydown", markMoved, true);
     const refocus = () => {
-      if (focusLost(doc) || !userMoved.current) enter(root);
+      const modal = root.querySelector<HTMLElement>('[role="dialog"][aria-modal="true"]');
+      if (modal && !modal.contains(doc.activeElement)) enter(root);
+      else if (focusLost(doc) || !userMoved.current) enter(root);
     };
     const observer = new MutationObserver(refocus);
     observer.observe(root, {
@@ -176,6 +180,26 @@ export function useFocusScope(onBack: (() => void) | null, initial?: string) {
 
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     userMoved.current = true;
+    const root = ref.current;
+    if (root) {
+      const modal = root.querySelector<HTMLElement>('[role="dialog"][aria-modal="true"]');
+      if (modal && event.key === "Tab") {
+        const modalControls = controls(root);
+        if (modalControls.length > 0) {
+          event.preventDefault();
+          const at = root.ownerDocument.activeElement as HTMLElement | null;
+          const idx = at ? modalControls.indexOf(at) : -1;
+          if (event.shiftKey) {
+            const nextIdx = idx <= 0 ? modalControls.length - 1 : idx - 1;
+            focusControl(modalControls[nextIdx]);
+          } else {
+            const nextIdx = idx === -1 || idx >= modalControls.length - 1 ? 0 : idx + 1;
+            focusControl(modalControls[nextIdx]);
+          }
+          return;
+        }
+      }
+    }
     if (key(event.key)) event.preventDefault();
   };
   return { ref, onKeyDown };
