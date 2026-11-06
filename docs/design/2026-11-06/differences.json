@@ -116,7 +116,7 @@
   {
     "title": "History entries become SaveCard",
     "screens": "05, 06",
-    "now": "A 160x90 picture with a 6px radius, no edge on an empty picture, place at 24px, a brown \"Current\" pill without an icon, a \"Restore\" button, and \"No card (older save)\" for an entry with no card. The focus is on the second Restore.",
+    "now": "A 160x90 picture with a 6px radius, no edge on an empty picture, place at 24px, a brown \"Current\" pill without an icon, a \"Restore\" button, and \"No card (older save)\" for an entry with no card. The focus is on the first Restore (the second entry).",
     "mockup": "SaveCard: a 192x108 picture with an 8px radius and a `border-subtle` edge (an icon when empty), place in `body-lg`, facts in `meta`, a \"Current\" badge with a check icon, a secondary Restore button. An entry with no card reads \"No place recorded\". First focus on Back.",
     "size": "medium",
     "files": [
