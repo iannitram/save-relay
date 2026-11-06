@@ -151,6 +151,10 @@ pub enum Command {
     History {
         game: String,
     },
+    Repair {
+        game: String,
+        yes: bool,
+    },
     Restore {
         game: GameArg,
         entry: String,
@@ -344,6 +348,17 @@ pub fn parse(args: &[String]) -> Result<Args> {
             require(&flags.positionals, 1, &["<game>"])?;
             Command::History {
                 game: flags.positionals[0].to_string(),
+            }
+        }
+        "repair" => {
+            let flags = split(&args[1..], &[], &["--yes"])?;
+            require(&flags.positionals, 1, &["<game>"])?;
+            if !is_game_id(flags.positionals[0]) {
+                return Err(Error::Usage("invalid <game> id".into()));
+            }
+            Command::Repair {
+                game: flags.positionals[0].to_string(),
+                yes: flags.has("--yes"),
             }
         }
         "restore" => {
@@ -716,6 +731,7 @@ pub fn needs_server(command: &Command) -> bool {
             | Command::Push { .. }
             | Command::Status { .. }
             | Command::History { .. }
+            | Command::Repair { .. }
             | Command::Restore { .. }
             | Command::Where
             | Command::Picture { .. }
@@ -747,6 +763,7 @@ pub fn command_name(command: &Command) -> &'static str {
         Command::Push { .. } => "push",
         Command::Status { .. } => "status",
         Command::History { .. } => "history",
+        Command::Repair { .. } => "repair",
         Command::Restore { .. } => "restore",
         Command::Setup { .. } | Command::SetupService { .. } => "setup",
         Command::Wrap { .. } => "wrap",
@@ -770,6 +787,7 @@ Commands:
   push    <game> [--manifest <file>] [--saves-dir <dir>] [--resolve keep-server|keep-local]
   status  <game> [--manifest <file>] [--saves-dir <dir>]
   history <game>
+  repair  <game> [--yes]
   restore <game> <entry> [--manifest <file>] [--saves-dir <dir>]
   pull    <game> --anyway [...]
   wrap    [--game <id>] [--manifest <file>] [--saves-dir <dir>] -- <command>...
@@ -1015,6 +1033,9 @@ pub fn run_with_net(
             &context,
         );
     }
+    if let Command::Repair { game, yes } = &command {
+        return repair_command(game, *yes, json, stdin, stdout, &context);
+    }
     match execute(command, stdin, &context) {
         Ok(done) => {
             let shown = if json { &done.json } else { &done.text };
@@ -1076,11 +1097,12 @@ fn wrap_child(args: &[String]) -> Option<&[String]> {
 /// The command word for an envelope when the arguments did not parse: the first argument that
 /// is a command, else "unknown".
 fn guess_command(args: &[String]) -> String {
-    const NAMES: [&str; 15] = [
+    const NAMES: [&str; 16] = [
         "pull",
         "push",
         "status",
         "history",
+        "repair",
         "restore",
         "setup",
         "wrap",
@@ -1139,6 +1161,7 @@ fn execute(command: Command, stdin: &mut dyn Read, cx: &Context) -> Result<Outco
         Command::Push { game, resolve } => sync_command("push", &game, resolve, false, cx),
         Command::Status { game } => status(&game, cx),
         Command::History { game } => history(&game, cx),
+        Command::Repair { .. } => unreachable!("repair runs with confirmation in run_with_net"),
         Command::Restore { game, entry } => restore(&game, &entry, cx),
         // `wrap` is started by `run_with_net` before it gets here; the rest are plain commands.
         Command::Wrap { .. } => unreachable!("run_with_net starts wrap itself"),
@@ -1504,6 +1527,60 @@ fn history(game: &str, cx: &Context) -> Result<Outcome> {
     })?;
     let text = history_text(&data);
     Ok(outcome("history", &data, text, 0))
+}
+
+fn repair_command(
+    game: &str,
+    yes: bool,
+    json: bool,
+    stdin: &mut dyn Read,
+    stdout: &mut dyn Write,
+    cx: &Context,
+) -> i32 {
+    let result = (|| -> Result<Outcome> {
+        let config = load_config(cx)?;
+        let preview = with_remote(&config, cx, |remote| {
+            sync::repair(&session(&config, remote, cx)?, game, false)
+        })?;
+        let eligible = preview
+            .markers
+            .iter()
+            .any(|m| m.status == "releasable" || m.status == "releasable_set_aside");
+        let approved = if yes {
+            true
+        } else if json || !eligible {
+            false
+        } else {
+            eprint!(
+                "{} Release eligible revision claim(s)? A complete entry is moved to set-aside/ first, never deleted. [y/N] ",
+                preview.message
+            );
+            let mut answer = String::new();
+            let mut byte = [0u8; 1];
+            while stdin.read(&mut byte)? == 1 && byte[0] != b'\n' {
+                if byte[0].is_ascii() {
+                    answer.push(byte[0] as char);
+                }
+            }
+            answer.trim().eq_ignore_ascii_case("y") || answer.trim().eq_ignore_ascii_case("yes")
+        };
+        let data = if approved && eligible {
+            with_remote(&config, cx, |remote| {
+                sync::repair(&session(&config, remote, cx)?, game, true)
+            })?
+        } else {
+            preview
+        };
+        let text = data.message.clone();
+        Ok(outcome("repair", &data, text, 0))
+    })();
+    match result {
+        Ok(done) => {
+            let _ = writeln!(stdout, "{}", if json { done.json } else { done.text });
+            done.code
+        }
+        Err(error) => print_failure(stdout, json, "repair", &error),
+    }
 }
 
 fn restore(arg: &GameArg, entry: &str, cx: &Context) -> Result<Outcome> {
