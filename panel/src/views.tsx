@@ -311,7 +311,7 @@ export function TimelineView(props: {
                 </span>
                 <span className="save-side">
                   {e.current ? (
-                    <span className="badge badge-success">
+                    <span className="badge">
                       <svg className="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                         <circle cx="12" cy="12" r="9.5" />
                         <path d="M7.5 12.5 L10.5 15.5 L16.5 9" />

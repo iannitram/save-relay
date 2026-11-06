@@ -131,10 +131,10 @@ describe("No place recorded and font tokens (#174)", () => {
 });
 
 describe("Current badge (#174)", () => {
-  it('renders the "Current" badge with class="badge badge-success" and a check icon', () => {
+  it('renders the "Current" badge with the base info pill class="badge" and a check icon', () => {
     const html = renderTimeline();
     expect(html).toMatch(
-      /<span class="badge badge-success"><svg class="icon"[^>]*><circle cx="12" cy="12" r="9\.5"><\/circle><path d="M7\.5 12\.5 L10\.5 15\.5 L16\.5 9"><\/path><\/svg>Current<\/span>/,
+      /<span class="badge"><svg class="icon"[^>]*><circle cx="12" cy="12" r="9\.5"><\/circle><path d="M7\.5 12\.5 L10\.5 15\.5 L16\.5 9"><\/path><\/svg>Current<\/span>/,
     );
   });
 
@@ -190,6 +190,23 @@ describe("First focus on history view (#174)", () => {
 
   it("gives the first focus to Back (Screen initial is back)", () => {
     expect(view().props.initial).toBe("back");
+  });
+
+  it("lets a caller's initial focus win over Back", () => {
+    const target = `restore:${history.entries[1]!.entry}`;
+    const el = TimelineView({
+      history,
+      pictureUrl: mockPictureUrl,
+      confirm: null,
+      error: null,
+      notice: null,
+      initial: target,
+      onAsk: noop,
+      onConfirm: noop,
+      onCancel: noop,
+      onBack: noop,
+    }) as ReactElement<any>;
+    expect(el.props.initial).toBe(target);
   });
 
   it("has Back as the first focus target before any Restore", () => {
