@@ -11,7 +11,7 @@ The project's own words, one line each. `/grill-with-docs` adds to this during t
 | backend | The code that speaks one service's API behind the `Remote` trait (`webdav`, `dropbox`, `gdrive`) | a server |
 | refresh token | The long-lived sign-in Google Drive or Dropbox gives at setup, kept only in the credential store | an access token (short-lived, memory only) |
 | claim | On Google Drive, a small file created with a pre-chosen id so that only one machine may write `state.json` next (`gdrive::guard`) | a lock that someone must release |
-| rev marker | On Nextcloud, the create-once file `<game>/rev/<n>` a push creates before it writes `state.json`, so only one push may write revision n (`layout::rev_path`, `sync::claim_revision`, #149) | the Drive claim file (`claim`), and the open-elsewhere mark |
+| rev marker | On Nextcloud, the create-once file `<game>/rev/<n>` a push or restore creates before it writes `state.json`, so only one writer may publish revision n; no automatic expiry (`layout::rev_path`, `sync::claim_revision`, #149; recovery gap in ADR 0002) | the Drive claim file (`claim`), and the open-elsewhere mark |
 | open-elsewhere mark (mark) | The small `playing.json` on the server naming the machine whose `pull` left a game open; `push` clears it (`presence`) | a lock: it never blocks and never expires, it only makes the launcher ask |
 | held | The answer at launch when another machine's mark is present: nothing is touched and the player picks Wait or Play anyway (`Action::Held`, exit 6) | a conflict (both sides changed the saves) |
 | wrap | Syncing a game through its Steam launch option, `save-relay wrap -- %command%`: pull, the game as a child process, push | `install-wrap`, which only writes that launch option |

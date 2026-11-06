@@ -557,7 +557,8 @@ fn fresh_entry(now: u64, device: &str, taken: &[String]) -> String {
 /// write that creates `rev/<revision>` may write `state.json`. A refused claim or write is
 /// `Error::Changed`, and `entry` is removed: a rejected conditional write cannot have published
 /// it. Other failures may be ambiguous, so `entry` stays in history. A failed state write releases
-/// the claim, so the next push is not refused by this one.
+/// the claim on a best-effort basis. A crash or failed cleanup can strand it permanently;
+/// safe recovery is a follow-up described in ADR 0002.
 fn write_state(
     s: &Session,
     id: &str,
