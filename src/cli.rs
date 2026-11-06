@@ -1542,14 +1542,17 @@ fn repair_command(
         let preview = with_remote(&config, cx, |remote| {
             sync::repair(&session(&config, remote, cx)?, game, false)
         })?;
-        let eligible = preview.markers.iter().any(|m| m.status == "releasable");
+        let eligible = preview
+            .markers
+            .iter()
+            .any(|m| m.status == "releasable" || m.status == "releasable_set_aside");
         let approved = if yes {
             true
         } else if json || !eligible {
             false
         } else {
             eprint!(
-                "{} Delete eligible revision marker(s)? [y/N] ",
+                "{} Release eligible revision claim(s)? A complete entry is moved to set-aside/ first, never deleted. [y/N] ",
                 preview.message
             );
             let mut answer = String::new();

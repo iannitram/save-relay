@@ -31,15 +31,13 @@ and restore prune markers numerically, keeping the newest 10 through their publi
 never deleting that revision's marker or later claims, and ignoring odd names. Drive, Dropbox
 and MemoryRemote create no `rev/` paths.
 
-`save-relay repair <game>` lists marker files above the current revision. It releases only the
-exact next revision only after confirming `state.json` has not moved, and only when its named
-history entry is missing or incomplete. It keeps complete entries and later claims. Text mode
-asks before deletion; `--yes` approves, while `--json` without `--yes` is inspection only. A
-complete entry is reported and left available for a manual restore. The result is `RepairData`;
-the safe-release rules are covered by `sync::repair_tests` (#159). A server change during repair
-returns `changed_on_server` (exit 5).
-Repair is available for Nextcloud; Drive, Dropbox and MemoryRemote report “nothing to repair.”
-There is no timer-based expiry: a claim is not removed merely because it is old.
+`save-relay repair <game>` lists the claim files above the current revision `n`. It acts only on
+`rev/<n+1>`, and only after `state.json` is confirmed unchanged. Two cases:
+
+- The entry the claim names is missing or incomplete: nothing was published under it, so the claim is released.
+- The entry is complete. This is the usual crash (the push moves its entry into `history/` before it claims the revision): the entry is moved to `<game>/set-aside/rev<n+1>-<entry>`, never deleted, and then the claim is released. `state.json` is checked again after the move; if it moved, the entry goes back to `history/` and nothing is released.
+
+Claims above `n+1`, and claims whose body is not an entry name, are kept. Text mode asks before any change, and `--yes` approves. `--json` without `--yes` only reports; each marker carries `status` and, for a set-aside entry, `set_aside`. A server change during repair returns `changed_on_server` (exit 5). Repair is available for Nextcloud; Drive, Dropbox and MemoryRemote report "nothing to repair." Repair assumes no machine is pushing to that game: a writer that is still alive and has not written `state.json` can publish after its claim is released, and repair cannot stop a write that lands after its last check. There is no timer-based expiry: a claim is not removed merely because it is old. The rules are covered by `sync::repair_tests` and by `tests/repair.rs` (a push that dies at its state write, then repair, then a push; and the CLI prompt, `--json` and `--yes`), #159.
 
 ## Dropbox
 

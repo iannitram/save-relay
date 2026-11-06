@@ -157,8 +157,13 @@ pub struct RepairData {
 pub struct RepairMarker {
     pub revision: u64,
     pub entry: Option<String>,
-    /// `releasable`, `released`, `kept_complete`, `kept_later`, `unreadable`, or `skipped_state_moved`.
+    /// `releasable` (the named entry is missing or incomplete), `releasable_set_aside` (the named
+    /// entry is complete: repair would move it aside first), `released`, `set_aside` (moved aside,
+    /// then released), `kept_later` (above the next revision), `unreadable` (its body is not an
+    /// entry name), or `skipped_state_moved` (`state.json` changed, so nothing was touched).
     pub status: String,
+    /// Where a complete entry was moved to (`set_aside`), else `None`.
+    pub set_aside: Option<String>,
 }
 
 /// `data` of `restore`.
