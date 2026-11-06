@@ -1,5 +1,5 @@
 //! The one error type. Every variant has a stable `code()`, which is the `error.code` of the
-//! `--json` envelope (docs/code-map.md, API shape). Every fallible function returns it.
+//! `--json` envelope (docs/code-map.md, API shape). The `Result` alias below returns it.
 
 use std::fmt;
 
