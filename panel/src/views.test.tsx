@@ -169,6 +169,13 @@ describe("conflict view", () => {
     const buttonMatches = [...html.matchAll(/<button\b[^>]*data-focus="([^"]+)"[^>]*>/g)].map((m) => m[1]!);
     expect(buttonMatches).toEqual(["back", "keep-server", "keep-local"]);
     expect(html).toMatch(/<button[^>]*data-focus="keep-server"[\s\S]*?<button[^>]*data-focus="keep-local"/);
+    // Each card is one button that holds its own facts: the match stops at the first </button>.
+    const serverCard = html.match(/<button[^>]*data-focus="keep-server"[\s\S]*?<\/button>/)?.[0] ?? "";
+    const localCard = html.match(/<button[^>]*data-focus="keep-local"[\s\S]*?<\/button>/)?.[0] ?? "";
+    expect(serverCard).toContain("On the server");
+    expect(serverCard).toContain("Keep server");
+    expect(localCard).toContain("On this machine");
+    expect(localCard).toContain("Keep local");
     const totalButtons = (html.match(/<button/g) ?? []).length;
     expect(totalButtons).toBe(3);
   });
