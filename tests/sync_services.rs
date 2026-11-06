@@ -256,6 +256,12 @@ fn eleven_pushes_keep_ten_and_restore(r: &dyn Remote, _online: &dyn Fn(bool)) {
     let after = one.history(r);
     assert_eq!(after.entries.len(), 10);
     assert_eq!(after.current.as_deref(), Some(restored.new_entry.as_str()));
+    // These three backends keep their existing guards, on both push and restore (#149).
+    assert!(!r.needs_rev_marker());
+    assert!(matches!(
+        r.list(&layout().rev_dir(GAME)),
+        Err(Error::NotFound(_))
+    ));
 }
 
 /// M5: offline, a pull plays with the local saves and a push is deferred; once back online the

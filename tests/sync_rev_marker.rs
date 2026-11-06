@@ -9,7 +9,7 @@ use save_relay::platform::AppDirs;
 use save_relay::remote::{MemoryRemote, Precondition, Remote, RemoteEntry};
 use save_relay::stamp;
 use save_relay::state::ServerState;
-use save_relay::sync::{pull, push, Game, Session};
+use save_relay::sync::{pull, push, restore, Game, Session};
 use save_relay::{Error, Result};
 use std::cell::{Cell, RefCell};
 use std::fs;
@@ -64,7 +64,13 @@ impl Remote for CoarseEtags {
     }
 
     fn put(&self, path: &str, bytes: &[u8], pre: &Precondition) -> Result<String> {
+        if path.starts_with(&format!("{}/", layout().rev_dir(GAME))) {
+            assert_eq!(pre, &Precondition::Absent);
+        }
         if path == self.state_path {
+            let next = ServerState::from_json(std::str::from_utf8(bytes).unwrap()).unwrap();
+            let marker = layout().rev_path(GAME, &next.revision.to_string());
+            assert_eq!(self.inner.get(&marker).unwrap().0, next.entry.as_bytes());
             if self.fail_state_write.replace(false) {
                 return Err(Error::Server("state write refused".into()));
             }
@@ -265,6 +271,56 @@ fn a_failed_state_write_releases_its_revision_claim() {
     assert_eq!(pushed.action, Action::Pushed);
     assert_eq!(pushed.revision, Some(1));
     assert_eq!(state_of(&remote).revision, 1);
+}
+
+#[test]
+fn restore_claims_before_writing_and_releases_a_failed_write() {
+    let root = Root::new();
+    let remote = CoarseEtags::new();
+    let c = Machine::new(&root.0, "dev-c");
+    c.save("save one");
+    push(&c.session(&remote), &c.game, &c.store, None).unwrap();
+    let original = state_of(&remote);
+
+    remote.fail_state_write.set(true);
+    let error = restore(&c.session(&remote), &c.game, &c.store, &original.entry).unwrap_err();
+    assert!(matches!(error, Error::Server(_)), "{error:?}");
+    assert_eq!(state_of(&remote), original);
+    assert!(matches!(
+        remote.get(&layout().rev_path(GAME, "2")),
+        Err(Error::NotFound(_))
+    ));
+
+    let restored = restore(&c.session(&remote), &c.game, &c.store, &original.entry).unwrap();
+    assert_eq!(restored.revision, 2);
+    assert_eq!(state_of(&remote).entry, restored.new_entry);
+}
+
+#[test]
+fn restore_with_a_stale_read_cannot_replace_a_claimed_revision() {
+    let root = Root::new();
+    let remote = CoarseEtags::new();
+    let c = Machine::new(&root.0, "dev-c");
+    let a = Machine::new(&root.0, "dev-a");
+    c.save("save one");
+    push(&c.session(&remote), &c.game, &c.store, None).unwrap();
+    let original = state_of(&remote);
+    let stale = remote.get(&layout().state_path(GAME)).unwrap();
+    pull(&a.session(&remote), &a.game, &a.store, None, true).unwrap();
+    a.save("save two");
+    push(&a.session(&remote), &a.game, &a.store, None).unwrap();
+    let winner = state_of(&remote);
+    assert_eq!(remote.get(&layout().state_path(GAME)).unwrap().1, stale.1);
+
+    *remote.stale_state.borrow_mut() = Some(stale);
+    let error = restore(&c.session(&remote), &c.game, &c.store, &original.entry).unwrap_err();
+    assert_eq!(error, Error::Changed);
+    assert_eq!(state_of(&remote), winner);
+    assert_eq!(names(&remote, &layout().history_dir(GAME), true).len(), 2);
+    assert_eq!(
+        remote.get(&layout().rev_path(GAME, "2")).unwrap().0,
+        winner.entry.as_bytes()
+    );
 }
 
 #[test]
