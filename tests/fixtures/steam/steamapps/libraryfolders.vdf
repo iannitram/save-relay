@@ -2,10 +2,10 @@
 {
 	"0"
 	{
-		"path"		"/not/a/real/steam/library"
+		"path"		"<library>"
 		"apps"
 		{
-			"480"		"1"
+			"1000101"		"1"
 		}
 	}
 }

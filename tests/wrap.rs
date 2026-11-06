@@ -7,8 +7,8 @@
 //! The environment and the clock are process-wide, so every test takes `serial()`. The clock
 //! moves on `STEP` seconds at each reading, so a wait ends without anyone waiting for long.
 
-use save_relay::api::{InstallWrapData, WhichData, WhichSource};
-use save_relay::cli::{run_with_net, Net};
+use save_relay::api::{AnswerData, InstallWrapData, WhichData, WhichSource};
+use save_relay::cli::{run_with, run_with_net, Net};
 use save_relay::clients::ClientSet;
 use save_relay::creds::{self, CredentialStore, MemoryStore, Secret};
 use save_relay::http::{Request, Response, Transport};
@@ -26,9 +26,10 @@ use serde_json::Value;
 use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 const APP_ID: &str = "1000101";
 const GAME: &str = "steam-1000101";
@@ -46,11 +47,63 @@ static STEP: AtomicU64 = AtomicU64::new(10);
 static SERIAL: Mutex<()> = Mutex::new(());
 
 /// Takes the lock on the process-wide state and puts the clock back to T0, 10 seconds a reading.
-fn serial() -> MutexGuard<'static, ()> {
+fn serial() -> Environment {
     let guard = SERIAL.lock().unwrap_or_else(|poison| poison.into_inner());
     NOW.store(T0, Ordering::SeqCst);
     STEP.store(10, Ordering::SeqCst);
-    guard
+    let saved = [
+        "SAVE_RELAY_STEAM_DIR",
+        "SteamAppId",
+        CHILD_GATE,
+        CHILD_SAVE,
+        CHILD_SEEN,
+        CHILD_WRITE,
+    ]
+    .map(|key| (key, std::env::var_os(key)));
+    Environment {
+        saved,
+        _guard: guard,
+    }
+}
+
+struct Environment {
+    saved: [(&'static str, Option<std::ffi::OsString>); 6],
+    _guard: MutexGuard<'static, ()>,
+}
+
+impl Drop for Environment {
+    fn drop(&mut self) {
+        for (key, value) in &self.saved {
+            match value {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+        }
+    }
+}
+
+// Kill and reap even when a timeout or an assertion unwinds the test.
+struct RunningChild(Option<Child>);
+
+impl Drop for RunningChild {
+    fn drop(&mut self) {
+        if let Some(child) = self.0.as_mut() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+fn bounded_output(command: &mut Command) -> Output {
+    let mut child = RunningChild(Some(command.spawn().expect("start fixture process")));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if child.0.as_mut().unwrap().try_wait().unwrap().is_some() {
+            return child.0.take().unwrap().wait_with_output().unwrap();
+        }
+        assert!(Instant::now() < deadline, "fixture process timed out");
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 fn clock() -> u64 {
@@ -70,8 +123,17 @@ const NOTHING: &str = "<nothing>";
 #[test]
 #[ignore = "run as a child process by the tests in this file"]
 fn child_game() {
-    if std::env::var_os(CHILD_GATE).is_none() {
-        return;
+    match std::env::var(CHILD_GATE).as_deref() {
+        Ok("worker") => {}
+        Ok("1") => {
+            let output = bounded_output(
+                Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", "child_game", "--ignored"])
+                    .env(CHILD_GATE, "worker"),
+            );
+            std::process::exit(output.status.code().unwrap_or(1));
+        }
+        _ => return,
     }
     let save = std::env::var(CHILD_SAVE).expect("the save path");
     let seen = std::env::var(CHILD_SEEN).expect("the notes path");
@@ -168,6 +230,11 @@ impl Machine {
             &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/steam"),
             &steam,
         );
+        let libraries = steam.join("steamapps/libraryfolders.vdf");
+        let text = fs::read_to_string(&libraries)
+            .unwrap()
+            .replace("<library>", &steam.to_string_lossy().replace('\\', "/"));
+        fs::write(libraries, text).unwrap();
         let machine = Machine {
             root,
             vars,
@@ -287,6 +354,7 @@ fn layout() -> Layout {
 fn data<T: DeserializeOwned>(text: &str) -> T {
     let value: Value = serde_json::from_str(text.trim())
         .unwrap_or_else(|error| panic!("not one JSON envelope ({error}): {text}"));
+    assert_eq!(value["ok"], true, "{text}");
     serde_json::from_value(value["data"].clone())
         .unwrap_or_else(|error| panic!("data does not fit ({error}): {text}"))
 }
@@ -325,6 +393,8 @@ fn m12_wrap_pulls_starts_the_game_pushes_when_it_quits_and_exits_with_its_code()
     let _serial = serial();
     let base = Base::new("push");
     let remote = MemoryRemote::new();
+    let seed = Machine::new(&base.0, "seed");
+    assert_eq!(seed.wrap(&remote, Some("server save")).0, 7);
     let handheld = Machine::new(&base.0, "handheld");
 
     let (code, stdout, seen) = handheld.wrap(&remote, Some("handheld save"));
@@ -334,7 +404,7 @@ fn m12_wrap_pulls_starts_the_game_pushes_when_it_quits_and_exits_with_its_code()
         stdout, "",
         "wrap prints nothing: the game's output is the only output"
     );
-    assert_eq!(seen, NOTHING, "an empty server gave the game no save");
+    assert_eq!(seen, "server save", "pull finished before the game started");
     assert!(
         server_has_save(&remote, "handheld save"),
         "the save appeared on the server: {:?}",
@@ -388,20 +458,39 @@ fn m12_a_held_game_waits_for_an_answer_and_play_anyway_pulls_past_the_mark() {
     // One fake second per reading, and the answer comes at once: the wait stays short.
     STEP.store(1, Ordering::SeqCst);
 
-    // The panel's part: when the choice is pending, answer it (what `answer play-anyway` does).
+    // The panel's part: when the choice is pending, run `answer play-anyway --json`.
     let vars = desktop.vars.clone();
-    let answerer = std::thread::spawn(move || {
-        let store = LocalStore::new(AppDirs::from_vars(&vars));
-        for _ in 0..3000 {
-            if store.load_pending(GAME).unwrap().is_some() {
-                return pending::answer(&store, GAME, Answer::PlayAnyway).unwrap();
+    let (code, seen, choice) = std::thread::scope(|scope| {
+        let answerer = scope.spawn(move || {
+            let store = LocalStore::new(AppDirs::from_vars(&vars));
+            for _ in 0..3000 {
+                if store.load_pending(GAME).unwrap().is_some() {
+                    let mut stdout = Vec::new();
+                    let code = run_with(
+                        &["answer", GAME, "play-anyway", "--json"].map(String::from),
+                        &mut Cursor::new(Vec::<u8>::new()),
+                        &mut stdout,
+                        &MemoryRemote::new(),
+                        &MemoryStore::new(),
+                        &store,
+                        &vars,
+                        T0,
+                    );
+                    let stdout = String::from_utf8(stdout).unwrap();
+                    assert_eq!(code, 0, "{stdout}");
+                    let report: AnswerData = data(&stdout);
+                    assert_eq!(report.game, GAME);
+                    assert_eq!(report.answer, Answer::PlayAnyway);
+                    return report;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
             }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        panic!("wrap never wrote a pending choice");
+            panic!("wrap never wrote a pending choice");
+        });
+        let (code, _, seen) = desktop.wrap(&remote, Some("desktop save"));
+        let choice = answerer.join().unwrap();
+        (code, seen, choice)
     });
-    let (code, _, seen) = desktop.wrap(&remote, Some("desktop save"));
-    let choice = answerer.join().unwrap();
 
     assert_eq!(
         choice.kind,
@@ -423,7 +512,11 @@ fn m12_a_held_game_with_no_answer_in_the_wait_starts_on_the_local_saves() {
     let _serial = serial();
     let base = Base::new("no-answer");
     let remote = MemoryRemote::new();
-    handheld_wraps_first(&base, &remote);
+    let handheld = handheld_wraps_first(&base, &remote);
+    let desktop = Machine::new(&base.0, "desktop");
+    assert_eq!(desktop.wrap(&remote, None).2, "handheld save");
+    assert_eq!(handheld.wrap(&remote, Some("server newer save")).0, 7);
+    fs::write(desktop.saves_dir().join("slot1.sav"), "desktop local save").unwrap();
     let mark = Mark {
         format: presence::FORMAT,
         device: "handheld".into(),
@@ -437,20 +530,44 @@ fn m12_a_held_game_with_no_answer_in_the_wait_starts_on_the_local_saves() {
             &Precondition::Any,
         )
         .unwrap();
-    let desktop = Machine::new(&base.0, "desktop");
+    let before: Vec<_> = remote
+        .file_paths()
+        .into_iter()
+        .map(|path| {
+            let bytes = remote.read(&path).unwrap();
+            (path, bytes)
+        })
+        .collect();
     // Each reading of the clock is a minute: the 120 second wait is over after two.
     STEP.store(60, Ordering::SeqCst);
 
-    let (code, _, seen) = desktop.wrap(&remote, None);
+    let (code, _, seen) = desktop.wrap(&remote, Some("desktop save after timeout"));
 
     assert_eq!(code, 7, "the game always starts");
-    assert_eq!(seen, NOTHING, "it did not play past the mark on its own");
+    assert_eq!(
+        seen, "desktop local save",
+        "local progress survived the wait"
+    );
+    assert_eq!(remote.file_paths().len(), before.len());
+    for (path, bytes) in before {
+        assert_eq!(remote.read(&path), Some(bytes), "server changed: {path}");
+    }
+    assert_eq!(
+        fs::read_to_string(desktop.saves_dir().join("slot1.sav")).unwrap(),
+        "desktop save after timeout"
+    );
     let still = mark_on_server(&remote).expect("the handheld's mark is still there");
     assert_eq!(
         still.device, "handheld",
         "the mark never expires or is taken"
     );
-    assert_eq!(desktop.store.load_pending(GAME).unwrap(), None);
+    let choice = desktop
+        .store
+        .load_pending(GAME)
+        .unwrap()
+        .expect("exit conflict is pending");
+    assert_eq!(choice.kind, ChoiceKind::Conflict);
+    assert_eq!(choice.answer, None);
 }
 
 // ---- M13: the ludusavi data, which and install-wrap -----------------------------------------
@@ -538,6 +655,7 @@ fn m13_a_manifest_of_my_own_always_wins_over_the_ludusavi_data() {
 
 #[test]
 fn m13_install_wrap_dry_run_reports_the_launch_option_and_changes_nothing() {
+    let _serial = serial();
     let base = Base::new("install");
     let machine = Machine::new(&base.0, "handheld");
     let config = machine.steam.join("userdata/12345/config/localconfig.vdf");
@@ -545,17 +663,19 @@ fn m13_install_wrap_dry_run_reports_the_launch_option_and_changes_nothing() {
 
     // The test binary is not named save-relay, which install-wrap requires, so this runs the
     // real program.
-    let output = Command::new(env!("CARGO_BIN_EXE_save-relay"))
-        .args(["install-wrap", "--dry-run", "--json", APP_ID])
-        .env("SAVE_RELAY_STEAM_DIR", &machine.steam)
-        .env("HOME", &machine.vars.home)
-        .env("USERPROFILE", &machine.vars.home)
-        .env("APPDATA", &machine.vars.config)
-        .env("LOCALAPPDATA", &machine.vars.data)
-        .env_remove("XDG_DATA_HOME")
-        .env_remove("XDG_CONFIG_HOME")
-        .output()
-        .unwrap();
+    let output = bounded_output(
+        Command::new(env!("CARGO_BIN_EXE_save-relay"))
+            .args(["install-wrap", "--dry-run", "--json", APP_ID])
+            .env("SAVE_RELAY_STEAM_DIR", &machine.steam)
+            .env("HOME", &machine.vars.home)
+            .env("USERPROFILE", &machine.vars.home)
+            .env("APPDATA", &machine.vars.config)
+            .env("LOCALAPPDATA", &machine.vars.data)
+            .env_remove("XDG_DATA_HOME")
+            .env_remove("XDG_CONFIG_HOME")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    );
     let stdout = String::from_utf8(output.stdout).unwrap();
 
     assert_eq!(output.status.code(), Some(0), "{stdout}");
