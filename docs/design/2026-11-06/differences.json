@@ -71,7 +71,7 @@
     "title": "Games and pending lists become ListRow",
     "screens": "01, 02",
     "now": "A 2px #3a4558 outlined button 64px tall, name in 600 weight, meta at 18px, a flat brown \"Choice waiting\" pill with no edge. On 01 the focus is on the footer button.",
-    "mockup": "ListRow: `surface-raised`, `border` edge, 20px radius, 80px minimum, name in `label`, meta in `meta` and `ink-muted`, the badge as a warning pill with a `warning-border` edge. On 01 the first row has focus; on 02 the Back button.",
+    "mockup": "ListRow: `surface-raised`, `border` edge, 20px radius, 80px minimum, name in `label`, meta in `meta` and `ink-muted`, the badge as a warning pill with a `warning-border` edge. On 01 the first row has focus; on 02 the first row (celeste), as in the capture.",
     "size": "medium",
     "files": [
       "panel/src/views.tsx",
@@ -157,6 +157,27 @@
     "files": [
       "panel/src/main.tsx",
       "panel/src/app.css"
+    ]
+  },
+  {
+    "title": "Back button: inline SVG arrow icon",
+    "screens": "02 to 09",
+    "now": "The capture draws \"← Back\" as a text arrow glyph in the button label.",
+    "mockup": "The system's inline SVG arrow icon (24px, stroke in the text color, `aria-hidden`) before the word \"Back\", so it scales and aligns with the label.",
+    "size": "easy",
+    "files": [
+      "panel/src/views.tsx",
+      "panel/src/app.css"
+    ]
+  },
+  {
+    "title": "Sign-in copy: scan line and code heading",
+    "screens": "08, 09",
+    "now": "\"Scan with a phone, or open:\" above the address, and \"Code:\" in line with the code.",
+    "mockup": "\"Scan it, or open this address\" above the address, and a \"Type this code\" heading above the code. The instruction paragraph and the expiry keep the capture's wording. The titles and banner text on 03 and 04 already match the captures, so they need no row; no information was lost on 04.",
+    "size": "easy",
+    "files": [
+      "panel/src/views.tsx"
     ]
   }
 ]
