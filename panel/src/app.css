@@ -217,6 +217,12 @@ footer {
   height: 100%;
   display: block;
 }
+.qr-label {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--ink-muted);
+}
 .address {
   font-family: var(--font-mono);
   font-size: 20px;
