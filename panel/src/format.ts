@@ -1,53 +1,7 @@
-// Plain text for times and playtime.
+// Plain text for times and playtime (UTC, so a screenshot reads the same everywhere).
 
-export interface WhenClock {
-  now: Date;
-  timeZone: string;
-}
-
-let defaultClock: WhenClock | null = null;
-
-export function setWhenClock(clock: WhenClock | null): void {
-  defaultClock = clock;
-}
-
-export function when(time: string, clock?: WhenClock): string {
-  const instant = new Date(time);
-  if (Number.isNaN(instant.getTime())) {
-    return time;
-  }
-  const activeClock = clock ?? defaultClock ?? {
-    now: new Date(),
-    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-  };
-  const dateParts = (date: Date) =>
-    new Intl.DateTimeFormat("en-US", {
-      timeZone: activeClock.timeZone,
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    }).formatToParts(date);
-  const parts = (date: Date) =>
-    Object.fromEntries(dateParts(date).map(({ type, value }) => [type, value]));
-  const shown = parts(instant);
-  const today = parts(activeClock.now);
-
-  const timeParts = Object.fromEntries(
-    new Intl.DateTimeFormat("en-US", {
-      timeZone: activeClock.timeZone,
-      hour: "numeric",
-      minute: "2-digit",
-      hour12: true,
-    })
-      .formatToParts(instant)
-      .map(({ type, value }) => [type, value]),
-  );
-  const period = (timeParts.dayPeriod ?? "").toLowerCase();
-  const timeText = `${timeParts.hour}:${timeParts.minute}${period}`;
-
-  return shown.year === today.year && shown.month === today.month && shown.day === today.day
-    ? timeText
-    : `${shown.month} ${shown.day}, ${timeText}`;
+export function when(time: string): string {
+  return `${time.slice(0, 10)} ${time.slice(11, 16)} UTC`;
 }
 
 export function playtime(secs: number | null): string | null {

@@ -1,6 +1,7 @@
 // The desktop entry: `save-relay panel` opens `/?token=...`; the token comes with every call.
 // With no token (`pnpm --dir panel dev`) or `?fixtures`, the views run on the fixtures.
 
+import "./tokens.css";
 import "./app.css";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";

@@ -14,9 +14,6 @@ import statusPending from "./fixtures/status-pending.json";
 import where from "./fixtures/where.json";
 import type { Envelope } from "./api.ts";
 import type { ApiArgs, ApiCommand, Bridge } from "./bridge.ts";
-import { setWhenClock } from "./format.ts";
-
-const fixtureClock = { now: new Date("2026-11-01T00:30:00Z"), timeZone: "UTC" };
 
 function pick(command: ApiCommand, args: ApiArgs): unknown {
   switch (command) {
@@ -47,7 +44,6 @@ function pick(command: ApiCommand, args: ApiArgs): unknown {
 }
 
 export function fixtureBridge(): Bridge {
-  setWhenClock(fixtureClock);
   return {
     async call<T>(command: ApiCommand, args: ApiArgs): Promise<Envelope<T>> {
       return pick(command, args) as Envelope<T>;
