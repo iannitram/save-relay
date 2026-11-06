@@ -38,6 +38,21 @@ const css = scoped(panelTokens + panelCss)
 .save-relay-decky .row .name { min-width: 0; }
 .save-relay-decky .cards { grid-template-columns: 1fr; }
 .save-relay-decky .qr { width: 100%; max-width: 240px; height: auto; }
+.save-relay-decky h1, .save-relay-decky .title, .save-relay-decky .heading { font-size: 20px; line-height: 26px; font-weight: 700; }
+.save-relay-decky .body, .save-relay-decky .body-lg, .save-relay-decky .big, .save-relay-decky .label,
+.save-relay-decky .row .name, .save-relay-decky .btn, .save-relay-decky .dialog p { font-size: 16px; line-height: 22px; }
+.save-relay-decky .btn { min-height: 40px; }
+.save-relay-decky .meta, .save-relay-decky .row .meta, .save-relay-decky .badge,
+.save-relay-decky .qr-label, .save-relay-decky .address { font-size: 14px; line-height: 20px; }
+.save-relay-decky .code { font-size: 28px; line-height: 34px; }
+.save-relay-decky .dialog h2 { font-size: 20px; line-height: 26px; font-weight: 700; }
+.save-relay-decky .save { flex-direction: column; align-items: stretch; }
+.save-relay-decky .picture { width: 100%; height: auto; aspect-ratio: 16 / 9; }
+.save-relay-decky .scrim { padding: 8px; }
+.save-relay-decky .dialog { width: auto; max-width: 100%; padding: 12px; }
+.save-relay-decky .dialog-actions { flex-wrap: wrap; }
+.save-relay-decky .qr-box { width: 100%; height: auto; aspect-ratio: 1 / 1; }
+.save-relay-decky .row { flex-direction: column; align-items: flex-start; }
 `;
 
 /** Translate Steam's controller events to the panel's existing DOM focus controls. */

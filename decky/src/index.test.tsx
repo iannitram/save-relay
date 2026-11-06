@@ -86,7 +86,6 @@ it("loads the real panel through callable(run), navigates by controller, and rea
   expect(scopedCss).toContain("--surface: #11151b;");
   expect(scopedCss).toContain("font-size: 40px");
   expect(scopedCss).toContain("data:font/ttf;base64,");
-  expect(scopedCss).not.toContain("font-size: 16px");
   expect(scopedCss).not.toContain("font-size: 18px");
 });
 
@@ -96,14 +95,14 @@ it("shows backend errors in the shared games view", async () => {
   expect(container.querySelector('[role="alert"]')?.textContent).toBe("save-relay binary not found");
 });
 
-it("locks Game Mode style floors at >= 20px font size and >= 64px min-height", async () => {
+it("locks Game Mode style floors at >= 14px font size and >= 40px min-height (#202: the Quick Access scale)", async () => {
   await act(async () => root.render(plugin().content!));
   const scopedCss = container.querySelector("style")?.textContent ?? "";
   const fontSizes = [...scopedCss.matchAll(/font-size:\s*(\d+)px/g)].map((match) => Number(match[1]));
   expect(fontSizes.length).toBeGreaterThan(0);
-  expect(fontSizes.every((size) => size >= 20)).toBe(true);
+  expect(fontSizes.every((size) => size >= 14)).toBe(true);
 
   const minHeights = [...scopedCss.matchAll(/min-height:\s*(\d+)px/g)].map((match) => Number(match[1]));
   expect(minHeights.length).toBeGreaterThan(0);
-  expect(minHeights.every((height) => height >= 64)).toBe(true);
+  expect(minHeights.every((height) => height >= 40)).toBe(true);
 });
