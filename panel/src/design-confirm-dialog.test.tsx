@@ -131,6 +131,9 @@ describe("ConfirmDialog structure and focus (#175)", () => {
     expect(list).not.toBeNull();
     const cards = list.querySelectorAll(".save");
     expect(cards.length).toBe(history.entries.length);
+    // The list and the header behind the scrim are inert while the dialog is up
+    expect(list.hasAttribute("inert")).toBe(true);
+    expect(host.querySelector("header")!.hasAttribute("inert")).toBe(true);
   });
 
   it("has Cancel first and Restore second, with Restore primary and 24px apart", () => {
@@ -242,6 +245,76 @@ describe("ConfirmDialog structure and focus (#175)", () => {
     // Back button and list restore buttons under scrim are never focused
     const back = host.querySelector<HTMLButtonElement>('header button');
     expect(document.activeElement).not.toBe(back);
+  });
+
+  it("focus that lands behind the dialog is pulled back into it", async () => {
+    act(() => {
+      root.render(
+        <TimelineView
+          history={history}
+          pictureUrl={() => null}
+          confirm={e1}
+          error={null}
+          notice={null}
+          onAsk={noop}
+          onConfirm={noop}
+          onCancel={noop}
+          onBack={noop}
+        />,
+      );
+    });
+
+    const cancel = host.querySelector<HTMLButtonElement>('button[data-focus="cancel"]')!;
+    const restore = host.querySelector<HTMLButtonElement>('button[data-focus="confirm"]')!;
+    const back = host.querySelector<HTMLButtonElement>("header button")!;
+    pressKey(cancel, "ArrowDown");
+    expect(document.activeElement).toBe(restore);
+
+    // Focus lands on the Back button behind the scrim (the user has moved focus already)
+    act(() => back.focus());
+    expect(document.activeElement).toBe(back);
+
+    // A DOM change in the view makes the scope check focus again
+    const list = host.querySelector<HTMLUListElement>("ul.list")!;
+    await act(async () => {
+      list.appendChild(document.createElement("li"));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(document.activeElement).toBe(cancel);
+    list.lastElementChild?.remove();
+  });
+
+  it("Shift+Tab with focus on the scrim goes to the last control, Tab to the first", () => {
+    act(() => {
+      root.render(
+        <TimelineView
+          history={history}
+          pictureUrl={() => null}
+          confirm={e1}
+          error={null}
+          notice={null}
+          onAsk={noop}
+          onConfirm={noop}
+          onCancel={noop}
+          onBack={noop}
+        />,
+      );
+    });
+
+    const dialog = host.querySelector<HTMLElement>('[role="dialog"]')!;
+    const cancel = dialog.querySelector<HTMLButtonElement>('button[data-focus="cancel"]')!;
+    const restore = dialog.querySelector<HTMLButtonElement>('button[data-focus="confirm"]')!;
+
+    // A click on the scrim leaves focus on <body>
+    act(() => (document.activeElement as HTMLElement).blur());
+    expect(document.activeElement).toBe(document.body);
+
+    pressKey(dialog, "Tab", true);
+    expect(document.activeElement).toBe(restore);
+
+    act(() => (document.activeElement as HTMLElement).blur());
+    pressKey(dialog, "Tab");
+    expect(document.activeElement).toBe(cancel);
   });
 
   it("Escape calls onCancel", () => {
