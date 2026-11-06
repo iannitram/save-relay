@@ -12,8 +12,8 @@
 //! so the card can carry the playtime.
 
 use crate::api::{
-    Action, Held, HistoryData, HistoryEntry, PictureData, RestoreData, Side, StatusData, SyncData,
-    SyncReport, WhereData, WhereGame,
+    Action, Held, HistoryData, HistoryEntry, PictureData, RepairData, RepairMarker, RestoreData,
+    Side, StatusData, SyncData, SyncReport, WhereData, WhereGame,
 };
 use crate::card::{self, Card, PictureKind};
 use crate::error::{Error, Result};
@@ -224,7 +224,14 @@ fn sync(
                 entry: entry.clone(),
                 files: local.files.clone(),
             };
-            write_state(s, id, revision, &entry, &next, &pre)?;
+            if let Err(error) = write_state(s, id, revision, &entry, &next, &pre) {
+                if error == Error::Changed
+                    && claim_looks_stranded(s, id, revision, &pre, state.as_ref())
+                {
+                    return Err(Error::ChangedRepair(format!("another machine changed the saves on the server meanwhile; if a revision claim was stranded, inspect it with `save-relay repair {id}`")));
+                }
+                return Err(error);
+            }
             server_entry = Some(entry.clone());
             let entries = s
                 .remote
@@ -658,6 +665,221 @@ fn status_message(would: Decision) -> String {
     }
 }
 
+#[cfg(test)]
+mod repair_tests {
+    use super::*;
+    use crate::remote::{MemoryRemote, RemoteEntry};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct MarkedRemote {
+        inner: MemoryRemote,
+        state_reads: AtomicUsize,
+        publish_on_second_read: bool,
+    }
+    impl MarkedRemote {
+        fn new() -> Self {
+            Self {
+                inner: MemoryRemote::new(),
+                state_reads: AtomicUsize::new(0),
+                publish_on_second_read: false,
+            }
+        }
+        fn seed(&self) {
+            for dir in ["root", "root/game", "root/game/history", "root/game/rev"] {
+                self.inner.mkcol(dir).unwrap();
+            }
+            let state = ServerState {
+                format: FORMAT,
+                game: "game".into(),
+                revision: 1,
+                device: "device".into(),
+                time: "2026-10-31T19:51:00Z".into(),
+                entry: "20261031T195100Z-device".into(),
+                files: vec![],
+            };
+            self.inner
+                .put(
+                    "root/game/state.json",
+                    state.to_json().as_bytes(),
+                    &Precondition::Absent,
+                )
+                .unwrap();
+            self.inner
+                .put(
+                    "root/game/rev/2",
+                    b"20261101T195100Z-device",
+                    &Precondition::Absent,
+                )
+                .unwrap();
+        }
+    }
+    impl Remote for MarkedRemote {
+        fn list(&self, p: &str) -> Result<Vec<RemoteEntry>> {
+            self.inner.list(p)
+        }
+        fn get(&self, p: &str) -> Result<(Vec<u8>, String)> {
+            if self.publish_on_second_read
+                && p == "root/game/state.json"
+                && self.state_reads.fetch_add(1, Ordering::SeqCst) == 1
+            {
+                let entry = "20261101T195100Z-device";
+                self.inner
+                    .mkcol(&format!("root/game/history/{entry}"))
+                    .unwrap();
+                self.inner
+                    .put(
+                        &format!("root/game/history/{entry}/{}", transfer::RECORD),
+                        b"{\"files\":[]}",
+                        &Precondition::Any,
+                    )
+                    .unwrap();
+                let next = ServerState {
+                    format: FORMAT,
+                    game: "game".into(),
+                    revision: 2,
+                    device: "device".into(),
+                    time: "2026-11-01T19:51:00Z".into(),
+                    entry: entry.into(),
+                    files: vec![],
+                };
+                self.inner
+                    .put(p, next.to_json().as_bytes(), &Precondition::Any)?;
+            }
+            self.inner.get(p)
+        }
+        fn put(&self, p: &str, b: &[u8], c: &Precondition) -> Result<String> {
+            self.inner.put(p, b, c)
+        }
+        fn mkcol(&self, p: &str) -> Result<()> {
+            self.inner.mkcol(p)
+        }
+        fn copy(&self, a: &str, b: &str) -> Result<()> {
+            self.inner.copy(a, b)
+        }
+        fn move_to(&self, a: &str, b: &str) -> Result<()> {
+            self.inner.move_to(a, b)
+        }
+        fn delete(&self, p: &str) -> Result<()> {
+            self.inner.delete(p)
+        }
+        fn needs_rev_marker(&self) -> bool {
+            true
+        }
+    }
+    fn session(remote: &dyn Remote) -> Session<'_> {
+        Session {
+            remote,
+            layout: Layout::new("root").unwrap(),
+            device: "repair-test".into(),
+            now: 1_800_000_000,
+        }
+    }
+
+    #[test]
+    fn crash_after_claim_releases_incomplete_entry_and_next_push_can_claim() {
+        let remote = MarkedRemote::new();
+        remote.seed();
+        let report = repair(&session(&remote), "game", true).unwrap();
+        assert_eq!(report.markers[0].status, "released");
+        let next = ServerState {
+            format: FORMAT,
+            game: "game".into(),
+            revision: 2,
+            device: "device".into(),
+            time: "2026-11-02T19:51:00Z".into(),
+            entry: "20261102T195100Z-device".into(),
+            files: vec![],
+        };
+        let (_, pre, _) = read_server(&session(&remote), "game").unwrap();
+        assert!(write_state(&session(&remote), "game", 2, &next.entry, &next, &pre).is_ok());
+        assert_eq!(
+            read_server(&session(&remote), "game")
+                .unwrap()
+                .0
+                .unwrap()
+                .revision,
+            2
+        );
+    }
+
+    #[test]
+    fn complete_history_entry_is_kept_and_reported() {
+        let remote = MarkedRemote::new();
+        remote.seed();
+        let entry = "20261101T195100Z-device";
+        remote
+            .inner
+            .mkcol(&format!("root/game/history/{entry}"))
+            .unwrap();
+        remote
+            .inner
+            .put(
+                &format!("root/game/history/{entry}/{}", transfer::RECORD),
+                b"{\"files\":[]}",
+                &Precondition::Any,
+            )
+            .unwrap();
+        let report = repair(&session(&remote), "game", true).unwrap();
+        assert_eq!(report.markers[0].status, "kept_complete");
+        assert!(remote.inner.get("root/game/rev/2").is_ok());
+    }
+
+    #[test]
+    fn marker_above_next_revision_is_kept() {
+        let remote = MarkedRemote::new();
+        remote.seed();
+        remote
+            .inner
+            .put("root/game/rev/3", b"incomplete", &Precondition::Absent)
+            .unwrap();
+        let report = repair(&session(&remote), "game", true).unwrap();
+        assert_eq!(
+            report
+                .markers
+                .iter()
+                .find(|m| m.revision == 3)
+                .unwrap()
+                .status,
+            "kept_later"
+        );
+        assert!(remote.inner.get("root/game/rev/3").is_ok());
+    }
+
+    #[test]
+    fn concurrent_publish_between_read_and_delete_skips_release_and_keeps_entry() {
+        let mut remote = MarkedRemote::new();
+        remote.seed();
+        remote.publish_on_second_read = true;
+        let report = repair(&session(&remote), "game", true).unwrap();
+        assert_eq!(report.markers[0].status, "skipped_state_moved");
+        assert!(remote.inner.get("root/game/rev/2").is_ok());
+        assert!(remote
+            .inner
+            .get(&format!(
+                "root/game/history/20261101T195100Z-device/{}",
+                transfer::RECORD
+            ))
+            .is_ok());
+    }
+
+    #[test]
+    fn json_preview_without_yes_does_not_release_claim() {
+        let remote = MarkedRemote::new();
+        remote.seed();
+        let report = repair(&session(&remote), "game", false).unwrap();
+        assert_eq!(report.markers[0].status, "releasable");
+        assert!(remote.inner.get("root/game/rev/2").is_ok());
+    }
+
+    #[test]
+    fn memory_remote_reports_nothing_to_repair() {
+        let remote = MemoryRemote::new();
+        let result = repair(&session(&remote), "game", true).unwrap();
+        assert_eq!(result.message, "nothing to repair");
+        assert!(result.markers.is_empty());
+    }
+}
+
 fn record_sync(
     s: &Session,
     store: &LocalStore,
@@ -750,6 +972,156 @@ pub fn history(s: &Session, game: &str) -> Result<HistoryData> {
         game: game.to_string(),
         current,
         entries,
+    })
+}
+
+/// Inspect Nextcloud revision claims. A claim is eligible only when it is exactly the next
+/// revision and its named history entry is absent or incomplete. State is checked again before
+/// deletion so a published revision observed during the scan is never removed.
+pub fn repair(s: &Session, game: &str, release: bool) -> Result<RepairData> {
+    if !s.remote.needs_rev_marker() {
+        return Ok(RepairData {
+            game: game.into(),
+            revision: 0,
+            markers: vec![],
+            message: "nothing to repair".into(),
+        });
+    }
+    let (state, original_pre, reachable) = read_server(s, game)?;
+    if !reachable {
+        return Err(Error::Unreachable(format!(
+            "cannot inspect claims for {game}"
+        )));
+    }
+    let revision = state.as_ref().map_or(0, |state| state.revision);
+    let children = match s.remote.list(&s.layout.rev_dir(game)) {
+        Ok(children) => children,
+        Err(Error::NotFound(_)) => vec![],
+        Err(error) => return Err(error),
+    };
+    let mut markers = Vec::new();
+    for child in children.into_iter().filter(|child| !child.is_dir) {
+        let Some(number) = child
+            .name
+            .parse::<u64>()
+            .ok()
+            .filter(|n| *n > revision && n.to_string() == child.name)
+        else {
+            continue;
+        };
+        let entry = s
+            .remote
+            .get(&s.layout.rev_path(game, &child.name))
+            .ok()
+            .and_then(|(bytes, _)| String::from_utf8(bytes).ok())
+            .filter(|name| parse_entry_name(name).is_some());
+        let complete = match entry.as_deref() {
+            Some(name) => complete_entry(s, game, name),
+            None => false,
+        };
+        let mut status = if number != revision.saturating_add(1) {
+            "kept_later"
+        } else if entry.is_none() {
+            "unreadable"
+        } else if complete {
+            "kept_complete"
+        } else {
+            "releasable"
+        };
+        if release && number == revision.saturating_add(1) && entry.is_some() && !complete {
+            let (latest, latest_pre, _) = read_server(s, game)?;
+            if latest.as_ref().map_or(0, |state| state.revision) != revision
+                || latest.as_ref() != state.as_ref()
+                || latest_pre != original_pre
+            {
+                status = "skipped_state_moved";
+            } else {
+                match s.remote.delete(&s.layout.rev_path(game, &child.name)) {
+                    Ok(()) | Err(Error::NotFound(_)) => status = "released",
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+        markers.push(RepairMarker {
+            revision: number,
+            entry,
+            status: status.into(),
+        });
+    }
+    let message = if markers.is_empty() {
+        "nothing to repair".into()
+    } else {
+        format!(
+            "Found {} revision marker(s): {}.",
+            markers.len(),
+            markers
+                .iter()
+                .map(|m| format!(
+                    "revision {}: {}{}",
+                    m.revision,
+                    m.status,
+                    m.entry
+                        .as_ref()
+                        .map(|e| format!(" ({e})"))
+                        .unwrap_or_default()
+                ))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+    Ok(RepairData {
+        game: game.into(),
+        revision,
+        markers,
+        message,
+    })
+}
+
+fn claim_looks_stranded(
+    s: &Session,
+    game: &str,
+    number: u64,
+    original_pre: &Precondition,
+    original_state: Option<&ServerState>,
+) -> bool {
+    if !s.remote.needs_rev_marker() {
+        return false;
+    }
+    let state_revision = number.saturating_sub(1);
+    if number != state_revision.saturating_add(1) {
+        return false;
+    }
+    let Ok((latest, latest_pre, _)) = read_server(s, game) else {
+        return false;
+    };
+    if latest_pre != *original_pre || latest.as_ref() != original_state {
+        return false;
+    }
+    let Ok((bytes, _)) = s.remote.get(&s.layout.rev_path(game, &number.to_string())) else {
+        return false;
+    };
+    let Ok(entry) = String::from_utf8(bytes) else {
+        return false;
+    };
+    !complete_entry(s, game, &entry)
+}
+
+/// An entry is complete only when its file list parses and every listed file is present with
+/// the recorded hash. A card is optional and does not determine publication.
+fn complete_entry(s: &Session, game: &str, entry: &str) -> bool {
+    let dir = s.layout.entry_dir(game, entry);
+    let (record, _) = match s.remote.get(&format!("{dir}/{}", transfer::RECORD)) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    let set: SaveSet = match serde_json::from_slice(&record) {
+        Ok(set) => set,
+        Err(_) => return false,
+    };
+    set.files.iter().all(|file| {
+        s.remote
+            .get(&format!("{dir}/{}", file.path))
+            .is_ok_and(|(bytes, _)| crate::scan::hash_bytes(&bytes) == file.sha256)
     })
 }
 

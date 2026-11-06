@@ -144,6 +144,23 @@ pub struct HistoryData {
     pub entries: Vec<HistoryEntry>,
 }
 
+/// `data` of `repair`: revision claims inspected and any safe releases made.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepairData {
+    pub game: String,
+    pub revision: u64,
+    pub markers: Vec<RepairMarker>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepairMarker {
+    pub revision: u64,
+    pub entry: Option<String>,
+    /// `releasable`, `released`, `kept_complete`, `kept_later`, `unreadable`, or `skipped_state_moved`.
+    pub status: String,
+}
+
 /// `data` of `restore`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RestoreData {
@@ -356,6 +373,7 @@ pub fn exit_code(error: &Error) -> i32 {
         | Error::Server(_)
         | Error::StateInvalid(_)
         | Error::Changed
+        | Error::ChangedRepair(_)
         | Error::NotFound(_) => 5,
         Error::Io(_) => 1,
     }

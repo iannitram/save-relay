@@ -28,16 +28,13 @@ and restore prune markers numerically, keeping the newest 10 through their publi
 never deleting that revision's marker or later claims, and ignoring odd names. Drive, Dropbox
 and MemoryRemote create no `rev/` paths.
 
-**Recovery gap requiring a follow-up issue before relying on unattended recovery:** a crash
-between marker creation and the state write leaves `rev/<n+1>` while state still says `n`.
-Every later push or restore then gets `Changed`; retries and history pruning cannot free it.
-A failed marker DELETE, or a lost response to marker creation, can strand a claim the same way.
-There is no automatic expiry or recovery in #149. This is a permanent availability failure,
-not acceptable crash recovery. A follow-up must specify and test safe recovery, including a
-writer suspended mid-request and an ambiguous state-write failure. Merely deleting a marker
-after a timeout is unsafe: the original writer could resume and still pass a repeated ETag.
-Until then, manual recovery requires stopping all writers, checking `state.json` and the marker's
-history entry, and removing only an unpublished next-revision marker. Published markers stay.
+`save-relay repair <game>` lists marker files above the current revision. It releases only the
+exact next revision when its named history entry is missing or incomplete and a fresh read shows
+that `state.json` still has the state observed at the start. It never releases a published entry
+or a later marker. Text mode asks before deletion; `--yes` approves, while `--json` without
+`--yes` is inspection only. A complete entry is reported and left available for a manual restore.
+Repair is available only for Nextcloud; Drive, Dropbox and MemoryRemote report “nothing to repair.”
+There is no timer-based expiry: a claim is not removed merely because it is old.
 
 ## Dropbox
 
