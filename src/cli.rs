@@ -2209,7 +2209,7 @@ fn connect(server: &str, user: &str, password: Secret) -> Result<Box<dyn Remote>
 }
 
 #[cfg(not(feature = "http"))]
-fn connect(server: &str, user: &str, password: Secret) -> Result<Box<dyn Remote>> {
+fn connect(server: &str, user: &str, _password: Secret) -> Result<Box<dyn Remote>> {
     webdav::files_url(server, user)?;
     Err(Error::Io("this build has no network support".into()))
 }

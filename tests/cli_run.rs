@@ -688,7 +688,7 @@ fn a_parse_error_under_json_is_an_envelope() {
 }
 
 #[test]
-fn help_and_version_and_commands_not_built_yet() {
+fn help_and_version_and_commands() {
     let remote = Arc::new(MemoryRemote::new());
     let machine = Machine::new(&remote);
 
