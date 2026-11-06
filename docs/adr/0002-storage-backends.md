@@ -18,7 +18,10 @@ The service is chosen once per machine at setup (`save-relay setup --service nex
 
 ## Nextcloud revision markers (#149)
 
-Nextcloud can repeat an ETag for same-second, same-size writes. Before either push or restore
+A WebDAV server's ETag can repeat for same-second, same-size writes (an ETag built from the
+modification time in whole seconds and the size). Nextcloud 33 does not do this: every write gets
+a fresh ETag, so there `If-Match` alone already refuses a stale push. The claim guards any WebDAV
+server whose ETag can repeat, and costs one small file per revision on Nextcloud. Before either push or restore
 writes revision `n+1` to `state.json`, the engine creates `<game>/rev/<n+1>` with
 `Precondition::Absent` (`If-None-Match: *`); its body is the new history entry's name. A refused
 create is `Error::Changed` (exit 3), and the losing entry is removed. The state write still uses
@@ -35,7 +38,7 @@ A failed marker DELETE, or a lost response to marker creation, can strand a clai
 There is no automatic expiry or recovery in #149. This is a permanent availability failure,
 not acceptable crash recovery. A follow-up must specify and test safe recovery, including a
 writer suspended mid-request and an ambiguous state-write failure. Merely deleting a marker
-after a timeout is unsafe: the original writer could resume and still pass a repeated ETag.
+after a timeout is unsafe: the original writer could resume and still pass an ETag that repeats on such a server.
 Until then, manual recovery requires stopping all writers, checking `state.json` and the marker's
 history entry, and removing only an unpublished next-revision marker. Published markers stay.
 

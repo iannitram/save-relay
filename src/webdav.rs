@@ -442,7 +442,9 @@ impl crate::remote::Remote for WebDav {
         self.send("DELETE", path, &[], vec![], &[200, 204])?;
         Ok(())
     }
-    /// Nextcloud's etag repeats for two writes in one second with one size (#149).
+    /// A WebDAV server's etag can repeat for two writes in one second with one size, so this guard
+    /// does not rely on `If-Match` alone (#149). Nextcloud 33 gives every write a fresh etag, so
+    /// there `If-Match` alone already refuses a stale push; the claim is an extra guard.
     fn needs_rev_marker(&self) -> bool {
         true
     }

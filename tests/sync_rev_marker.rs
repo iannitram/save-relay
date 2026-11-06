@@ -1,6 +1,6 @@
-//! Tests for #149: a push on a backend whose etag can repeat (Nextcloud) claims its revision with
-//! `rev/<n>` before it writes `state.json`, and the claims are pruned with the history.
-//! `CoarseEtags` stands in for that server: its etag is the write's second and its size.
+//! Tests for #149: a push on a backend whose etag can repeat (a WebDAV server; not Nextcloud 33)
+//! claims its revision with `rev/<n>` before it writes `state.json`, and the claims are pruned with the history.
+//! `CoarseEtags` stands in for a server whose etag can repeat: its etag is the write's second and its size.
 use save_relay::api::Action;
 use save_relay::layout::{entry_name, Layout};
 use save_relay::local::LocalStore;
@@ -20,7 +20,7 @@ const NOW: u64 = 1_793_476_260;
 const GAME: &str = "fixture";
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 
-/// A server whose etag is Nextcloud's: the write's second and its size. Every write in these tests
+/// A stand-in for a server whose etag can repeat: the write's second and its size. Every write in these tests
 /// is made in `NOW`'s second.
 struct CoarseEtags {
     inner: MemoryRemote,
@@ -74,7 +74,7 @@ impl Remote for CoarseEtags {
             if self.fail_state_write.replace(false) {
                 return Err(Error::Server("state write refused".into()));
             }
-            // `Match` compares the coarse etag, as Nextcloud's `If-Match` does.
+            // `Match` compares the coarse etag, as `If-Match` does on such a server.
             if let Precondition::Match(etag) = pre {
                 match self.inner.get(path) {
                     Ok((current, _)) if Self::etag(&current) == *etag => {}
