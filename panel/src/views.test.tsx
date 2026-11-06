@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import type { ReactElement, ReactNode } from "react";
 import { isValidElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { nextFocus } from "./focus.ts";
 import { setWhenClock } from "./format.ts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { choose, restore, signIn } from "./actions.ts";
@@ -160,6 +161,65 @@ describe("conflict view", () => {
       ["answer", { game: "hades", answer: "keep-server" }],
       ["answer", { game: "hades", answer: "keep-local" }],
     ]);
+  });
+
+  it("renders two card buttons in server-then-local order with no nested buttons", () => {
+    const view = <ConflictView choice={conflict} error={null} notice={null} onAnswer={noop} onBack={noop} />;
+    const html = renderToStaticMarkup(view);
+    const buttonMatches = [...html.matchAll(/<button\b[^>]*data-focus="([^"]+)"[^>]*>/g)].map((m) => m[1]!);
+    expect(buttonMatches).toEqual(["back", "keep-server", "keep-local"]);
+    expect(html).toMatch(/<button[^>]*data-focus="keep-server"[\s\S]*?<button[^>]*data-focus="keep-local"/);
+    const totalButtons = (html.match(/<button/g) ?? []).length;
+    expect(totalButtons).toBe(3);
+  });
+
+  it("renders facts inside each card in exact order: eyebrow, place, device/time, playtime, revision, action", () => {
+    const view = <ConflictView choice={conflict} error={null} notice={null} onAnswer={noop} onBack={noop} />;
+    const html = renderToStaticMarkup(view);
+
+    expect(html).toMatch(
+      /data-focus="keep-server"[\s\S]*?On the server[\s\S]*?Chapter 7: The Summit[\s\S]*?steam-deck · Oct 31, 7:51pm[\s\S]*?Played 1 h 12 min[\s\S]*?Revision 7[\s\S]*?Keep server/,
+    );
+    expect(html).toMatch(
+      /data-focus="keep-local"[\s\S]*?On this machine[\s\S]*?No place recorded[\s\S]*?amd-handheld · Oct 31, 8:40pm[\s\S]*?Revision 6[\s\S]*?Keep local/,
+    );
+
+    expect(html).toContain('class="choice-place ds-choice-place">Chapter 7: The Summit<');
+    expect(html).toContain('class="choice-place ds-choice-place">No place recorded<');
+    expect(html).toMatch(/class="btn btn-primary ds-btn ds-btn-primary">Keep server<\/span>/);
+    expect(html).toMatch(/class="btn btn-primary ds-btn ds-btn-primary">Keep local<\/span>/);
+  });
+
+  it("has no footer", () => {
+    const view = <ConflictView choice={conflict} error={null} notice={null} onAnswer={noop} onBack={noop} />;
+    const html = renderToStaticMarkup(view);
+    expect(html).not.toContain("<footer");
+  });
+
+  it("answers keep_server or keep_local when each card is pressed", () => {
+    const answers: Answer[] = [];
+    const view = <ConflictView choice={conflict} error={null} notice={null} onAnswer={(a) => answers.push(a)} onBack={noop} />;
+    press(view, "keep-server");
+    expect(answers).toEqual(["keep_server"]);
+    press(view, "keep-local");
+    expect(answers).toEqual(["keep_server", "keep_local"]);
+  });
+
+  it("keeps the first focus on Back and navigates between cards and back with D-pad", () => {
+    const view = ConflictView({ choice: conflict, error: null, notice: null, onAnswer: noop, onBack: noop }) as ReactElement<any>;
+    expect(view.type).toBe(Screen);
+    expect(view.props.initial).toBeUndefined();
+    const html = renderToStaticMarkup(view);
+    const focusIds = [...html.matchAll(/data-focus="([^"]+)"/g)].map((m) => m[1]!);
+    expect(focusIds[0]).toBe("back");
+
+    expect(nextFocus(focusIds, "keep-server", "ArrowRight")).toEqual({ focus: "keep-local" });
+    expect(nextFocus(focusIds, "keep-local", "ArrowLeft")).toEqual({ focus: "keep-server" });
+
+    expect(nextFocus(focusIds, "keep-server", "ArrowUp")).toEqual({ focus: "back" });
+    const fromLocalUp = nextFocus(focusIds, "keep-local", "ArrowUp");
+    expect(fromLocalUp).toEqual({ focus: "keep-server" });
+    expect(nextFocus(focusIds, (fromLocalUp as { focus: string }).focus, "ArrowUp")).toEqual({ focus: "back" });
   });
 });
 

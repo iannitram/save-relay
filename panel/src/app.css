@@ -160,7 +160,68 @@ footer {
 .cards {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 24px;
+  gap: var(--space-5);
+}
+.choice-card,
+.ds-choice-card {
+  font: inherit;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-5);
+  text-align: left;
+  color: var(--ink);
+  background: var(--surface-raised);
+  border: 2px solid var(--border);
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+}
+.choice-card:focus,
+.ds-choice-card:focus {
+  outline: none;
+}
+.choice-card:focus-visible,
+.choice-card[data-focused],
+.ds-choice-card:focus-visible,
+.ds-choice-card[data-focused] {
+  outline: 6px solid var(--focus);
+  outline-offset: 4px;
+  background: var(--surface-focus);
+}
+.choice-eyebrow,
+.ds-choice-eyebrow {
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 700;
+  color: var(--ink-muted);
+  margin: 0;
+}
+.choice-place,
+.ds-choice-place {
+  font-size: 30px;
+  line-height: 38px;
+  font-weight: 700;
+  margin: 0;
+}
+.choice-facts,
+.ds-choice-facts {
+  font-size: 20px;
+  line-height: 28px;
+  color: var(--ink-muted);
+  margin: 0;
+}
+.choice-action,
+.ds-choice-action {
+  margin-top: var(--space-4);
+  align-self: stretch;
+}
+.choice-action .btn,
+.choice-action .ds-btn,
+.ds-choice-action .btn,
+.ds-choice-action .ds-btn {
+  width: 100%;
+  box-sizing: border-box;
+  justify-content: center;
 }
 .card {
   background: var(--surface-raised);
