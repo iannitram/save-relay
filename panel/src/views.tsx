@@ -251,6 +251,7 @@ export function TimelineView(props: {
   confirm: string | null;
   error: string | null;
   notice: string | null;
+  initial?: string;
   onAsk: (entry: string) => void;
   onConfirm: () => void;
   onCancel: () => void;
@@ -281,7 +282,7 @@ export function TimelineView(props: {
     );
   }
   return (
-    <Screen title={`${history.game}: history`} onBack={props.onBack}>
+    <Screen title={`${history.game}: history`} onBack={props.onBack} initial={props.initial ?? "back"}>
       <ErrorBanner message={props.error} />
       {props.notice && <Banner tone="success">{props.notice}</Banner>}
       <ul className="list">
@@ -289,30 +290,45 @@ export function TimelineView(props: {
           const src = e.card?.picture ? props.pictureUrl(history.game, e.entry, e.card.picture) : null;
           const time = playtime(e.card?.playtime_secs ?? null);
           return (
-            <li key={e.entry} className="entry">
-              {src ? (
-                <img className="picture" src={src} alt="" />
-              ) : (
-                <div className="picture none" aria-hidden="true" />
-              )}
-              <div className="text">
-                <p className="big">{e.card?.place ?? "No card (older save)"}</p>
-                <p>
-                  {e.device} · {when(e.time)}
-                  {time ? ` · played ${time}` : ""}
-                </p>
+            <li key={e.entry}>
+              <div className="save">
+                <span className="picture">
+                  {src ? (
+                    <img src={src} alt="" />
+                  ) : (
+                    <svg className="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <rect x="3" y="4" width="18" height="16" rx="2" />
+                      <path d="M3 17 L9 11 L13 15 L16 12 L21 17" />
+                    </svg>
+                  )}
+                </span>
+                <span className="save-body">
+                  <p className="save-place body-lg">{e.card?.place ?? "No place recorded"}</p>
+                  <p className="save-facts meta">
+                    {e.device} · {when(e.time)}
+                    {time ? ` · played ${time}` : ""}
+                  </p>
+                </span>
+                <span className="save-side">
+                  {e.current ? (
+                    <span className="badge badge-success">
+                      <svg className="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                        <circle cx="12" cy="12" r="9.5" />
+                        <path d="M7.5 12.5 L10.5 15.5 L16.5 9" />
+                      </svg>
+                      Current
+                    </span>
+                  ) : (
+                    <button
+                      data-focus={`restore:${e.entry}`}
+                      className="btn"
+                      onClick={() => props.onAsk(e.entry)}
+                    >
+                      Restore
+                    </button>
+                  )}
+                </span>
               </div>
-              {e.current ? (
-                <span className="badge">Current</span>
-              ) : (
-                <button
-                  data-focus={`restore:${e.entry}`}
-                  className="btn"
-                  onClick={() => props.onAsk(e.entry)}
-                >
-                  Restore
-                </button>
-              )}
             </li>
           );
         })}

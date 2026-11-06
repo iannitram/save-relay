@@ -206,7 +206,7 @@ describe("restore", () => {
   it("lists cards newest first, an old entry without one, and no Restore on the current", () => {
     const html = renderToStaticMarkup(view(null, []));
     expect(html.indexOf("Chapter 7")).toBeLessThan(html.indexOf("Chapter 6"));
-    expect(html).toContain("No card (older save)");
+    expect(html).toContain("No place recorded");
     expect(html).toContain("Played 1 h 12 min".replace("Played", "played"));
     expect(html).toContain("Current");
     expect(html).not.toContain(`restore:${history.entries[0]!.entry}`);
