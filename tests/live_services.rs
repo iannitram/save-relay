@@ -140,22 +140,39 @@ impl Drop for Live {
 /// Deletes the test's folder on the service when the test ends, even after a failure.
 struct Cleanup<'a> {
     remote: &'a dyn Remote,
+    gate: &'a Gate,
     root: String,
 }
 
 impl Drop for Cleanup<'_> {
     fn drop(&mut self) {
-        let _ = self.remote.delete(&self.root);
+        self.gate.set(true);
+        if !matches!(
+            self.remote.delete(&self.root),
+            Ok(()) | Err(Error::NotFound(_))
+        ) {
+            if std::thread::panicking() {
+                eprintln!("live test cleanup failed; rerun to remove the test folder");
+            } else {
+                panic!("live test cleanup failed; rerun to remove the test folder");
+            }
+        }
     }
 }
 
 /// Clears a folder left by an earlier run, then guards this run's folder.
-fn fresh<'a>(remote: &'a dyn Remote, root: &str) -> Cleanup<'a> {
-    let _ = remote.delete(root);
-    Cleanup {
-        remote,
+fn fresh<'a>(live: &'a Live, root: &str) -> Cleanup<'a> {
+    assert!(root.starts_with("save-relay-live-test-") && !root.contains('/'));
+    let clean = Cleanup {
+        remote: live.remote.as_ref(),
+        gate: &live.gate,
         root: root.into(),
-    }
+    };
+    assert!(
+        matches!(clean.remote.delete(root), Ok(()) | Err(Error::NotFound(_))),
+        "cannot clear the test folder before running"
+    );
+    clean
 }
 
 /// One machine: its own config folder (the owner's config under this machine's name), its own
@@ -273,7 +290,7 @@ fn entry_saves(r: &dyn Remote, root: &str, entry: &str) -> String {
 fn contract(tag: &str, live: &Live) {
     let root = live_root(tag);
     let r: &dyn Remote = live.remote.as_ref();
-    let _clean = fresh(r, &root);
+    let _clean = fresh(live, &root);
     ensure_dir(r, &format!("{root}/c")).unwrap();
     let file = format!("{root}/c/a.txt");
     let first = r.put(&file, b"A", ANY).unwrap();
@@ -306,7 +323,7 @@ fn contract(tag: &str, live: &Live) {
 fn round_trip(tag: &str, live: &Live) {
     let root = live_root(tag);
     let r: &dyn Remote = live.remote.as_ref();
-    let _clean = fresh(r, &root);
+    let _clean = fresh(live, &root);
     let one = Machine::new(tag, "device-one", &live.config, &root);
     let two = Machine::new(tag, "device-two", &live.config, &root);
 
@@ -400,7 +417,7 @@ impl Remote for Racing<'_> {
 fn racing_pushes(tag: &str, live: &Live) {
     let root = live_root(tag);
     let r: &dyn Remote = live.remote.as_ref();
-    let _clean = fresh(r, &root);
+    let _clean = fresh(live, &root);
     let one = Machine::new(tag, "device-one", &live.config, &root);
     let two = Machine::new(tag, "device-two", &live.config, &root);
     one.write("base");
@@ -483,30 +500,15 @@ fn send(live: &Live, request: Request) -> Result<Response> {
         .send(&request.header("Authorization", &format!("Bearer {}", token.expose())))
 }
 
-/// `files.create` with the given id and no parent (My Drive), as the claim step sends it.
-fn create(live: &Live, id: &str) -> Result<Response> {
-    let body = json!({"id": id, "name": format!("save-relay-live-409-{id}")});
+/// `files.create` with the given id, confined to this test's folder.
+fn create(live: &Live, id: &str, parent: &str) -> Result<Response> {
+    let body = json!({"id": id, "name": "claim", "parents": [parent]});
     send(
         live,
         Request::new("POST", &format!("{API}/files"))
             .header("Content-Type", "application/json")
             .body(body.to_string().into_bytes()),
     )
-}
-
-/// Deletes the test's claim file when the test ends, even after a failure.
-struct Trash<'a> {
-    live: &'a Live,
-    id: String,
-}
-
-impl Drop for Trash<'_> {
-    fn drop(&mut self) {
-        let _ = send(
-            self.live,
-            Request::new("DELETE", &format!("{API}/files/{}", self.id)),
-        );
-    }
 }
 
 /// The one Drive fact the M9 guard rests on (docs/adr/0002-storage-backends.md): a second
@@ -521,6 +523,24 @@ fn gdrive_refuses_a_reused_claim_id() {
     let Some(second) = open_live(GDRIVE_VAR, Service::Gdrive) else {
         return;
     };
+    let root = live_root("gdrive-claim");
+    let _clean = fresh(&first, &root);
+    let folder = send(
+        &first,
+        Request::new("POST", &format!("{API}/files"))
+            .header("Content-Type", "application/json")
+            .body(
+                json!({"name": root, "mimeType": "application/vnd.google-apps.folder"})
+                    .to_string()
+                    .into_bytes(),
+            ),
+    )
+    .unwrap();
+    assert!((200..300).contains(&folder.status), "create test folder");
+    let parent = serde_json::from_slice::<Value>(&folder.body).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
     let ids = send(
         &first,
         Request::new(
@@ -534,23 +554,19 @@ fn gdrive_refuses_a_reused_claim_id() {
         .as_str()
         .unwrap()
         .to_string();
-    let _trash = Trash {
-        live: &first,
-        id: id.clone(),
-    };
-    let made = create(&first, &id).unwrap();
+    let made = create(&first, &id, &parent).unwrap();
     assert!(
         (200..300).contains(&made.status),
         "the first create with a fresh id answered {}",
         made.status
     );
     assert_eq!(
-        create(&second, &id).unwrap().status,
+        create(&second, &id, &parent).unwrap().status,
         409,
         "a second create with the same id, from another session, must answer 409"
     );
     assert_eq!(
-        create(&first, &id).unwrap().status,
+        create(&first, &id, &parent).unwrap().status,
         409,
         "and the same again from the first session"
     );
