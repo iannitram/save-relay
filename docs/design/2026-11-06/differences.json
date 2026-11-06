@@ -167,8 +167,9 @@
     "screens": "01-light, 05-light",
     "now": "Dark only; `color-scheme: dark` and fixed hexes.",
     "mockup": "`data-theme=\"light\"` on the root swaps every token (burnt orange ring, white raised surfaces, `#f5f3ee` page). Dark stays the default; the choice follows the system setting in the browser panel.",
-    "size": "easy",
+    "size": "medium",
     "files": [
+      "panel/src/theme.ts (new)",
       "panel/src/main.tsx",
       "panel/src/app.css"
     ]
