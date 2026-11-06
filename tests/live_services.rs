@@ -34,13 +34,16 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const GDRIVE_VAR: &str = "SAVE_RELAY_LIVE_GDRIVE_CONFIG";
 const DROPBOX_VAR: &str = "SAVE_RELAY_LIVE_DROPBOX_CONFIG";
 const GAME: &str = "fixture";
 const ANY: &Precondition = &Precondition::Any;
+// The default test harness is parallel; each sign-in must finish storing a rotated token
+// before the next scenario reads the same credential-store entry.
+static LIVE_RUN: Mutex<()> = Mutex::new(());
 
 fn now() -> u64 {
     SystemTime::now()
@@ -125,13 +128,24 @@ fn open_live(var: &str, service: Service) -> Option<Live> {
     })
 }
 
-impl Drop for Live {
-    fn drop(&mut self) {
-        // A rotated refresh token replaces the stored one, as the CLI does after a command.
+impl Live {
+    fn save_rotated(&self) -> Result<()> {
         let rotated = self.tokens.as_ref().and_then(TokenSource::rotated);
         if let Some(secret) = rotated {
-            if let Ok(account) = token_account(self.service, &self.config.user) {
-                let _ = self.creds.set(&account, &secret);
+            let account = token_account(self.service, &self.config.user)?;
+            self.creds.set(&account, &secret)?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for Live {
+    fn drop(&mut self) {
+        if self.save_rotated().is_err() {
+            if std::thread::panicking() {
+                eprintln!("could not store the rotated refresh token; setup may be needed again");
+            } else {
+                panic!("could not store the rotated refresh token; setup may be needed again");
             }
         }
     }
@@ -452,6 +466,7 @@ fn racing_pushes(tag: &str, live: &Live) {
 
 /// Runs one scenario on the service named by `var`, skipping when its config folder is unset.
 fn run(var: &str, service: Service, tag: &str, scenario: fn(&str, &Live)) {
+    let _serial = LIVE_RUN.lock().unwrap_or_else(|error| error.into_inner());
     if let Some(live) = open_live(var, service) {
         scenario(tag, &live);
     }
@@ -517,10 +532,8 @@ fn create(live: &Live, id: &str, parent: &str) -> Result<Response> {
 #[test]
 #[ignore = "live: needs SAVE_RELAY_LIVE_GDRIVE_CONFIG and the owner's Google sign-in"]
 fn gdrive_refuses_a_reused_claim_id() {
+    let _serial = LIVE_RUN.lock().unwrap_or_else(|error| error.into_inner());
     let Some(first) = open_live(GDRIVE_VAR, Service::Gdrive) else {
-        return;
-    };
-    let Some(second) = open_live(GDRIVE_VAR, Service::Gdrive) else {
         return;
     };
     let root = live_root("gdrive-claim");
@@ -560,6 +573,11 @@ fn gdrive_refuses_a_reused_claim_id() {
         "the first create with a fresh id answered {}",
         made.status
     );
+    first
+        .save_rotated()
+        .expect("store the first session's rotated token");
+    let second = open_live(GDRIVE_VAR, Service::Gdrive)
+        .expect("the second session uses the same config folder");
     assert_eq!(
         create(&second, &id, &parent).unwrap().status,
         409,
