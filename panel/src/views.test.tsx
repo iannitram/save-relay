@@ -96,25 +96,31 @@ describe("banners", () => {
   it("uses danger alerts for errors, success for notices, and info for explanatory text", () => {
     const error = renderToStaticMarkup(<ErrorBanner message="Could not save" />);
     expect(error).toContain('class="banner banner-danger" role="alert"');
+    expect(error).toMatch(/banner-danger[\s\S]*?Could not save/);
     const conflictHtml = renderToStaticMarkup(
       <ConflictView choice={conflict} error={null} notice="Saved" onAnswer={noop} onBack={noop} />,
     );
-    expect(conflictHtml).toContain('class="banner banner-success"');
-    expect(conflictHtml).toContain('class="banner banner-info"');
-    expect(conflictHtml).toContain("Nothing is overwritten until you choose.");
+    expect(conflictHtml).toMatch(/class="banner banner-success"[^>]*>[\s\S]*?Saved/);
+    expect(conflictHtml).toMatch(/class="banner banner-info"[^>]*>[\s\S]*?Nothing is overwritten until you choose\./);
   });
 
   it("uses the warning banner for held saves and info for Nextcloud", () => {
     const heldHtml = renderToStaticMarkup(
-      <HeldView game="celeste" held={held.held!} error={null} notice={null} onAnswer={noop} onBack={noop} />,
+      <HeldView game="celeste" held={held.held!} error={null} notice="Saved" onAnswer={noop} onBack={noop} />,
     );
-    expect(heldHtml).toContain('class="banner banner-warning"');
-    expect(heldHtml).toContain("Playing anyway can lose the other machine&#x27;s newest saves.");
+    expect(heldHtml).toMatch(/class="banner banner-warning"[^>]*>[\s\S]*?Open on steam-deck[\s\S]*?Playing anyway can lose the other machine&#x27;s newest saves\./);
+    expect(heldHtml).toMatch(/class="banner banner-success"[^>]*>[\s\S]*?Saved/);
     const signInHtml = renderToStaticMarkup(
       <SignInView prompt={null} error={null} onPick={noop} onBack={noop} />,
     );
-    expect(signInHtml).toContain('class="banner banner-info"');
-    expect(signInHtml).toContain("Nextcloud is set up on the command line, not here.");
+    expect(signInHtml).toMatch(/class="banner banner-info"[^>]*>[\s\S]*?Nextcloud is set up on the command line, not here\./);
+  });
+
+  it("uses the success banner for notices on timeline history", () => {
+    const timelineHtml = renderToStaticMarkup(
+      <TimelineView history={history} pictureUrl={() => null} confirm={null} error={null} notice="Restored" onAsk={noop} onConfirm={noop} onCancel={noop} onBack={noop} />,
+    );
+    expect(timelineHtml).toMatch(/class="banner banner-success"[^>]*>[\s\S]*?Restored/);
   });
 });
 

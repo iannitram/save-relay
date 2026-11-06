@@ -204,7 +204,7 @@ footer {
   margin-top: 2px;
   fill: none;
   stroke: currentColor;
-  stroke-width: 2;
+  stroke-width: 2.5;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
@@ -215,6 +215,7 @@ footer {
 .banner-title {
   font-weight: 700;
 }
+.banner-info { background: var(--info-surface); color: var(--info-ink); border-color: var(--info-border); }
 .banner-warning { background: var(--warning-surface); color: var(--warning-ink); border-color: var(--warning-border); }
 .banner-danger { background: var(--danger-surface); color: var(--danger-ink); border-color: var(--danger-border); }
 .banner-success { background: var(--success-surface); color: var(--success-ink); border-color: var(--success-border); }
