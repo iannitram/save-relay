@@ -203,10 +203,11 @@ fn same_second_same_size_push_is_refused_and_keeps_the_first_writers_bytes() {
     let b = Machine::new(&root.0, "dev-b");
 
     // C creates revision 1; A and B pull it, so both hold revision 1 and then change their saves.
+    // A's pull leaves its mark (`playing.json`), so B's pull is held unless it plays anyway.
     c.save("save one");
     push(&c.session(&remote), &c.game, &c.store, None).unwrap();
     pull(&a.session(&remote), &a.game, &a.store, None, false).unwrap();
-    pull(&b.session(&remote), &b.game, &b.store, None, false).unwrap();
+    pull(&b.session(&remote), &b.game, &b.store, None, true).unwrap();
 
     // B reads revision 1 and holds that read. A then pushes revision 2 with the same size in the
     // same second, so the etag B holds is the etag the server reports again.
