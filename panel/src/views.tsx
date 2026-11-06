@@ -175,7 +175,7 @@ export function HeldView(props: {
   onBack: () => void;
 }) {
   return (
-    <Screen title={`${props.game} is open elsewhere`} onBack={props.onBack}>
+    <Screen title={`${props.game} is open elsewhere`} onBack={props.onBack} initial="wait">
       <ErrorBanner message={props.error} />
       {props.notice && <p className="notice">{props.notice}</p>}
       <p className="big">
