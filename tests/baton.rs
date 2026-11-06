@@ -278,7 +278,13 @@ fn m11_another_machines_mark_holds_the_launch_until_it_clears_and_never_expires(
     }
     let (code, value) = s.desktop.run(
         &s.remote,
-        vec!["status".into(), GAME.into(), "--json".into()],
+        vec![
+            "status".into(),
+            GAME.into(),
+            "--saves-dir".into(),
+            s.desktop.saves.to_string_lossy().into_owned(),
+            "--json".into(),
+        ],
         T0 + 600,
     );
     assert_eq!(code, 0);
@@ -309,7 +315,13 @@ fn m11_another_machines_mark_holds_the_launch_until_it_clears_and_never_expires(
     );
     let (code, value) = s.desktop.run(
         &s.remote,
-        vec!["status".into(), GAME.into(), "--json".into()],
+        vec![
+            "status".into(),
+            GAME.into(),
+            "--saves-dir".into(),
+            s.desktop.saves.to_string_lossy().into_owned(),
+            "--json".into(),
+        ],
         T0 + 41 * DAY + 1,
     );
     assert_eq!(code, 0);

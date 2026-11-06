@@ -16,7 +16,7 @@ use save_relay::layout::Layout;
 use save_relay::local::{Config, GameRecord, LocalStore};
 use save_relay::ludusavi;
 use save_relay::manifest::Manifest;
-use save_relay::pending::{self, Answer, ChoiceKind};
+use save_relay::pending::{Answer, ChoiceKind};
 use save_relay::platform::{AppDirs, PathVars};
 use save_relay::presence::{self, Mark};
 use save_relay::remote::{MemoryRemote, Precondition, Remote};
