@@ -126,6 +126,43 @@ export function GamesView(props: {
   );
 }
 
+export function ChoiceCard(props: {
+  focus: "keep-server" | "keep-local";
+  eyebrow: string;
+  action: string;
+  side: Side | null;
+  card: Card | null;
+  onPick: () => void;
+}) {
+  const { side, card } = props;
+  const time = playtime(card?.playtime_secs ?? null);
+  return (
+    <button
+      type="button"
+      data-focus={props.focus}
+      className="choice-card ds-choice-card"
+      onClick={props.onPick}
+    >
+      <p className="choice-eyebrow ds-choice-eyebrow">{props.eyebrow}</p>
+      <p className="choice-place ds-choice-place">{card?.place ?? "No place recorded"}</p>
+      {side ? (
+        <p className="choice-facts ds-choice-facts">
+          {side.device} · {when(side.time)}
+        </p>
+      ) : (
+        <p className="choice-facts ds-choice-facts">No saves.</p>
+      )}
+      {time && <p className="choice-facts ds-choice-facts">Played {time}</p>}
+      {side?.revision !== null && side?.revision !== undefined && (
+        <p className="choice-facts ds-choice-facts">Revision {side.revision}</p>
+      )}
+      <span className="choice-action ds-choice-action">
+        <span className="btn btn-primary ds-btn ds-btn-primary">{props.action}</span>
+      </span>
+    </button>
+  );
+}
+
 export function CardView(props: { title: string; side: Side | null; card: Card | null }) {
   const { side, card } = props;
   const time = playtime(card?.playtime_secs ?? null);
@@ -161,26 +198,24 @@ export function ConflictView(props: {
       <ErrorBanner message={props.error} />
       {props.notice && <Banner tone="success">{props.notice}</Banner>}
       <Banner tone="info">Both this machine and the server changed. Nothing is overwritten until you choose.</Banner>
-      <div className="cards">
-        <CardView title="On the server" side={choice.server} card={choice.server_card} />
-        <CardView title="On this machine" side={choice.local} card={choice.local_card} />
+      <div className="cards choice ds-choice" role="group">
+        <ChoiceCard
+          focus="keep-server"
+          eyebrow="On the server"
+          action="Keep server"
+          side={choice.server}
+          card={choice.server_card}
+          onPick={() => props.onAnswer("keep_server")}
+        />
+        <ChoiceCard
+          focus="keep-local"
+          eyebrow="On this machine"
+          action="Keep local"
+          side={choice.local}
+          card={choice.local_card}
+          onPick={() => props.onAnswer("keep_local")}
+        />
       </div>
-      <footer>
-        <button
-          data-focus="keep-server"
-          className="btn"
-          onClick={() => props.onAnswer("keep_server")}
-        >
-          Keep server
-        </button>
-        <button
-          data-focus="keep-local"
-          className="btn"
-          onClick={() => props.onAnswer("keep_local")}
-        >
-          Keep local
-        </button>
-      </footer>
     </Screen>
   );
 }
