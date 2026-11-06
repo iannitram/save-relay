@@ -853,6 +853,21 @@ fn same_second_same_size_push_is_refused_by_the_revision_claim() {
         }
     }
 
+    // Clean up on success, retry and assertion failure. Each retry also starts with fresh
+    // local stores, so its first push cannot inherit LastSynced from a different server folder.
+    struct Cleanup<'a> {
+        remote: &'a dyn Remote,
+        folder: String,
+        local: PathBuf,
+    }
+
+    impl Drop for Cleanup<'_> {
+        fn drop(&mut self) {
+            let _ = self.remote.delete(&self.folder);
+            let _ = fs::remove_dir_all(&self.local);
+        }
+    }
+
     fn session<'a>(remote: &'a dyn Remote, layout: &Layout, device: &str, now: u64) -> Session<'a> {
         Session {
             remote,
@@ -904,6 +919,11 @@ fn same_second_same_size_push_is_refused_by_the_revision_claim() {
             .unwrap()
             .as_secs();
         let folder = server_folder(&format!("same{attempt}"));
+        let _cleanup = Cleanup {
+            remote: &dav,
+            folder: folder.clone(),
+            local: local.clone(),
+        };
         let layout = Layout::new(&folder).unwrap();
         let state = layout.state_path("fixture");
 
@@ -931,7 +951,7 @@ fn same_second_same_size_push_is_refused_by_the_revision_claim() {
             &game_b,
             &store_b,
             None,
-            false,
+            true,
         )
         .unwrap();
 
@@ -947,7 +967,6 @@ fn same_second_same_size_push_is_refused_by_the_revision_claim() {
         .unwrap();
         if dav.get(&state).unwrap().1 != read_by_b.1 {
             // Not one second and one size: the etags differ, so this attempt proves nothing.
-            let _ = dav.delete(&folder);
             continue;
         }
 
@@ -988,11 +1007,9 @@ fn same_second_same_size_push_is_refused_by_the_revision_claim() {
             .get(&format!("{}/a.sav", layout.entry_dir("fixture", &a_entry)))
             .unwrap();
         assert_eq!(kept, b"save two");
-        let _ = dav.delete(&folder);
         proved = true;
         break;
     }
-    let _ = fs::remove_dir_all(&local);
     assert!(
         proved,
         "no attempt wrote two revisions in one second with one size"
