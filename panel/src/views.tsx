@@ -360,12 +360,13 @@ export function SignInView(props: {
           <QrCode text={prompt.url} />
         </div>
         <div>
-          <p>Scan with a phone, or open:</p>
+          <p className="qr-label">Scan it, or open this address</p>
           <p className="address">{prompt.url}</p>
           {prompt.code && (
-            <p>
-              Code: <strong className="code">{prompt.code}</strong>
-            </p>
+            <>
+              <p className="qr-label">Type this code</p>
+              <p className="code">{prompt.code}</p>
+            </>
           )}
           <p className="meta">{prompt.message}</p>
           <p className="meta">Expires {when(prompt.expires_at)}.</p>
