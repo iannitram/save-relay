@@ -4,7 +4,9 @@
 //! folders and credential store. The clock is the `now` each call is given, so no test waits.
 //! The card's place and picture come from the fixture sidecar in `tests/fixtures/sidecar/`.
 
-use save_relay::api::{Action, HistoryData, PictureData, SyncReport, WhereData, WhereGame};
+use save_relay::api::{
+    Action, HistoryData, PictureData, StatusData, SyncReport, WhereData, WhereGame,
+};
 use save_relay::card::SIDECAR;
 use save_relay::cli::run_with;
 use save_relay::creds::{self, CredentialStore, MemoryStore, Secret};
@@ -101,6 +103,8 @@ impl Machine {
         let text = String::from_utf8(stdout).unwrap();
         let value: Value = serde_json::from_str(text.trim())
             .unwrap_or_else(|error| panic!("not one JSON envelope ({error}): {text}"));
+        assert_eq!(value["ok"], true, "{value}");
+        assert_eq!(value["command"], args[0], "{value}");
         (code, value)
     }
 
@@ -143,6 +147,12 @@ impl Machine {
         let args = vec!["history".into(), GAME.to_string(), "--json".into()];
         let (code, value) = self.run(remote, args, now);
         assert_eq!(code, 0, "{value}");
+        for entry in value["data"]["entries"].as_array().unwrap() {
+            assert!(
+                entry.get("card").is_some(),
+                "card must be present, even when null: {entry}"
+            );
+        }
         data(&value)
     }
 
@@ -237,16 +247,43 @@ fn m11_pull_marks_the_game_open_on_this_machine_and_push_clears_the_mark() {
 #[test]
 fn m11_another_machines_mark_holds_the_launch_until_it_clears_and_never_expires() {
     let s = Scene::new("held");
+    s.handheld.play("previous save");
+    s.handheld.sync(&s.remote, "push", &[], T0 - 60);
+    s.desktop.sync(&s.remote, "pull", &[], T0 - 50);
+    s.desktop.sync(&s.remote, "push", &[], T0 - 40);
     s.handheld.sync(&s.remote, "pull", &[], T0);
+    let last = s.desktop.store.load_last(GAME).unwrap();
+    let before: Vec<_> = s
+        .remote
+        .file_paths()
+        .into_iter()
+        .map(|path| {
+            let bytes = s.remote.read(&path).unwrap();
+            (path, bytes)
+        })
+        .collect();
 
     // The desktop presses Play: held, exit 6, and nothing was touched.
     let (code, held) = s.desktop.sync(&s.remote, "pull", &[], T0 + 600);
     assert_eq!(code, 6, "held is exit 6");
     assert_eq!(held.sync.action, Action::Held);
-    let by = held.held.expect("who and since");
+    let by = held.held.as_ref().expect("who and since");
     assert_eq!(by.device, "handheld");
     assert_eq!(by.since, stamp::rfc3339(T0));
-    assert_eq!(s.desktop.save(), "");
+    assert_eq!(s.desktop.save(), "previous save");
+    assert_eq!(s.desktop.store.load_last(GAME).unwrap(), last);
+    assert_eq!(s.remote.file_paths().len(), before.len());
+    for (path, bytes) in before {
+        assert_eq!(s.remote.read(&path), Some(bytes), "held touched {path}");
+    }
+    let (code, value) = s.desktop.run(
+        &s.remote,
+        vec!["status".into(), GAME.into(), "--json".into()],
+        T0 + 600,
+    );
+    assert_eq!(code, 0);
+    let status: StatusData = data(&value);
+    assert_eq!(status.held, held.held);
     let at_desktop = s.desktop.where_game(&s.remote, T0 + 601);
     assert_eq!(
         at_desktop.held.map(|held| held.device).as_deref(),
@@ -270,6 +307,13 @@ fn m11_another_machines_mark_holds_the_launch_until_it_clears_and_never_expires(
         s.desktop.where_game(&s.remote, T0 + 41 * DAY + 1).held,
         None
     );
+    let (code, value) = s.desktop.run(
+        &s.remote,
+        vec!["status".into(), GAME.into(), "--json".into()],
+        T0 + 41 * DAY + 1,
+    );
+    assert_eq!(code, 0);
+    assert_eq!(data::<StatusData>(&value).held, None);
     let (code, pulled) = s.desktop.sync(&s.remote, "pull", &[], T0 + 41 * DAY + 60);
     assert_eq!((code, pulled.sync.action), (0, Action::Pulled));
     assert_eq!(s.desktop.save(), "chapter 7 save");
@@ -440,4 +484,5 @@ fn m14_picture_writes_the_cards_picture_to_the_file_asked_for() {
     .unwrap();
     assert_eq!(fs::read(&out).unwrap(), fixture, "the sidecar's picture");
     assert_eq!(written.bytes, fixture.len() as u64);
+    assert_eq!(written.path, out.display().to_string());
 }
