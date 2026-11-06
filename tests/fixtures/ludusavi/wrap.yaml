@@ -1,0 +1,15 @@
+# Made-up games for the wrap tests, in the shape of the ludusavi-manifest data (no real titles).
+# Wrap Quest keeps saves under its install folder, and under Documents for a Windows game
+# (which on Linux is the Proton prefix's Documents).
+Wrap Quest:
+  files:
+    <base>/Saves/*.sav:
+      tags: [save]
+    <winDocuments>/WrapQuest/*.sav:
+      tags: [save]
+      when:
+        - os: windows
+  installDir:
+    WrapQuest: {}
+  steam:
+    id: 1000101
