@@ -7,6 +7,19 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";
 import { httpBridge } from "./bridge.ts";
 import { fixtureBridge, fixturePicture } from "./fixtureBridge.ts";
+import { applyTheme } from "./theme.ts";
+
+const colorScheme = typeof window !== "undefined" && typeof window.matchMedia === "function"
+  ? window.matchMedia("(prefers-color-scheme: light)")
+  : undefined;
+applyTheme(document.documentElement, Boolean(colorScheme?.matches));
+const onSystemTheme = (event: MediaQueryListEvent) => applyTheme(document.documentElement, event.matches);
+if (typeof colorScheme?.addEventListener === "function") {
+  colorScheme.addEventListener("change", onSystemTheme);
+} else {
+  // Older WebKit has only the deprecated addListener; without either, the theme stays as set above.
+  colorScheme?.addListener?.(onSystemTheme);
+}
 
 const params = new URLSearchParams(window.location.search);
 const token = params.get("token");
