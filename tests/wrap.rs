@@ -17,10 +17,11 @@ use save_relay::local::{Config, GameRecord, LocalStore};
 use save_relay::ludusavi;
 use save_relay::manifest::Manifest;
 use save_relay::pending::{Answer, ChoiceKind};
-use save_relay::platform::{AppDirs, PathVars};
+use save_relay::platform::{AppDirs, PathVars, Platform};
 use save_relay::presence::{self, Mark};
 use save_relay::remote::{MemoryRemote, Precondition, Remote};
 use save_relay::state::ServerState;
+use save_relay::steam::launch::steam_running;
 use save_relay::{stamp, Error};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -663,6 +664,10 @@ fn m13_install_wrap_dry_run_reports_the_launch_option_and_changes_nothing() {
     let machine = Machine::new(&base.0, "handheld");
     let config = machine.steam.join("userdata/12345/config/localconfig.vdf");
     let before = fs::read(&config).unwrap();
+    // On Windows the check is `tasklist`, which sees the host's real Steam (on Linux and macOS
+    // it reads pid files under the machine's own home, so it is false here). A dev PC with
+    // Steam open gets the refusal instead, which must also change nothing.
+    let steam_open = steam_running(Platform::current(), &machine.vars.home).unwrap();
 
     // The test binary is not named save-relay, which install-wrap requires, so this runs the
     // real program.
@@ -681,6 +686,13 @@ fn m13_install_wrap_dry_run_reports_the_launch_option_and_changes_nothing() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
 
+    if steam_open {
+        assert_eq!(output.status.code(), Some(2), "{stdout}");
+        assert_eq!(error_code(&stdout), "steam_running");
+        assert_eq!(fs::read(&config).unwrap(), before, "nothing was written");
+        eprintln!("Steam is running on this host: checked the refusal, not the dry run");
+        return;
+    }
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     let report: InstallWrapData = data(&stdout);
     assert!(report.dry_run);
