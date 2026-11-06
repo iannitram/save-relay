@@ -1,23 +1,10 @@
 //! The one error type. Every variant has a stable `code()`, which is the `error.code` of the
-//! `--json` envelope (docs/code-map.md, API shape). Built in the skeleton: every module uses it.
+//! `--json` envelope (docs/code-map.md, API shape). The `Result` alias below returns it.
 
 use std::fmt;
 
-/// What a stub returns, so tests and callers can tell "not built yet" apart.
-/// The string names the function.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NotBuilt(pub &'static str);
-
-impl fmt::Display for NotBuilt {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "not built yet: {}", self.0)
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
-    /// A stub (skeleton only).
-    NotBuilt(NotBuilt),
     /// The command line was wrong.
     Usage(String),
     /// A manifest failed to parse or validate.
@@ -69,7 +56,6 @@ impl Error {
     /// The stable code for `--json` output. Launchers match on these; never rename one.
     pub fn code(&self) -> &'static str {
         match self {
-            Error::NotBuilt(_) => "not_built",
             Error::Usage(_) => "usage",
             Error::ManifestInvalid(_) => "manifest_invalid",
             Error::GameUnknown(_) => "game_unknown",
@@ -96,7 +82,6 @@ impl Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Error::NotBuilt(n) => write!(f, "{n}"),
             Error::Usage(m) => write!(f, "{m}"),
             Error::ManifestInvalid(m) => write!(f, "manifest: {m}"),
             Error::GameUnknown(g) => write!(
@@ -140,20 +125,8 @@ impl fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-impl From<NotBuilt> for Error {
-    fn from(n: NotBuilt) -> Error {
-        Error::NotBuilt(n)
-    }
-}
-
 impl From<std::io::Error> for Error {
     fn from(e: std::io::Error) -> Error {
         Error::Io(e.to_string())
     }
-}
-
-/// `Err(Error::NotBuilt(..))` for a stub.
-#[allow(dead_code)]
-pub(crate) fn not_built<T>(what: &'static str) -> Result<T> {
-    Err(Error::NotBuilt(NotBuilt(what)))
 }

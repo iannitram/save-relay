@@ -336,7 +336,7 @@ pub fn exit_code_for(action: Action) -> i32 {
 /// `steam_not_found`, `steam_running`, `no_pending_choice`;
 /// 4 `not_set_up`, `auth_failed`, `credentials`, `reauth_needed`, `sign_in_failed`;
 /// 5 `server_unreachable`, `server_error`, `state_invalid`, `changed_on_server`, `not_found`;
-/// 1 anything else (`io`, `not_built`).
+/// 1 anything else (`io`).
 pub fn exit_code(error: &Error) -> i32 {
     match error {
         Error::Usage(_)
@@ -357,6 +357,6 @@ pub fn exit_code(error: &Error) -> i32 {
         | Error::StateInvalid(_)
         | Error::Changed
         | Error::NotFound(_) => 5,
-        Error::Io(_) | Error::NotBuilt(_) => 1,
+        Error::Io(_) => 1,
     }
 }

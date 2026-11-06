@@ -1,0 +1,19 @@
+"UserLocalConfigStore"
+{
+	"Software"
+	{
+		"Valve"
+		{
+			"Steam"
+			{
+				"apps"
+				{
+					"1000101"
+					{
+						"LaunchOptions"		"-windowed"
+					}
+				}
+			}
+		}
+	}
+}

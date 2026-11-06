@@ -27,7 +27,7 @@ pub struct SaveSet {
 }
 
 impl SaveSet {
-    /// Same paths with the same hashes; `mtime` is ignored. Built in the skeleton.
+    /// Same paths with the same hashes; `mtime` is ignored.
     pub fn same_content(&self, other: &SaveSet) -> bool {
         self.files.len() == other.files.len()
             && self
@@ -37,7 +37,7 @@ impl SaveSet {
                 .all(|(a, b)| a.path == b.path && a.sha256 == b.sha256)
     }
 
-    /// The newest `mtime`, or `None` for an empty set. Built in the skeleton.
+    /// The newest `mtime`, or `None` for an empty set.
     pub fn newest_mtime(&self) -> Option<u64> {
         self.files.iter().map(|f| f.mtime).max()
     }
