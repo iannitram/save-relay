@@ -67,12 +67,13 @@ p {
   font: inherit;
   font-size: 22px;
   line-height: 28px;
+  font-weight: 700;
   min-height: 64px;
-  padding: 8px 28px;
+  padding: 0 32px;
   color: var(--ink);
   background: var(--surface-raised);
-  border: 2px solid var(--border-subtle);
-  border-radius: 10px;
+  border: 2px solid var(--border);
+  border-radius: 14px;
   cursor: pointer;
 }
 /* Focus is the one thing a controller shows: a thick, high-contrast ring. `data-focused` is
@@ -83,6 +84,25 @@ p {
   outline: 6px solid var(--focus);
   outline-offset: 4px;
   background: var(--surface-focus);
+}
+.btn-primary {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--accent);
+}
+.btn-danger {
+  background: var(--danger);
+  color: var(--on-danger);
+  border-color: var(--danger);
+}
+/* The variants keep their own fill when focused; the plain button takes the focus surface. */
+.btn-primary:focus-visible,
+.btn-primary[data-focused] {
+  background: var(--accent);
+}
+.btn-danger:focus-visible,
+.btn-danger[data-focused] {
+  background: var(--danger);
 }
 .list {
   list-style: none;
