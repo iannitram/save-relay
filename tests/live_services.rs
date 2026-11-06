@@ -177,6 +177,10 @@ impl Drop for Cleanup<'_> {
 /// Clears a folder left by an earlier run, then guards this run's folder.
 fn fresh<'a>(live: &'a Live, root: &str) -> Cleanup<'a> {
     assert!(root.starts_with("save-relay-live-test-") && !root.contains('/'));
+    assert!(
+        live.config.root != root && !live.config.root.starts_with(&format!("{root}/")),
+        "the test folder must not contain the configured saves root"
+    );
     let clean = Cleanup {
         remote: live.remote.as_ref(),
         gate: &live.gate,
@@ -202,26 +206,25 @@ struct Machine {
 
 impl Machine {
     fn new(tag: &str, device: &str, config: &Config, root: &str) -> Machine {
-        let dir = env::temp_dir().join(format!("save-relay-live-{tag}-{device}"));
-        let _ = fs::remove_dir_all(&dir);
+        let dir = env::temp_dir().join(format!("save-relay-live-test-{tag}-{device}"));
+        if let Err(error) = fs::remove_dir_all(&dir) {
+            assert_eq!(
+                error.kind(),
+                std::io::ErrorKind::NotFound,
+                "clear local test folder"
+            );
+        }
         let store = LocalStore::new(AppDirs {
             config: dir.join("config"),
             data: dir.join("data"),
         });
-        store
-            .save_config(&Config {
-                device: device.into(),
-                root: root.into(),
-                ..config.clone()
-            })
-            .unwrap();
         let manifest = Manifest::from_json(
             r#"{"format":1,"id":"fixture","name":"Fixture",
                 "saves_from":"launcher","saves":{},
                 "include":["**/*.sav"],"exclude":["skip/**"]}"#,
         )
         .unwrap();
-        Machine {
+        let machine = Machine {
             game: Game {
                 manifest,
                 saves_dir: dir.join("saves"),
@@ -231,7 +234,17 @@ impl Machine {
             clock: Cell::new(now()),
             root: root.into(),
             dir,
-        }
+        };
+        // Install the drop guard before the first local write can fail.
+        machine
+            .store
+            .save_config(&Config {
+                device: device.into(),
+                root: root.into(),
+                ..config.clone()
+            })
+            .unwrap();
+        machine
     }
 
     fn tick(&self) -> u64 {
@@ -284,7 +297,15 @@ impl Machine {
 
 impl Drop for Machine {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.dir);
+        if let Err(error) = fs::remove_dir_all(&self.dir) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                if std::thread::panicking() {
+                    eprintln!("could not remove the local live test folder");
+                } else {
+                    panic!("could not remove the local live test folder");
+                }
+            }
+        }
     }
 }
 
