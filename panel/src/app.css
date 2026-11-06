@@ -80,8 +80,8 @@ p {
    press; a mouse click does not set it. */
 .btn:focus-visible,
 .btn[data-focused] {
-  outline: 5px solid var(--accent);
-  outline-offset: 3px;
+  outline: 6px solid var(--focus);
+  outline-offset: 4px;
   background: var(--surface-focus);
 }
 .list {
