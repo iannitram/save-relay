@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import type { ReactElement, ReactNode } from "react";
 import { isValidElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -17,7 +18,7 @@ import statusPending from "./fixtures/status-pending.json";
 import whereFx from "./fixtures/where.json";
 import type { Answer, Envelope, HistoryData, PendingChoice } from "./api.ts";
 import {
-  ConflictView, ErrorBanner, GamesView, HeldView, QrCode, Screen, SignInView, TimelineView,
+  Banner, ConflictView, ErrorBanner, GamesView, HeldView, QrCode, Screen, SignInView, TimelineView,
   type GameRow,
 } from "./views.tsx";
 
@@ -54,6 +55,13 @@ function press(view: ReactElement, id: string) {
   el!.props.onClick();
 }
 
+/** The markup inside every banner of one tone: the words a tone wraps, and nothing after the banner. */
+function wrapped(html: string, tone: string): string {
+  return [...html.matchAll(new RegExp(`class="banner banner-${tone}"[^>]*>([\\s\\S]*?)</div></div>`, "g"))]
+    .map((m) => m[1])
+    .join("");
+}
+
 const conflict = statusPending.data.pending as PendingChoice;
 const held = statusHeld.data.pending as PendingChoice;
 const history = historyFx.data as HistoryData;
@@ -79,6 +87,57 @@ describe("games list", () => {
     expect(html).toContain("Open on steam-deck since Oct 31, 7:12pm");
     expect(html).toContain("Choice waiting");
     expect(html).toContain("Pending choices (1)");
+  });
+});
+
+describe("banners", () => {
+  it("renders each tone as an icon and text, never a button", () => {
+    for (const tone of ["info", "warning", "danger", "success"] as const) {
+      const html = renderToStaticMarkup(<Banner tone={tone}>Message</Banner>);
+      expect(html).toContain(`banner-${tone}`);
+      expect(html).toContain('aria-hidden="true"');
+      expect(html).toContain("Message");
+      expect(html).not.toContain("<button");
+    }
+  });
+
+  it("uses danger alerts for errors, success for notices, and info for explanatory text", () => {
+    const error = renderToStaticMarkup(<ErrorBanner message="Could not save" />);
+    expect(error).toContain('class="banner banner-danger" role="alert"');
+    expect(wrapped(error, "danger")).toContain("Could not save");
+    const conflictHtml = renderToStaticMarkup(
+      <ConflictView choice={conflict} error={null} notice="Saved" onAnswer={noop} onBack={noop} />,
+    );
+    expect(wrapped(conflictHtml, "success")).toContain("Saved");
+    expect(wrapped(conflictHtml, "info")).toContain("Nothing is overwritten until you choose.");
+  });
+
+  it("uses the warning banner for held saves and info for Nextcloud", () => {
+    const heldHtml = renderToStaticMarkup(
+      <HeldView game="celeste" held={held.held!} error={null} notice="Saved" onAnswer={noop} onBack={noop} />,
+    );
+    expect(wrapped(heldHtml, "warning")).toContain("Open on steam-deck since");
+    expect(wrapped(heldHtml, "warning")).toContain("Playing anyway can lose the other machine&#x27;s newest saves.");
+    expect(wrapped(heldHtml, "success")).toContain("Saved");
+    const signInHtml = renderToStaticMarkup(
+      <SignInView prompt={null} error={null} onPick={noop} onBack={noop} />,
+    );
+    expect(wrapped(signInHtml, "info")).toContain("Nextcloud is set up on the command line, not here.");
+  });
+
+  it("uses the success banner for notices on timeline history", () => {
+    const timelineHtml = renderToStaticMarkup(
+      <TimelineView history={history} pictureUrl={() => null} confirm={null} error={null} notice="Restored" onAsk={noop} onConfirm={noop} onCancel={noop} onBack={noop} />,
+    );
+    expect(wrapped(timelineHtml, "success")).toContain("Restored");
+  });
+
+  it("styles each tone's border and the icon's 2.5 stroke in app.css", () => {
+    const css = readFileSync(new URL("./app.css", import.meta.url), "utf8");
+    expect(css).toMatch(/\.banner-icon\s*\{[^}]*stroke-width:\s*2\.5;/);
+    for (const tone of ["info", "warning", "danger", "success"]) {
+      expect(css).toMatch(new RegExp(`\\.banner-${tone}\\s*\\{[^}]*border-color:`));
+    }
   });
 });
 
