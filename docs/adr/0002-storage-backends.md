@@ -8,13 +8,39 @@ The `Remote` trait (`src/remote.rs`: list, get, put with a `Precondition`, mkcol
 
 | Backend | Module | Sign-in | Its guard for `put(state.json, Match(etag))` | etag |
 |---|---|---|---|---|
-| Nextcloud (WebDAV) | `webdav::WebDav` | app password, HTTP Basic | `If-Match` (412 is `Changed`) | the server's ETag |
+| Nextcloud (WebDAV) | `webdav::WebDav` | app password, HTTP Basic | create `rev/<n+1>` with `If-None-Match: *`, then `If-Match` on state (412 is `Changed`; #149) | the server's ETag |
 | Dropbox (HTTP API v2) | `dropbox::Dropbox` | OAuth, App folder | `files/upload` with `mode: {".tag": "update", "update": <rev>}` and `strict_conflict: true`; `mode: add` for `Absent` (409 `path/conflict` is `Changed`) | the file's `rev` |
 | Google Drive (REST v3) | `gdrive::Drive` | OAuth, `drive.file` | the claim guard below (`gdrive::guard`) | `v<version>.<claim id>` |
 
 All three send HTTP through one seam, `http::Transport`. The real transport (`http::UreqTransport`, ureq with rustls) is the only code behind a feature (`http`); the backends are plain Rust and always built. So CI tests them against in-memory fakes of the Dropbox and Drive APIs (`fake::FakeDropbox`, `fake::FakeDrive`), the M9 suite runs the same tests against every backend, and a mobile build (2.0) brings its own transport. The core keeps no platform-only dependency.
 
 The service is chosen once per machine at setup (`save-relay setup --service nextcloud|gdrive|dropbox`, or `setup` with no flag asks) and is the same on every machine (M6). It is recorded in `config.json`'s `server` field: the Nextcloud address (`https://...`), or the service key `gdrive` or `dropbox` (`service::Service::from_server`). Keeping format 1's shape means no config migration and no change to the issued locked tests. `status` and `setup` name the service in their `--json` (`service`).
+
+## Nextcloud revision markers (#149)
+
+A WebDAV server's ETag can repeat for same-second, same-size writes (an ETag built from the
+modification time in whole seconds and the size). Nextcloud 33 does not do this: every write gets
+a fresh ETag, so there `If-Match` alone already refuses a stale push. The claim guards any WebDAV
+server whose ETag can repeat, and costs one small file per revision on Nextcloud. Before either push or restore
+writes revision `n+1` to `state.json`, the engine creates `<game>/rev/<n+1>` with
+`Precondition::Absent` (`If-None-Match: *`); its body is the new history entry's name. A refused
+create is `Error::Changed` (exit 3), and the losing entry is removed. The state write still uses
+its original precondition. A reported state-write failure attempts to delete its marker; the
+complete history entry is retained unless the write was explicitly refused. Successful push
+and restore prune markers numerically, keeping the newest 10 through their published revision,
+never deleting that revision's marker or later claims, and ignoring odd names. Drive, Dropbox
+and MemoryRemote create no `rev/` paths.
+
+**Recovery gap requiring a follow-up issue before relying on unattended recovery:** a crash
+between marker creation and the state write leaves `rev/<n+1>` while state still says `n`.
+Every later push or restore then gets `Changed`; retries and history pruning cannot free it.
+A failed marker DELETE, or a lost response to marker creation, can strand a claim the same way.
+There is no automatic expiry or recovery in #149. This is a permanent availability failure,
+not acceptable crash recovery. A follow-up must specify and test safe recovery, including a
+writer suspended mid-request and an ambiguous state-write failure. Merely deleting a marker
+after a timeout is unsafe: the original writer could resume and still pass an ETag that repeats on such a server.
+Until then, manual recovery requires stopping all writers, checking `state.json` and the marker's
+history entry, and removing only an unpublished next-revision marker. Published markers stay.
 
 ## Dropbox
 
@@ -72,7 +98,7 @@ A launcher started from SteamOS Game Mode runs inside gamescope with no desktop 
 ## Why
 
 - One interface means M1-M5 behave the same on every service by construction (M9), and one test suite proves it.
-- Each service's own compare-and-swap is used where it exists (WebDAV `If-Match`, Dropbox rev); only Drive needs a guard, and its decision table is pure and tested on its own.
+- Each service's own compare-and-swap is used where it exists (Dropbox rev); WebDAV supplements `If-Match` with a create-once revision marker, and Drive uses its claim guard with a pure, separately tested decision table.
 - The transport seam keeps the network behind one feature and lets the Drive and Dropbox backends be tested in CI with no account, which agents cannot have.
 
 ## Ruled out

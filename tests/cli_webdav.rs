@@ -4,8 +4,9 @@
 //! `--password VALUE` form only (`m6_password_flags_are_refused_without_echo` lists what it does
 //! not cover). A racing push checks that Nextcloud's `If-Match` refuses a write one second later
 //! with a different size, on Linux only: rclone 1.73.5, the server the Windows and macOS legs run,
-//! ignores `If-Match` and `If-None-Match`. It does not cover a same-second, same-size write (see
-//! that test's comment). They are ignored by default, so `cargo test` needs no server. The
+//! ignores `If-Match` and `If-None-Match`. The revision claim (#149) is checked through the engine in
+//! `a_taken_revision_claim_refuses_the_push_on_nextcloud`.
+//! They are ignored by default, so `cargo test` needs no server. The
 //! `integration` job in `.github/workflows/check.yml` starts one and runs them, except the one
 //! test ignored for #148, which the job skips:
 //!
@@ -730,10 +731,9 @@ fn m7_a_second_game_joins_with_only_its_manifest() {
 
 /// The write guard, for a write one second later with a different size: a push that read its etag
 /// before another writer changed the file is refused, and the other writer's bytes stay. Linux
-/// only, because rclone (the Windows and macOS legs) ignores `If-Match`. Nextcloud's etag is built
-/// from the modification time in whole seconds and the size, so `If-Match` catches a write only
-/// when it comes in another second or with another size. A same-second, same-size write is not
-/// covered here (follow-up #149).
+/// only, because rclone (the Windows and macOS legs) ignores `If-Match`. Nextcloud 33 gives every
+/// write a fresh etag, so this proves `If-Match` alone; the revision claim (#149) is proven by
+/// `a_taken_revision_claim_refuses_the_push_on_nextcloud`.
 #[cfg(all(target_os = "linux", feature = "http"))]
 #[test]
 #[ignore = "needs a Nextcloud server: see the file comment"]
@@ -779,4 +779,164 @@ fn racing_push_one_second_later_is_refused_and_keeps_the_other_writers_bytes() {
     let (bytes, etag) = dav.get(&file).unwrap();
     assert_eq!(bytes, b"B's longer copy");
     assert_eq!(etag, theirs);
+}
+
+/// The revision claim (#149) against real Nextcloud, through the engine. Nextcloud 33 gives every
+/// write a fresh etag (its file-cache etag is a new unique id per write, not built from the
+/// modification time and the size), so a same-second, same-size write cannot be provoked on it and
+/// `If-Match` alone would refuse the stale push. This test therefore proves the claim by itself:
+/// one machine has created `rev/2` (a racing push that claimed the next revision and has not
+/// written `state.json` yet), and the second machine's push must be refused at its own claim,
+/// leave `state.json` and the first claim alone, and keep no history entry of its own. It also
+/// proves that Nextcloud answers 412 to a second `If-None-Match: *` create, and that the claim
+/// needs the `rev/` collection made first. Linux only, like the test above.
+#[cfg(all(target_os = "linux", feature = "http"))]
+#[test]
+#[ignore = "needs a Nextcloud server: see the file comment"]
+fn a_taken_revision_claim_refuses_the_push_on_nextcloud() {
+    use save_relay::creds::Secret;
+    use save_relay::http::UreqTransport;
+    use save_relay::layout::Layout;
+    use save_relay::local::LocalStore;
+    use save_relay::manifest::Manifest;
+    use save_relay::platform::AppDirs;
+    use save_relay::remote::{Precondition, Remote};
+    use save_relay::state::ServerState;
+    use save_relay::sync::{pull, push, Game, Session};
+    use save_relay::webdav::{files_url, WebDav};
+    use save_relay::Error;
+    use std::sync::Arc;
+
+    // Clean up on success and on assertion failure.
+    struct Cleanup<'a> {
+        remote: &'a WebDav,
+        folder: String,
+        local: PathBuf,
+    }
+
+    impl Drop for Cleanup<'_> {
+        fn drop(&mut self) {
+            let _ = self.remote.delete(&self.folder);
+            let _ = fs::remove_dir_all(&self.local);
+        }
+    }
+
+    fn session<'a>(remote: &'a dyn Remote, layout: &Layout, device: &str, now: u64) -> Session<'a> {
+        Session {
+            remote,
+            layout: layout.clone(),
+            device: device.into(),
+            now,
+        }
+    }
+
+    let server = Server::from_env();
+    let url = files_url(&server.url, &server.user).unwrap();
+    let dav = WebDav::new(
+        &url,
+        &server.user,
+        Secret::new(server.password.clone()),
+        Arc::new(UreqTransport::new()),
+    );
+    let local = std::env::temp_dir().join(format!("sr-claim-{}", stamp()));
+    let folder = server_folder("claim");
+    let _cleanup = Cleanup {
+        remote: &dav,
+        folder: folder.clone(),
+        local: local.clone(),
+    };
+    let layout = Layout::new(&folder).unwrap();
+    let state = layout.state_path("fixture");
+    let manifest = r#"{"format":1,"id":"fixture","name":"Fixture",
+        "saves_from":"launcher","saves":{},"include":["**/*.sav"]}"#;
+    let machine = |device: &str| -> (Game, LocalStore) {
+        let dir = local.join(device);
+        let saves_dir = dir.join("saves");
+        fs::create_dir_all(&saves_dir).unwrap();
+        (
+            Game {
+                manifest: Manifest::from_json(manifest).unwrap(),
+                saves_dir,
+            },
+            LocalStore::new(AppDirs {
+                config: dir.join("config"),
+                data: dir.join("data"),
+            }),
+        )
+    };
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    // Revision 1 from dev-c; dev-b pulls it.
+    let (game_c, store_c) = machine("dev-c");
+    let (game_b, store_b) = machine("dev-b");
+    fs::write(game_c.saves_dir.join("a.sav"), "save one").unwrap();
+    push(
+        &session(&dav, &layout, "dev-c", now),
+        &game_c,
+        &store_c,
+        None,
+    )
+    .unwrap();
+    pull(
+        &session(&dav, &layout, "dev-b", now),
+        &game_b,
+        &store_b,
+        None,
+        true,
+    )
+    .unwrap();
+    let claim_1 = dav.get(&layout.rev_path("fixture", "1")).unwrap().0;
+
+    // A racing push has claimed revision 2 and not yet written state.json.
+    let racer = b"racing-entry";
+    dav.put(
+        &layout.rev_path("fixture", "2"),
+        racer,
+        &Precondition::Absent,
+    )
+    .unwrap();
+    // The server refuses a second create of the same marker.
+    let again = dav
+        .put(
+            &layout.rev_path("fixture", "2"),
+            b"second",
+            &Precondition::Absent,
+        )
+        .unwrap_err();
+    assert!(matches!(again, Error::Changed), "{again:?}");
+
+    // dev-b's push reads revision 1, tries to claim revision 2 and is refused.
+    fs::write(game_b.saves_dir.join("a.sav"), "save bee").unwrap();
+    let error = push(
+        &session(&dav, &layout, "dev-b", now),
+        &game_b,
+        &store_b,
+        None,
+    )
+    .unwrap_err();
+    assert_eq!(error, Error::Changed);
+
+    // state.json is still revision 1 from dev-c; the racer's claim and revision 1's stay; dev-b's
+    // history entry is gone.
+    let (bytes, _) = dav.get(&state).unwrap();
+    let current = ServerState::from_json(std::str::from_utf8(&bytes).unwrap()).unwrap();
+    assert_eq!((current.revision, current.device.as_str()), (1, "dev-c"));
+    assert_eq!(dav.get(&layout.rev_path("fixture", "2")).unwrap().0, racer);
+    assert_eq!(
+        dav.get(&layout.rev_path("fixture", "1")).unwrap().0,
+        claim_1
+    );
+    let history: Vec<String> = dav
+        .list(&layout.history_dir("fixture"))
+        .unwrap()
+        .into_iter()
+        .map(|entry| entry.name)
+        .collect();
+    assert!(
+        !history.iter().any(|name| name.ends_with("-dev-b")),
+        "{history:?}"
+    );
 }
