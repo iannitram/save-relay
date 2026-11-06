@@ -29,7 +29,7 @@ export function Screen(props: {
       <header>
         {props.onBack && (
           <button data-focus="back" className="btn" onClick={props.onBack}>
-            ← Back
+            <svg className="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 12 H5" /><path d="M11 6 L5 12 L11 18" /></svg>Back
           </button>
         )}
         <h1>{props.title}</h1>
