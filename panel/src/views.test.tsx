@@ -1,6 +1,7 @@
 import type { ReactElement, ReactNode } from "react";
 import { isValidElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { setWhenClock, when } from "./format.ts";
 import { describe, expect, it } from "vitest";
 import { choose, restore, signIn } from "./actions.ts";
 import type { ApiArgs, ApiCommand, Bridge } from "./bridge.ts";
@@ -58,6 +59,20 @@ const held = statusHeld.data.pending as PendingChoice;
 const history = historyFx.data as HistoryData;
 const noop = () => undefined;
 
+setWhenClock({ now: new Date("2026-11-01T00:30:00Z"), timeZone: "UTC" });
+
+describe("when", () => {
+  it("formats today, another day, noon, midnight, and zone-dependent dates", () => {
+    const clock = { now: new Date("2026-10-31T19:12:00Z"), timeZone: "UTC" };
+    expect(when("2026-10-31T19:12:00Z", clock)).toBe("7:12pm");
+    expect(when("2026-10-30T19:12:00Z", clock)).toBe("Oct 30, 7:12pm");
+    expect(when("2026-10-31T12:00:00Z", clock)).toBe("12:00pm");
+    expect(when("2026-10-31T00:00:00Z", clock)).toBe("12:00am");
+    expect(when("2026-11-01T00:30:00Z", clock)).toBe("Nov 1, 12:30am");
+    expect(when("2026-11-01T00:30:00Z", { ...clock, timeZone: "America/Los_Angeles" })).toBe("5:30pm");
+  });
+});
+
 describe("games list", () => {
   it("shows a held game and a pending one", () => {
     const rows: GameRow[] = whereFx.data.games.map((g) => ({
@@ -67,7 +82,7 @@ describe("games list", () => {
     const html = renderToStaticMarkup(
       <GamesView games={rows} error={null} onOpen={noop} onPending={noop} onSignIn={noop} />,
     );
-    expect(html).toContain("Open on steam-deck since 2026-10-31 19:12 UTC");
+    expect(html).toContain("Open on steam-deck since Oct 31, 7:12pm");
     expect(html).toContain("Choice waiting");
     expect(html).toContain("Pending choices (1)");
   });
@@ -99,7 +114,7 @@ describe("held view", () => {
   it("offers Wait and Play anyway; a held pull answers with pull --anyway", async () => {
     const answers: Answer[] = [];
     const view = <HeldView game="celeste" held={held.held!} error={null} notice={null} onAnswer={(a) => answers.push(a)} onBack={noop} />;
-    expect(renderToStaticMarkup(view)).toContain("Open on steam-deck since 2026-10-31 19:12 UTC");
+    expect(renderToStaticMarkup(view)).toContain("Open on steam-deck since Oct 31, 7:12pm");
     press(view, "wait");
     press(view, "anyway");
     expect(answers).toEqual(["wait", "play_anyway"]);
