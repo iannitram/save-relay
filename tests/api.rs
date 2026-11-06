@@ -1,6 +1,6 @@
 use save_relay::api::{exit_code, exit_code_for, failure, success, Action, Side, SyncData};
 use save_relay::transfer::Counts;
-use save_relay::{Error, NotBuilt};
+use save_relay::Error;
 use serde_json::{json, Value};
 
 fn parsed(line: &str) -> Value {
@@ -113,7 +113,6 @@ fn error_exit_codes() {
         (Error::Changed, 5),
         (Error::NotFound(s()), 5),
         (Error::Io(s()), 1),
-        (Error::NotBuilt(NotBuilt("x")), 1),
     ];
     for (e, code) in table {
         assert_eq!(exit_code(&e), code, "{e:?}");
