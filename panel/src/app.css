@@ -130,13 +130,19 @@ p {
 }
 .row {
   width: 100%;
+  min-height: 80px;
   display: flex;
   align-items: center;
   gap: 24px;
   text-align: left;
+  background: var(--surface-raised);
+  border: 2px solid var(--border);
+  border-radius: var(--radius-lg);
 }
 .row .name {
-  font-weight: 600;
+  font-size: 22px;
+  line-height: 28px;
+  font-weight: 700;
   min-width: 220px;
 }
 .row .meta {
@@ -145,12 +151,18 @@ p {
   line-height: 28px;
 }
 .badge {
+  display: inline-flex;
+  align-items: center;
   padding: 4px 14px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
+  border: 2px solid var(--info-border);
   background: var(--warning-surface);
   color: var(--warning-ink);
   font-size: 20px;
   line-height: 28px;
+}
+.badge-warning {
+  border-color: var(--warning-border);
 }
 footer {
   display: flex;
