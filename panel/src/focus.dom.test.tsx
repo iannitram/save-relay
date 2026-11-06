@@ -6,7 +6,9 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import setupGdrive from "./fixtures/setup-gdrive.json";
 import type { SignInPrompt } from "./api.ts";
-import { Screen, SignInView } from "./views.tsx";
+import { App } from "./App.tsx";
+import { fixtureBridge } from "./fixtureBridge.ts";
+import { GamesView, Screen, SignInView, type GameRow } from "./views.tsx";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -130,5 +132,66 @@ describe("the focus ring", () => {
     press(dropbox, "ArrowUp");
     expect(focused()).toBe("gdrive");
     expect(gdrive.hasAttribute("data-focused")).toBe(true);
+  });
+});
+
+describe("views whose primary rows load late (Games)", () => {
+  const noop = () => undefined;
+  const rows: GameRow[] = [
+    { game: "celeste", held: null, server: null, pending: null },
+    { game: "hades", held: null, server: null, pending: null },
+  ];
+
+  it("moves focus to the first row once rows load", () => {
+    act(() => root.render(<GamesView games={[]} error={null} onOpen={noop} onPending={noop} onSignIn={noop} />));
+    expect(focused()).toBe("pending");
+    act(() => root.render(<GamesView games={rows} error={null} onOpen={noop} onPending={noop} onSignIn={noop} />));
+    expect(focused()).toBe("game:celeste");
+    expect(document.activeElement?.hasAttribute("data-focused")).toBe(true);
+  });
+
+  it("does not steal focus if the user moved focus first via key handling", () => {
+    act(() => root.render(<GamesView games={[]} error={null} onOpen={noop} onPending={noop} onSignIn={noop} />));
+    expect(focused()).toBe("pending");
+    press(document.activeElement!, "ArrowDown");
+    expect(focused()).toBe("signin");
+    act(() => root.render(<GamesView games={rows} error={null} onOpen={noop} onPending={noop} onSignIn={noop} />));
+    expect(focused()).toBe("signin");
+  });
+
+  it("does not steal focus if the user moved focus first via pointer", () => {
+    act(() => root.render(<GamesView games={[]} error={null} onOpen={noop} onPending={noop} onSignIn={noop} />));
+    expect(focused()).toBe("pending");
+    const signin = host.querySelector<HTMLElement>('[data-focus="signin"]')!;
+    act(() => {
+      signin.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+      signin.focus();
+    });
+    expect(focused()).toBe("signin");
+    act(() => root.render(<GamesView games={rows} error={null} onOpen={noop} onPending={noop} onSignIn={noop} />));
+    expect(focused()).toBe("signin");
+    // A key press restores keyboard ring mode
+    press(signin, "ArrowUp");
+    expect(focused()).toBe("pending");
+  });
+
+  it("focuses a row that appears late when initial names it", () => {
+    act(() => root.render(<GamesView games={[]} initial="game:celeste" error={null} onOpen={noop} onPending={noop} onSignIn={noop} />));
+    expect(focused()).toBe("pending");
+    act(() => root.render(<GamesView games={rows} initial="game:celeste" error={null} onOpen={noop} onPending={noop} onSignIn={noop} />));
+    expect(focused()).toBe("game:celeste");
+
+    act(() => root.render(<GamesView games={[]} initial="game:hades" error={null} onOpen={noop} onPending={noop} onSignIn={noop} />));
+    expect(focused()).toBe("pending");
+    act(() => root.render(<GamesView games={rows} initial="game:hades" error={null} onOpen={noop} onPending={noop} onSignIn={noop} />));
+    expect(focused()).toBe("game:hades");
+  });
+
+  it("in App with fixtures, focus lands on the first game row once rows load", async () => {
+    await act(async () => {
+      root.render(<App bridge={fixtureBridge()} />);
+    });
+    expect(focused()).toBe("game:celeste");
+    expect(document.activeElement?.hasAttribute("data-focused")).toBe(true);
   });
 });

@@ -130,27 +130,56 @@ p {
 }
 .row {
   width: 100%;
+  min-height: 80px;
+  padding: 12px 24px;
   display: flex;
   align-items: center;
   gap: 24px;
   text-align: left;
+  background: var(--surface-raised);
+  border: 2px solid var(--border);
+  border-radius: var(--radius-lg);
 }
 .row .name {
-  font-weight: 600;
+  font-size: 22px;
+  line-height: 28px;
+  font-weight: 700;
   min-width: 220px;
 }
 .row .meta {
   flex: 1;
+  color: var(--ink-muted);
   font-size: 20px;
   line-height: 28px;
 }
 .badge {
-  padding: 4px 14px;
-  border-radius: 999px;
-  background: var(--warning-surface);
-  color: var(--warning-ink);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 16px;
+  border-radius: var(--radius-pill);
+  border: 2px solid var(--info-border);
+  background: var(--info-surface);
+  color: var(--info-ink);
   font-size: 20px;
   line-height: 28px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.badge-warning {
+  background: var(--warning-surface);
+  color: var(--warning-ink);
+  border-color: var(--warning-border);
+}
+.badge-success {
+  background: var(--success-surface);
+  color: var(--success-ink);
+  border-color: var(--success-border);
+}
+.badge-danger {
+  background: var(--danger-surface);
+  color: var(--danger-ink);
+  border-color: var(--danger-border);
 }
 footer {
   display: flex;

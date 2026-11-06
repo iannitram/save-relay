@@ -101,6 +101,7 @@ export function useFocusScope(onBack: (() => void) | null, initial?: string) {
   const ref = useRef<HTMLElement>(null);
   const latest = useRef({ onBack, initial });
   latest.current = { onBack, initial };
+  const userMoved = useRef(false);
 
   const enter = (root: HTMLElement) => {
     const all = controls(root);
@@ -119,6 +120,7 @@ export function useFocusScope(onBack: (() => void) | null, initial?: string) {
       k,
     );
     if (move === null) return false;
+    userMoved.current = true;
     if (move === "back") latest.current.onBack?.();
     else focusControl(all.find((el) => el.dataset.focus === move.focus));
     return true;
@@ -134,8 +136,13 @@ export function useFocusScope(onBack: (() => void) | null, initial?: string) {
     const doc = root.ownerDocument;
     installRing(doc);
     installFallback(doc);
+    const markMoved = () => {
+      userMoved.current = true;
+    };
+    doc.addEventListener("pointerdown", markMoved, true);
+    doc.addEventListener("keydown", markMoved, true);
     const refocus = () => {
-      if (focusLost(doc)) enter(root);
+      if (focusLost(doc) || !userMoved.current) enter(root);
     };
     const observer = new MutationObserver(refocus);
     observer.observe(root, {
@@ -147,6 +154,8 @@ export function useFocusScope(onBack: (() => void) | null, initial?: string) {
     const scope = { key: (k: string) => keyRef.current(k) };
     scopes.push(scope);
     return () => {
+      doc.removeEventListener("pointerdown", markMoved, true);
+      doc.removeEventListener("keydown", markMoved, true);
       observer.disconnect();
       scopes.splice(scopes.indexOf(scope), 1);
     };
@@ -154,6 +163,7 @@ export function useFocusScope(onBack: (() => void) | null, initial?: string) {
 
   // When the view appears, or `initial` changes: focus goes in.
   useEffect(() => {
+    userMoved.current = false;
     const root = ref.current;
     if (root) enter(root);
   }, [initial]);
@@ -161,10 +171,11 @@ export function useFocusScope(onBack: (() => void) | null, initial?: string) {
   // After every render too, for changes the observer has not reported yet.
   useEffect(() => {
     const root = ref.current;
-    if (root && focusLost(root.ownerDocument)) enter(root);
+    if (root && (focusLost(root.ownerDocument) || !userMoved.current)) enter(root);
   });
 
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    userMoved.current = true;
     if (key(event.key)) event.preventDefault();
   };
   return { ref, onKeyDown };

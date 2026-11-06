@@ -18,7 +18,7 @@ import statusPending from "./fixtures/status-pending.json";
 import whereFx from "./fixtures/where.json";
 import type { Answer, Envelope, HistoryData, PendingChoice } from "./api.ts";
 import {
-  Banner, ConflictView, ErrorBanner, GamesView, HeldView, QrCode, Screen, SignInView, TimelineView,
+  Banner, ConflictView, ErrorBanner, GamesView, HeldView, PendingView, QrCode, Screen, SignInView, TimelineView,
   type GameRow,
 } from "./views.tsx";
 
@@ -84,9 +84,22 @@ describe("games list", () => {
     const html = renderToStaticMarkup(
       <GamesView games={rows} error={null} onOpen={noop} onPending={noop} onSignIn={noop} />,
     );
+    expect(html).toContain('<span class="name label">celeste</span>');
     expect(html).toContain("Open on steam-deck since Oct 31, 7:12pm");
     expect(html).toContain("Choice waiting");
+    expect(html).toContain('class="badge badge-warning"');
     expect(html).toContain("Pending choices (1)");
+    expect([...html.matchAll(/data-focus="([^"]+)"/g)][0]?.[1]).toBe("game:celeste");
+  });
+});
+
+describe("pending choices list", () => {
+  it("renders game names and metadata as ListRow label and meta", () => {
+    const html = renderToStaticMarkup(
+      <PendingView choices={[held]} onOpen={noop} onBack={noop} />,
+    );
+    expect(html).toContain('<span class="name label">celeste</span>');
+    expect(html).toContain('<span class="meta">Open on steam-deck');
   });
 });
 
