@@ -7,6 +7,7 @@ import { App } from "panel/App";
 import type { Envelope, HistoryData } from "panel/api";
 import type { ApiArgs, ApiCommand, Bridge } from "panel/bridge";
 import { deckyBridge, type RunBackend } from "./bridge.ts";
+import { pressKey } from "../../panel/src/focus.ts";
 import panelTokens from "../../panel/src/tokens.css?inline";
 import panelCss from "../../panel/src/app.css?inline";
 import atkinsonFont from "../../panel/src/fonts/AtkinsonHyperlegible-Regular.ttf?asset";
@@ -75,17 +76,14 @@ function DeckyPanel({ run, picture }: {
     const key = keys[event.detail.button];
     const container = root.current;
     if (!key || !container) return;
-    const active = container.ownerDocument.activeElement;
-    const target = active instanceof HTMLElement && container.contains(active) && active.dataset.focus
-      ? active : container.querySelector<HTMLElement>("[data-focus]:not([disabled])");
-    if (!target) return;
     event.preventDefault();
     event.stopPropagation();
-    if (key === "Enter") target.click();
-    else {
-      target.focus();
-      target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
-    }
+    if (key === "Enter") {
+      const active = container.ownerDocument.activeElement;
+      const target = active instanceof HTMLElement && container.contains(active) && active.dataset.focus
+        ? active : container.querySelector<HTMLElement>("[data-focus]:not([disabled])");
+      target?.click();
+    } else pressKey(key);
   };
   return (
     <Focusable className="save-relay-decky" ref={root} onButtonDown={button}>

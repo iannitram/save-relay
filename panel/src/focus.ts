@@ -81,6 +81,11 @@ function installRing(doc: Document) {
 
 // The views showing, newest last. A key pressed while focus is on <body> goes to the newest.
 const scopes: { key: (key: string) => boolean }[] = [];
+
+/** Send a key straight to the newest focus scope, without a DOM event; true when it acted. */
+export function pressKey(key: string): boolean {
+  return scopes[scopes.length - 1]?.key(key) ?? false;
+}
 const fallbackDocs = new WeakSet<Document>();
 
 function installFallback(doc: Document) {
