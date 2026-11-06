@@ -18,6 +18,9 @@
   font-size: 22px;
   line-height: 32px;
 }
+[data-theme="light"] {
+  color-scheme: light;
+}
 body {
   margin: 0;
   background: var(--surface);
