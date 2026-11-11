@@ -48,7 +48,7 @@ pub struct Config {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GameRecord {
     pub manifest: Manifest,
-    /// The `--saves-dir` the launcher passed, if any.
+    /// The resolved saves folder last used, including a folder found from ludusavi data.
     pub saves_dir: Option<PathBuf>,
 }
 

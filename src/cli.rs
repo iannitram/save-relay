@@ -1416,21 +1416,16 @@ fn wrap_game(arg: &GameArg, app_id: Option<u32>, cx: &Context) -> Result<Game> {
 }
 
 /// The game for a Steam app with no manifest of the person's own: the ludusavi data, refreshed
-/// when a week old. A failed refresh is a note; the data already cached still serves. A saves
-/// folder the person gave with `--saves-dir` is the one synced, and it is remembered with the
-/// game as `load_game` remembers it for `--manifest`, so later runs use it too.
+/// when a week old. A failed refresh is a note; the data already cached still serves. The
+/// located folder (or one the person gave with `--saves-dir`) and manifest are remembered so
+/// later commands can load the wrapped game by id alone.
 fn ludusavi_game(arg: &GameArg, app_id: u32, cx: &Context) -> Result<Game> {
     let cache = ludusavi::Cache::new(&AppDirs::from_vars(cx.vars));
     if let Err(error) = cache.refresh(&*cx.net.transport, cx.now, false) {
         eprintln!("save-relay: ludusavi data not refreshed: {error}");
     }
     let (_, located) = ludusavi_located(app_id, cx, &cache)?;
-    let Some(saves_dir) = arg.saves_dir.clone() else {
-        return Ok(Game {
-            manifest: located.manifest,
-            saves_dir: located.saves_dir,
-        });
-    };
+    let saves_dir = arg.saves_dir.clone().unwrap_or(located.saves_dir);
     cx.store.save_game(&GameRecord {
         manifest: located.manifest.clone(),
         saves_dir: Some(saves_dir.clone()),
