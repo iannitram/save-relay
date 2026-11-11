@@ -11,19 +11,18 @@ use save_relay::platform::{AppDirs, PathVars};
 use save_relay::remote::MemoryRemote;
 use save_relay::{Error, Result};
 use serde_json::Value;
-use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 const NOW: u64 = 1_793_476_260;
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 
 struct FakeTransport {
-    sent: RefCell<Vec<Request>>,
-    replies: RefCell<VecDeque<Response>>,
+    sent: Mutex<Vec<Request>>,
+    replies: Mutex<VecDeque<Response>>,
 }
 
 impl FakeTransport {
@@ -52,17 +51,18 @@ impl FakeTransport {
             Response::new(200, manifest.as_bytes().to_vec()).header("ETag", "fixture-v1"),
         );
         Self {
-            sent: RefCell::new(Vec::new()),
-            replies: RefCell::new(replies),
+            sent: Mutex::new(Vec::new()),
+            replies: Mutex::new(replies),
         }
     }
 }
 
 impl Transport for FakeTransport {
     fn send(&self, request: &Request) -> Result<Response> {
-        self.sent.borrow_mut().push(request.clone());
+        self.sent.lock().unwrap().push(request.clone());
         self.replies
-            .borrow_mut()
+            .lock()
+            .unwrap()
             .pop_front()
             .ok_or_else(|| Error::Server(format!("unexpected request to {}", request.url)))
     }
@@ -191,7 +191,7 @@ fn lists_games_and_uses_cached_answers_offline() {
     assert_eq!(games[2]["name"], "Unknown Game");
     assert_eq!(games[2]["steam_cloud"], "unknown");
     assert_eq!(games[2]["saves"], "ludusavi");
-    let requests = fake.sent.borrow();
+    let requests = fake.sent.lock().unwrap();
     assert_eq!(
         requests.len(),
         5,

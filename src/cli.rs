@@ -2091,7 +2091,7 @@ fn steam_games_data(root: &Path, force: bool, cx: &Context) -> Result<SteamGames
         .index()?
         .map(|index| index.apps)
         .unwrap_or_default();
-    let users = steam::user_ids(&root)?;
+    let users = steam::user_ids(root)?;
     let mut wrapped = BTreeSet::new();
     for user in users {
         let path = root
