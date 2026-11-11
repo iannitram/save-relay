@@ -2,7 +2,7 @@
 
 The intended shape of the repo for 1.0 (`SPEC.md`, re-approved 2026-11-01): **one Rust crate, a library and a command-line tool**, plus the panel's front end (`panel/`) and its Game Mode shell (`decky/`). A game's launcher runs `save-relay pull <game> --json` before Play and `save-relay push <game> --json` after the game quits; everything else (history, restore, setup) is the same binary. The saves travel through the service chosen once at setup: Nextcloud (WebDAV), Google Drive or Dropbox, each a `Remote` (`docs/adr/0002-storage-backends.md`). Around that (M11-M15, `docs/adr/0003-baton-wrap-cards-panel.md`): `pull` leaves an open-elsewhere mark on the server that `push` clears; `save-relay wrap -- %command%` syncs any Steam game, its saves folder found in the ludusavi data; every push carries a save card; and the panel shows it all in Game Mode and in the browser. Later, Android and iOS builds link the library directly and supply their own `http::Transport` and `CredentialStore`.
 
-Main at 2026-10-31 was a skeleton (the M11-M15 modules added 2026-11-01): every module existed with its final public signatures and each issue filled one in. The skeleton is gone: every module below is built, and a module not in the tree yet is **planned**. Status per module: **present** (built) or **planned** (not in the tree yet). An issue that builds a module moves its status to present in the same PR.
+Every module below is built (**present**) as of 2026-11-06; a module not in the tree yet is **planned**. An issue that builds a module moves its status to present in the same PR. What is left before 1.0 is in `ROADMAP.md`, "Run order to 1.0".
 
 ## Platforms (R04)
 
