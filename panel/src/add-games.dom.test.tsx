@@ -126,7 +126,9 @@ describe("Add Games", () => {
       if (command === "install-wrap") {
         const partial: InstallWrapData = {
           dry_run: false,
-          changed: [{ app_id: 42, user_id: "123", before: null, after: "save-relay wrap -- %command%" }],
+          changed: ["123", "456"].map((user_id) => ({
+            app_id: 42, user_id, before: null, after: "save-relay wrap -- %command%",
+          })),
           skipped: [{ app_id: 45, name: "Second No Cloud Game", reason: "no_saves_entry" }],
           backups: [],
           message: "wrapped 1 launch option(s)",
