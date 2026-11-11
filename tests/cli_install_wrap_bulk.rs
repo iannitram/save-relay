@@ -28,9 +28,13 @@ impl Machine {
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         let steam = steam_games_fixture::fixture(&root);
-        let data = root.join("xdg-data");
-        let config = root.join("xdg-config");
         let home = root.join("home");
+        let (data, config) = if cfg!(target_os = "macos") {
+            let support = home.join("Library/Application Support");
+            (support.clone(), support)
+        } else {
+            (root.join("xdg-data"), root.join("xdg-config"))
+        };
         fs::create_dir_all(&data).unwrap();
         fs::create_dir_all(&config).unwrap();
         fs::create_dir_all(&home).unwrap();
