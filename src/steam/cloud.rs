@@ -241,10 +241,13 @@ pub fn parse_appdetails(text: &str, app_id: u32) -> Result<StoreAnswer> {
                 .ok_or_else(|| invalid("invalid categories"))?,
         ),
     };
-    let cloud = categories.is_some_and(|categories| {
-        categories
-            .iter()
-            .any(|category| category.get("id").and_then(Value::as_u64) == Some(23))
-    });
+    let mut cloud = false;
+    for category in categories.into_iter().flatten() {
+        let id = category
+            .get("id")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| invalid("invalid category id"))?;
+        cloud |= id == 23;
+    }
     Ok(StoreAnswer::Game { cloud })
 }
