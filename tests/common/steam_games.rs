@@ -48,15 +48,25 @@ pub fn set_root(root: &Path) -> SteamRootGuard {
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());
     let previous = std::env::var_os("SAVE_RELAY_STEAM_DIR");
+    #[cfg(windows)]
+    let previous_program_files = std::env::var_os("ProgramFiles(x86)");
     std::env::set_var("SAVE_RELAY_STEAM_DIR", root);
+    // Prevent a developer's installed Steam from being found after an intentionally missing
+    // fixture root. The explicit fixture root still wins for tests that have one.
+    #[cfg(windows)]
+    std::env::set_var("ProgramFiles(x86)", root.join(".no-program-files"));
     SteamRootGuard {
         previous,
+        #[cfg(windows)]
+        previous_program_files,
         _lock: lock,
     }
 }
 
 pub struct SteamRootGuard {
     previous: Option<std::ffi::OsString>,
+    #[cfg(windows)]
+    previous_program_files: Option<std::ffi::OsString>,
     _lock: MutexGuard<'static, ()>,
 }
 
@@ -65,6 +75,11 @@ impl Drop for SteamRootGuard {
         match &self.previous {
             Some(value) => std::env::set_var("SAVE_RELAY_STEAM_DIR", value),
             None => std::env::remove_var("SAVE_RELAY_STEAM_DIR"),
+        }
+        #[cfg(windows)]
+        match &self.previous_program_files {
+            Some(value) => std::env::set_var("ProgramFiles(x86)", value),
+            None => std::env::remove_var("ProgramFiles(x86)"),
         }
     }
 }
