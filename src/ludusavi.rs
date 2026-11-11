@@ -413,7 +413,7 @@ fn same_or_parent_folder(folder: &str, protected: &Path, windows: bool) -> bool 
         let path = normalized.to_string_lossy().replace('\\', "/");
         let path = path.trim_end_matches('/');
         if windows {
-            path.to_ascii_lowercase()
+            path.to_lowercase()
         } else {
             path.to_owned()
         }

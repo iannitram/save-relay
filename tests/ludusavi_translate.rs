@@ -82,6 +82,16 @@ fn bare_platform_roots_are_unclear() {
     );
 }
 
+#[test]
+fn windows_path_comparison_handles_case_and_separator_variants() {
+    let mut windows = facts(Platform::Windows);
+    windows.vars.home = PathBuf::from("C:/Users/Player");
+    rejects_broad_folder(r"c:\Users", &windows, "c:/Users");
+
+    windows.vars.home = PathBuf::from("C:/Users/Émile");
+    rejects_broad_folder(r"c:\users\ÉMILE", &windows, "c:/users/ÉMILE");
+}
+
 #[cfg(windows)]
 #[test]
 fn refuses_windows_drive_root_and_users_parent_of_home() {
