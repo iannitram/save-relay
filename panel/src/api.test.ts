@@ -5,6 +5,7 @@ import type {
   HistoryEntry, PendingChoice, PictureData, RestoreData, Side, SignInPrompt, StatusData,
   SyncReport, WhereData, WhereGame, WhichData, SteamGame, SteamGamesData,
   InstallWrapApp, InstallWrapData, LaunchOptionData,
+  InstallWrapSkipped,
 } from "./api.ts";
 
 // JSON imports widen string unions to `string`, so a plain `satisfies` on a fixture cannot
@@ -28,7 +29,8 @@ const which = { app_id: true, game: true, name: true, saves_dir: true, include: 
 const steamGame = { app_id: true, name: true, steam_cloud: true, saves: true, wrapped: true } satisfies Keys<SteamGame>;
 const steamGames = { games: true, unknown: true } satisfies Keys<SteamGamesData>;
 const installWrapApp = { app_id: true, user_id: true, before: true, after: true } satisfies Keys<InstallWrapApp>;
-const installWrap = { dry_run: true, changed: true, backups: true, message: true } satisfies Keys<InstallWrapData>;
+const installWrapSkipped = { app_id: true, name: true, reason: true } satisfies Keys<InstallWrapSkipped>;
+const installWrap = { dry_run: true, changed: true, skipped: true, backups: true, message: true } satisfies Keys<InstallWrapData>;
 const launchOption = { app_id: true, before: true, after: true } satisfies Keys<LaunchOptionData>;
 const answer = { game: true, kind: true, answer: true, message: true } satisfies Keys<AnswerData>;
 const picture = { path: true, bytes: true } satisfies Keys<PictureData>;
@@ -93,6 +95,23 @@ function checkData(name: string, command: string, d: any) {
       for (const g of d.games) { exact(name, g, whereGame); opt(name, g.held, held); opt(name, g.server, side); }
       break;
     case "which": exact(name, d, which); break;
+    case "steam-games":
+      exact(name, d, steamGames);
+      for (const game of d.games) {
+        exact(name, game, steamGame);
+        expect(["yes", "no", "unknown"]).toContain(game.steam_cloud);
+        expect(["manifest", "ludusavi", "none"]).toContain(game.saves);
+      }
+      break;
+    case "install-wrap":
+      exact(name, d, installWrap);
+      for (const app of d.changed) exact(name, app, installWrapApp);
+      for (const skipped of d.skipped) {
+        exact(name, skipped, installWrapSkipped);
+        expect(["steam_cloud_unknown", "no_saves_entry"]).toContain(skipped.reason);
+      }
+      break;
+    case "launch-option": exact(name, d, launchOption); break;
     case "answer": exact(name, d, answer); break;
     case "picture": exact(name, d, picture); break;
     case "setup": exact(name, d, prompt); break;
@@ -102,12 +121,12 @@ function checkData(name: string, command: string, d: any) {
 
 describe("fixtures", () => {
   it("keeps the M16 Steam data shapes complete", () => {
-    expect([steamGame, steamGames, installWrapApp, installWrap, launchOption]).toHaveLength(5);
+    expect([steamGame, steamGames, installWrapApp, installWrapSkipped, installWrap, launchOption]).toHaveLength(6);
   });
 
   it("covers every command and outcome", () => {
     const names = fixtures.map(([n]) => n);
-    for (const want of ["pull-pulled", "pull-conflict", "pull-held", "status-pending", "history", "where", "which", "answer", "picture", "error-usage", "error-auth", "error-server", "error-other"]) {
+    for (const want of ["pull-pulled", "pull-conflict", "pull-held", "status-pending", "history", "where", "which", "steam-games", "install-wrap", "launch-option", "answer", "picture", "error-usage", "error-auth", "error-server", "error-other"]) {
       expect(names).toContain(want);
     }
   });

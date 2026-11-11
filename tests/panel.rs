@@ -793,13 +793,22 @@ fn steam_game_api_routes_run_with_numeric_ids_and_reject_extra_fields() {
         (
             "/api/launch-option",
             r#"{"appid":42,"current":"-novid %command%"}"#,
-            vec!["launch-option", "42", "--current=-novid %command%", "--json"],
+            vec![
+                "launch-option",
+                "42",
+                "--current=-novid %command%",
+                "--json",
+            ],
         ),
     ] {
         let (status, body) = post(data.port, path, Some(header.clone()), body);
         assert_eq!(status, "HTTP/1.1 200 OK", "{path}");
         let envelope: Value = serde_json::from_slice(&body).expect("JSON envelope");
-        assert_eq!(envelope["data"]["argv"], serde_json::json!(expected), "{path}");
+        assert_eq!(
+            envelope["data"]["argv"],
+            serde_json::json!(expected),
+            "{path}"
+        );
     }
     for (path, body) in [
         ("/api/install-wrap", r#"{"app-ids":["42"]}"#),

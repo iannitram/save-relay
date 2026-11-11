@@ -3,8 +3,8 @@
 //! reads the same files (`panel/src/api.test.ts`).
 
 use save_relay::api::{
-    AnswerData, HistoryData, PictureData, RestoreData, SignInPrompt, StatusData, SyncReport,
-    WhereData, WhichData,
+    AnswerData, HistoryData, InstallWrapData, LaunchOptionData, PictureData, RestoreData,
+    SignInPrompt, StatusData, SteamGamesData, SyncReport, WhereData, WhichData,
 };
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
@@ -83,6 +83,9 @@ fn every_fixture_round_trips() {
             "restore" => round_trip::<RestoreData>(&name, data),
             "where" => round_trip::<WhereData>(&name, data),
             "which" => round_trip::<WhichData>(&name, data),
+            "steam-games" => round_trip::<SteamGamesData>(&name, data),
+            "install-wrap" => round_trip::<InstallWrapData>(&name, data),
+            "launch-option" => round_trip::<LaunchOptionData>(&name, data),
             "answer" => round_trip::<AnswerData>(&name, data),
             "picture" => round_trip::<PictureData>(&name, data),
             "setup" => round_trip::<SignInPrompt>(&name, data),

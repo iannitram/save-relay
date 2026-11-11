@@ -165,9 +165,18 @@ export interface InstallWrapApp {
   after: string | null;
 }
 
+export type InstallWrapSkipReason = "steam_cloud_unknown" | "no_saves_entry";
+
+export interface InstallWrapSkipped {
+  app_id: number;
+  name: string;
+  reason: InstallWrapSkipReason;
+}
+
 export interface InstallWrapData {
   dry_run: boolean;
   changed: InstallWrapApp[];
+  skipped: InstallWrapSkipped[];
   backups: string[];
   message: string;
 }

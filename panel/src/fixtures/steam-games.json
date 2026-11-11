@@ -1,0 +1,12 @@
+{
+  "ok": true,
+  "command": "steam-games",
+  "data": {
+    "games": [
+      { "app_id": 42, "name": "No Cloud Game", "steam_cloud": "no", "saves": "ludusavi", "wrapped": false },
+      { "app_id": 43, "name": "Unknown Game", "steam_cloud": "unknown", "saves": "manifest", "wrapped": false },
+      { "app_id": 44, "name": "Cloud Game", "steam_cloud": "yes", "saves": "none", "wrapped": false }
+    ],
+    "unknown": 1
+  }
+}
