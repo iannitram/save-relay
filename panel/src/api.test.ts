@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 import type {
   Action, AnswerData, Card, Counts, Decision, Envelope, ErrorBody, Held, HistoryData,
   HistoryEntry, PendingChoice, PictureData, RestoreData, Side, SignInPrompt, StatusData,
-  SyncReport, WhereData, WhereGame, WhichData,
+  SyncReport, WhereData, WhereGame, WhichData, SteamGame, SteamGamesData,
+  InstallWrapApp, InstallWrapData, LaunchOptionData,
 } from "./api.ts";
 
 // JSON imports widen string unions to `string`, so a plain `satisfies` on a fixture cannot
@@ -24,6 +25,11 @@ const history = { game: true, current: true, entries: true } satisfies Keys<Hist
 const restore = { game: true, entry: true, revision: true, new_entry: true, backup: true, counts: true, message: true } satisfies Keys<RestoreData>;
 const where = { games: true } satisfies Keys<WhereData>;
 const which = { app_id: true, game: true, name: true, saves_dir: true, include: true, source: true, message: true } satisfies Keys<WhichData>;
+const steamGame = { app_id: true, name: true, steam_cloud: true, saves: true, wrapped: true } satisfies Keys<SteamGame>;
+const steamGames = { games: true, unknown: true } satisfies Keys<SteamGamesData>;
+const installWrapApp = { app_id: true, user_id: true, before: true, after: true } satisfies Keys<InstallWrapApp>;
+const installWrap = { dry_run: true, changed: true, backups: true, message: true } satisfies Keys<InstallWrapData>;
+const launchOption = { app_id: true, before: true, after: true } satisfies Keys<LaunchOptionData>;
 const answer = { game: true, kind: true, answer: true, message: true } satisfies Keys<AnswerData>;
 const picture = { path: true, bytes: true } satisfies Keys<PictureData>;
 const prompt = { service: true, url: true, code: true, expires_at: true, message: true } satisfies Keys<SignInPrompt>;
@@ -95,6 +101,10 @@ function checkData(name: string, command: string, d: any) {
 }
 
 describe("fixtures", () => {
+  it("keeps the M16 Steam data shapes complete", () => {
+    expect([steamGame, steamGames, installWrapApp, installWrap, launchOption]).toHaveLength(5);
+  });
+
   it("covers every command and outcome", () => {
     const names = fixtures.map(([n]) => n);
     for (const want of ["pull-pulled", "pull-conflict", "pull-held", "status-pending", "history", "where", "which", "answer", "picture", "error-usage", "error-auth", "error-server", "error-other"]) {

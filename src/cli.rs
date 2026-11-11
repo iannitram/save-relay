@@ -29,8 +29,8 @@
 
 use crate::api::{
     self, Action, AnswerData, HistoryData, InstallWrapData, InstallWrapSkipReason,
-    InstallWrapSkipped, SetupData, Side, SignInPrompt, SteamCloud, SteamGame, SteamGamesData,
-    SteamSaves, SyncReport, WhereData, WhichData, WhichSource,
+    InstallWrapSkipped, LaunchOptionData, SetupData, Side, SignInPrompt, SteamCloud, SteamGame,
+    SteamGamesData, SteamSaves, SyncReport, WhereData, WhichData, WhichSource,
 };
 use crate::clients::{self, Client, ClientSet};
 use crate::creds::{self, CredentialStore, Secret};
@@ -194,6 +194,12 @@ pub enum Command {
     SteamGames {
         no_steam_cloud: bool,
         refresh: bool,
+    },
+    /// M16 F76: compute an app's launch option without reading or writing Steam files.
+    LaunchOption {
+        app_id: u32,
+        remove: bool,
+        current: Option<String>,
     },
     /// M12 explicit / `--all-known` selection, or M16 `--no-steam-cloud` selection (mutually
     /// exclusive; the latter may combine with `--dry-run` and `--json`).
@@ -570,6 +576,41 @@ pub fn parse(args: &[String]) -> Result<Args> {
                 }
             }
         }
+        "launch-option" => {
+            // Preserve launch options that are empty or start with `-`. The panel passes this
+            // argument as `--current=<text>` so it remains one argv item.
+            let mut normalized = Vec::with_capacity(args.len().saturating_sub(1) * 2);
+            let mut expecting_current = false;
+            for arg in &args[1..] {
+                if !expecting_current {
+                    if let Some(value) = arg.strip_prefix("--current=") {
+                        normalized.push("--current");
+                        normalized.push(value);
+                    } else {
+                        normalized.push(arg);
+                    }
+                } else {
+                    normalized.push(arg);
+                }
+                expecting_current = *arg == "--current";
+            }
+            let flags = split(&normalized, &["--current"], &["--remove"])?;
+            require(&flags.positionals, 1, &["<appid>"])?;
+            let app_id = parse_app_id(flags.positionals[0])?;
+            let current = flags.flag("--current");
+            if current.is_some_and(|text| {
+                text.contains('\n') || text.contains('\r') || text.contains('\0')
+            }) {
+                return Err(Error::Usage(
+                    "--current must be single-line text without NUL".into(),
+                ));
+            }
+            Command::LaunchOption {
+                app_id,
+                remove: flags.has("--remove"),
+                current: current.map(str::to_owned),
+            }
+        }
         "answer" => {
             let flags = split(&args[1..], &[], &[])?;
             require(&flags.positionals, 2, &["<game>", "<answer>"])?;
@@ -808,6 +849,7 @@ pub fn command_name(command: &Command) -> &'static str {
         Command::Wrap { .. } => "wrap",
         Command::Which { .. } => "which",
         Command::SteamGames { .. } => "steam-games",
+        Command::LaunchOption { .. } => "launch-option",
         Command::InstallWrap { .. } => "install-wrap",
         Command::Answer { .. } => "answer",
         Command::Where => "where",
@@ -835,6 +877,7 @@ Commands:
   steam-games [--no-steam-cloud] [--refresh]
   install-wrap (<appid>... | --all-known) [--remove] [--dry-run]
   install-wrap --no-steam-cloud [--dry-run]
+  launch-option <appid> [--remove] [--current=<text>]
   answer  <game> keep-server|keep-local|play-anyway|wait
   where
   picture <game> <entry> --out <file>
@@ -1139,7 +1182,7 @@ fn wrap_child(args: &[String]) -> Option<&[String]> {
 /// The command word for an envelope when the arguments did not parse: the first argument that
 /// is a command, else "unknown".
 fn guess_command(args: &[String]) -> String {
-    const NAMES: [&str; 17] = [
+    const NAMES: [&str; 18] = [
         "pull",
         "push",
         "status",
@@ -1151,6 +1194,7 @@ fn guess_command(args: &[String]) -> String {
         "which",
         "steam-games",
         "install-wrap",
+        "launch-option",
         "answer",
         "where",
         "picture",
@@ -1213,6 +1257,11 @@ fn execute(command: Command, stdin: &mut dyn Read, cx: &Context) -> Result<Outco
             no_steam_cloud,
             refresh,
         } => steam_games(no_steam_cloud, refresh, cx),
+        Command::LaunchOption {
+            app_id,
+            remove,
+            current,
+        } => launch_option(app_id, remove, current.as_deref(), cx),
         Command::InstallWrap {
             app_ids,
             all_known,
@@ -2038,6 +2087,42 @@ fn which(app_id: u32, cx: &Context) -> Result<Outcome> {
         message: message.clone(),
     };
     Ok(which_outcome(&data, message))
+}
+
+/// `launch-option <appid>`: calculate the wrapped launch option the Decky shell hands back to
+/// Steam's client. This intentionally does not inspect Steam's files; `current` comes from
+/// Steam's app-details callback and the client owns the eventual write.
+fn launch_option(
+    app_id: u32,
+    remove: bool,
+    current: Option<&str>,
+    cx: &Context,
+) -> Result<Outcome> {
+    if current.is_some_and(|text| text.contains('\n') || text.contains('\r')) {
+        return Err(Error::Usage("--current must be one line".into()));
+    }
+    let binary = std::env::current_exe()?;
+    let before = current.map(str::to_owned);
+    let after = if remove {
+        current.and_then(crate::steam::launch::unwrapped)
+    } else {
+        Some(crate::steam::launch::wrapped(
+            current,
+            &binary.display().to_string(),
+            cx.platform,
+        ))
+    };
+    let data = LaunchOptionData {
+        app_id,
+        before,
+        after: after.clone(),
+    };
+    let text = format!(
+        "{}: {}",
+        app_id,
+        after.as_deref().unwrap_or("(no launch option)")
+    );
+    Ok(outcome("launch-option", &data, text, 0))
 }
 
 /// `steam-games`: refresh store and ludusavi data, then list installed games from Steam's

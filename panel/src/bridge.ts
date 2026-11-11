@@ -16,12 +16,15 @@ export const API_COMMANDS = [
   "which",
   "picture",
   "setup",
+  "steam-games",
+  "install-wrap",
+  "launch-option",
 ] as const;
 
 export type ApiCommand = (typeof API_COMMANDS)[number];
 
 /** The arguments of one command as a JSON object (src/panel.rs `api_args`). */
-export type ApiArgs = Record<string, string | number | boolean | string[]>;
+export type ApiArgs = Record<string, string | number | boolean | string[] | number[]>;
 
 export interface Bridge {
   call<T>(command: ApiCommand, args: ApiArgs): Promise<Envelope<T>>;

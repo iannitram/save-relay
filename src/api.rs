@@ -289,6 +289,14 @@ pub struct SteamGamesData {
     pub unknown: usize,
 }
 
+/// `data` of `launch-option`: Steam's launch option before and after applying Save Relay.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LaunchOptionData {
+    pub app_id: u32,
+    pub before: Option<String>,
+    pub after: Option<String>,
+}
+
 impl SteamGamesData {
     /// The install-wrap selection shared with F75: definitely no Steam Cloud and known saves.
     pub fn no_cloud_with_saves(&self) -> impl Iterator<Item = &SteamGame> {

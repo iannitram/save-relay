@@ -50,6 +50,40 @@ fn pull_and_push_with_every_flag_in_any_order() {
 }
 
 #[test]
+fn launch_option_accepts_numeric_ids_and_preserves_empty_or_dash_prefixed_current() {
+    let parse_args = |items: &[&str]| {
+        let owned = items
+            .iter()
+            .map(|item| (*item).to_string())
+            .collect::<Vec<_>>();
+        parse(&owned)
+    };
+    assert_eq!(
+        parse_args(&["launch-option", "42", "--current=-novid %command%"]),
+        Ok(Args {
+            command: Command::LaunchOption {
+                app_id: 42,
+                remove: false,
+                current: Some("-novid %command%".to_string()),
+            },
+            json: false,
+        })
+    );
+    assert_eq!(
+        parse_args(&["launch-option", "42", "--current="]),
+        Ok(Args {
+            command: Command::LaunchOption {
+                app_id: 42,
+                remove: false,
+                current: Some(String::new()),
+            },
+            json: false,
+        })
+    );
+    usage_err("launch-option 0", "appid");
+}
+
+#[test]
 fn status_history_restore() {
     let want = Command::Status {
         game: game("g", None, Some("d")),
