@@ -173,8 +173,8 @@ impl Cache {
             .is_none_or(|existing| entry.checked >= existing.checked);
         if replace {
             apps.insert(app_id, entry);
+            write_cache(&self.path, &apps)?;
         }
-        write_cache(&self.path, &apps)?;
         self.apps = apps;
         Ok(replace)
     }
