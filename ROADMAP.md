@@ -2,9 +2,9 @@
 
 From `SPEC.md` (re-approved 2026-11-01) to 1.0: Uncharted on the AMD handheld, the Strix Halo tablet and the RTX 3090 Ti desktop sharing saves through Play alone, through the service chosen at setup: Nextcloud, Google Drive or Dropbox (`docs/adr/0002-storage-backends.md`); a game still open on another machine said before I play; any Steam game synced with one launch option; and each save shown as a card in a Game Mode panel (`docs/adr/0003-baton-wrap-cards-panel.md`). How the code is laid out: `docs/code-map.md`. Each feature below is one GitHub issue (number in brackets), sized by the pipeline's rubric; Easy ones carry a Qwen brief and locked tests.
 
-## Where it stands (2026-11-10)
+## Where it stands (2026-11-11)
 
-Stages 1-7 are built and merged: F01-F25, F27-F45, F48-F66 and F69 are closed, CI is green on Linux, Windows and macOS, and the design pass's 20 findings (#164-#179, #197, #198, #201, #202) are fixed. No pull request is open. No release exists yet (`Cargo.toml` says `0.0.0`). What is left: M16 (added 2026-11-10: Steam games without Steam Cloud, `docs/adr/0004-steam-games-without-steam-cloud.md`), the Game Mode re-check, the app registrations, one release candidate, and the owner's device checks.
+Stages 1-7 are built and merged: F01-F25, F27-F45, F48-F66 and F69 are closed, CI is green on Linux, Windows and macOS, and the design pass's 20 findings (#164-#179, #197, #198, #201, #202) are fixed. Pull requests #215-#222 (M16) are open. The 2026-11-11 audit (`docs/audit-2026-11-11.md`) found six blockers, B1-B6, that were not in the run order; the owner put all six in 1.0, before `rc.1`, and they are added below. No release exists yet (`Cargo.toml` says `0.0.0`). What is left: M16 (added 2026-11-10: Steam games without Steam Cloud, `docs/adr/0004-steam-games-without-steam-cloud.md`), the Game Mode re-check, the app registrations, one release candidate, and the owner's device checks.
 
 ### Run order to 1.0
 
@@ -21,12 +21,20 @@ Each step is one issue. An automated run takes the **agent** steps whose "Waits 
 | 7 | agent | #213 (F78) | M16 integration test and docs | steps 4, 6 | the flow test and the doc test pass |
 | 8 | owner | #36 (F47) | Register the app with Google and Dropbox; set the five values as this repo's Actions variables and secrets (a tagged release refuses to build without them) and put them in `src/clients.rs` | nothing, any time | `gh variable list` and `gh secret list` show the five names; the values are on `main` |
 | 9 | agent, on a SteamOS handheld | #73 (F68) | Re-check the panel in Game Mode after #201 and #202, with the Add games view; file and fix any new `design-pass` finding; record the pass in `PIPELINE.md` and `CHANGELOG.md` | step 6 | every view re-checked at 1280x800, controller only; #73 closed |
-| 10 | agent | #205 (F71) | Cut `v1.0.0-rc.1`: version bump, release dry run, tag, checksum check | steps 7, 8 | the GitHub release holds the three binaries, `SHA256SUMS`, the Decky zip and the panel zip |
+| B1 | agent | not filed yet | An empty or missing saves folder is pushed as the newest revision: pull the server's saves instead (`src/plan.rs`, `src/scan.rs`, `tests/plan.rs`) | nothing | the audit's "Expected" for B1 holds, with tests |
+| B2 | agent | not filed yet | The panel never shows a pending choice, and a late answer does nothing: fill `pending` in `status`, apply a late answer right away (`src/sync.rs`, `src/pending.rs`, `src/wrap.rs`, panel) | nothing | the audit's "Expected" for B2 holds, with tests |
+| B3 | agent | not filed yet | A wrapped game found through the ludusavi data is never remembered: save its record on the first locate (`src/cli.rs`) | nothing | the audit's "Expected" for B3 holds, with tests |
+| B4 | agent | not filed yet | Wire the Steam screenshot into a wrapped game's card (`src/steam.rs`, `src/sync.rs`) | nothing | the audit's "Expected" for B4 holds, with tests |
+| B5 | agent | not filed yet | Refuse a ludusavi saves folder that is a root, the home folder or a bare platform folder; cap the download size (`src/ludusavi.rs`, `src/manifest.rs`, `src/http.rs`) | nothing | the audit's "Expected" for B5 holds, with tests |
+| B6 | agent | not filed yet | Google Drive: `clean_claims` never deletes the claim `state.json` names; `repair` recovers a game already stuck (`src/gdrive.rs`) | nothing | the audit's "Expected" for B6 holds, with tests |
+| 10 | agent | #205 (F71) | Cut `v1.0.0-rc.1`: version bump, release dry run, tag, checksum check | steps 7, 8, B1-B6 | the GitHub release holds the three binaries, `SHA256SUMS`, the Decky zip and the panel zip |
 | 11 | owner, an agent may drive with the owner signing in | #47 (F46) | Real round trips on Dropbox and Google Drive; Game Mode sign-in | step 10 | `cargo test --test live_services -- --ignored` passes on Windows and a handheld; written up on #47 |
 | 12 | owner | #72 (F67) | Device checks: suspend hand-off, wrap and install-wrap, the panel in Game Mode, adding a game without Steam Cloud | steps 9, 10 | written up on #72 |
 | 13 | agent | Uncharted-Universal #163 | The launcher calls the released binary around Play. Its own note (2026-11-06) holds it until the integration contract is ready: the `--json` API shape in `docs/code-map.md` at the `rc.1` tag is that contract | step 10 | merged there, bundling a save-relay release |
 | 14 | owner | #26 (F26) | 1.0 acceptance on the three PCs | steps 11, 12, 13 | written up on #26 |
 | 15 | agent | new issue when step 14 passes | Tag `v1.0.0`; `PIPELINE.md` moves to Prototype / Beta with a CHANGELOG line | step 14 | the 1.0 release is out |
+
+Rows B1-B6 are the audit's blockers (2026-11-11); the Project Manager files each from the drafts in `docs/audit-2026-11-11.md` and gives them issue numbers. They do not wait on each other or on steps 1-9.
 
 A bug found in steps 11, 12 or 14 becomes its own issue, is fixed by an agent, and ships in the next `rc` before the step is run again. Before step 10, a device can try a build from the release workflow's dry run (`gh workflow run release.yml --ref main`): Nextcloud works in it, Google Drive and Dropbox say they are not registered.
 
