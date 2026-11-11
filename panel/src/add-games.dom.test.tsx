@@ -88,7 +88,7 @@ describe("Add Games", () => {
     expect(host.querySelector('[role="dialog"]')?.textContent).toContain("Add 1 game?");
     await click('[data-focus="bulk-confirm"]');
     expect(calls.filter(([command]) => command === "install-wrap").at(-1)?.[1]).toEqual({ "app-ids": [42] });
-    expect(host.textContent).toContain("Added 1 games without Steam Cloud.");
+    expect(host.textContent).toContain("Added 1 game without Steam Cloud.");
 
     await click('[data-focus="steam-game:43"]');
     expect(calls.filter(([command]) => command === "install-wrap").at(-1)?.[1]).toEqual({ "app-ids": [43] });

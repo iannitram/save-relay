@@ -265,7 +265,7 @@ function AddGamesRoute(props: {
     if (failures.length) {
       setError(`${succeeded} of ${appIds.length} added. ${failures.join(" ")}`);
     } else {
-      setNotice(`Added ${succeeded} games without Steam Cloud.`);
+      setNotice(`Added ${succeeded} game${succeeded === 1 ? "" : "s"} without Steam Cloud.`);
     }
   }, [change, games, props.bridge, props.setAdded]);
 
