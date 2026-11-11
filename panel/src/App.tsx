@@ -195,10 +195,14 @@ function AddGamesRoute(props: {
       });
       await props.bridge.setLaunchOption(appId, data.after ?? "");
     } else {
-      await call<InstallWrapData>(props.bridge, "install-wrap", {
+      const result = await call<InstallWrapData>(props.bridge, "install-wrap", {
         "app-ids": [appId],
         ...(remove ? { remove: true } : {}),
       });
+      if (!result.changed.some((row) => row.app_id === appId)) {
+        const skipped = result.skipped.find((row) => row.app_id === appId);
+        throw new Error(skipped ? `${skipped.name}: ${skipped.reason}` : "Steam did not report a launch option change.");
+      }
     }
     props.setAdded((previous) => ({ ...previous, [appId]: !remove }));
   }, [props.bridge, props.setAdded]);
@@ -230,9 +234,16 @@ function AddGamesRoute(props: {
     const failures: string[] = [];
     if (!props.bridge.getLaunchOption || !props.bridge.setLaunchOption) {
       try {
-        await call<InstallWrapData>(props.bridge, "install-wrap", { "app-ids": appIds });
-        props.setAdded((previous) => ({ ...previous, ...Object.fromEntries(appIds.map((id) => [id, true])) }));
-        succeeded = appIds.length;
+        const result = await call<InstallWrapData>(props.bridge, "install-wrap", { "app-ids": appIds });
+        const changedIds = result.changed.map((row) => row.app_id).filter((id) => appIds.includes(id));
+        props.setAdded((previous) => ({ ...previous, ...Object.fromEntries(changedIds.map((id) => [id, true])) }));
+        succeeded = changedIds.length;
+        if (succeeded !== appIds.length) {
+          failures.push(...result.skipped
+            .filter((row) => appIds.includes(row.app_id))
+            .map((row) => `${row.name}: ${row.reason}`));
+          if (failures.length === 0) failures.push("Steam did not report a launch option change for every selected game.");
+        }
       } catch (e) {
         failures.push(steamRunningMessage(e));
       }

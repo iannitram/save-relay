@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { Envelope, SteamGamesData } from "./api.ts";
+import type { Envelope, InstallWrapData, SteamGamesData } from "./api.ts";
 import type { ApiArgs, ApiCommand, Bridge } from "./bridge.ts";
 import { App } from "./App.tsx";
 import { fixtureBridge } from "./fixtureBridge.ts";
@@ -107,5 +107,40 @@ describe("Add Games", () => {
     await click('[data-focus="steam-game:42"]');
     expect(host.textContent).toContain("Close Steam, then press Add again.");
     expect(host.querySelector('[data-focus="steam-game:42"]')?.textContent).not.toContain("Added");
+  });
+
+  it("marks only IDs reported as changed when a browser bulk result is partial", async () => {
+    const fixture = fixtureBridge();
+    const call: Bridge["call"] = async <T,>(command: ApiCommand, args: ApiArgs): Promise<Envelope<T>> => {
+      if (command === "steam-games") {
+        const data = await fixture.call<SteamGamesData>(command, args);
+        if (!data.ok) return data as Envelope<T>;
+        return {
+          ...data,
+          data: {
+            ...data.data,
+            games: [...data.data.games, { app_id: 45, name: "Second No Cloud Game", steam_cloud: "no", saves: "ludusavi", wrapped: false }],
+          },
+        } as Envelope<T>;
+      }
+      if (command === "install-wrap") {
+        const partial: InstallWrapData = {
+          dry_run: false,
+          changed: [{ app_id: 42, user_id: "123", before: null, after: "save-relay wrap -- %command%" }],
+          skipped: [{ app_id: 45, name: "Second No Cloud Game", reason: "no_saves_entry" }],
+          backups: [],
+          message: "wrapped 1 launch option(s)",
+        };
+        return { ok: true, command, data: partial } as Envelope<T>;
+      }
+      return fixture.call<T>(command, args);
+    };
+    await openAddGames(call);
+    await click('[data-focus="add-all"]');
+    expect(host.querySelector('[role="dialog"]')?.textContent).toContain("Add 2 games?");
+    await click('[data-focus="bulk-confirm"]');
+    expect(host.querySelector('[data-focus="steam-game:42"]')?.textContent).toContain("Added");
+    expect(host.querySelector('[data-focus="steam-game:45"]')?.textContent).not.toContain("Added");
+    expect(host.textContent).toContain("1 of 2 added. Second No Cloud Game: no_saves_entry");
   });
 });
