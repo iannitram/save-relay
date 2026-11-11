@@ -433,6 +433,12 @@ fn push_pull_status_history_restore_envelopes() {
     assert_eq!(data["last_synced_revision"], 1);
     assert_eq!(data["local_changed"], false);
 
+    machine.store.save_pending(&waiting_conflict()).unwrap();
+    let (code, envelope) = machine.json(&format!("status {flags}"), T0 + 60);
+    assert_eq!(code, 0);
+    assert_eq!(envelope["data"]["pending"]["game"], GAME);
+    assert_eq!(envelope["data"]["pending"]["kind"], "conflict");
+
     // history
     let (code, envelope) = machine.json(&format!("history {GAME}"), T0 + 60);
     assert_eq!(code, 0);
@@ -853,6 +859,53 @@ fn answer_records_a_conflict_choice_in_text_mode() {
     let stored = machine.store.load_pending(GAME).unwrap().unwrap();
     assert_eq!(stored.kind, ChoiceKind::Conflict);
     assert_eq!(stored.answer, Some(Answer::KeepLocal));
+}
+
+#[test]
+fn a_late_answer_resolves_the_conflict_and_clears_the_pending_choice() {
+    let remote = Arc::new(MemoryRemote::new());
+    let first = pushed_machine(&remote, "device-a");
+    let second = Machine::new(&remote);
+    second.setup("device-b");
+    second.run(&format!("pull {}", second.game_flags()), "", T0 + 30);
+    second.write_save("slot1.sav", "server changed");
+    let (code, envelope) = second.json(&format!("push {}", second.game_flags()), T0 + 60);
+    assert_eq!(code, 0, "{envelope}");
+    assert_eq!(envelope["data"]["action"], "pushed");
+
+    first.write_save("slot1.sav", "keep local");
+    first.store.save_pending(&waiting_conflict()).unwrap();
+    let (code, envelope) = first.json(&format!("answer {GAME} keep-local"), T0 + 90);
+
+    assert_eq!(code, 0, "{envelope}");
+    assert!(envelope["data"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("Pushed revision 3"));
+    assert!(first.store.load_pending(GAME).unwrap().is_none());
+    let (code, status) = first.json(&format!("status {}", first.game_flags()), T0 + 100);
+    assert_eq!(code, 0, "{status}");
+    assert!(status["data"]["pending"].is_null());
+}
+
+#[test]
+fn a_late_play_anyway_answer_pulls_past_the_open_elsewhere_mark() {
+    let remote = Arc::new(MemoryRemote::new());
+    let first = pushed_machine(&remote, "device-a");
+    let second = Machine::new(&remote);
+    second.setup("device-b");
+    let (code, envelope) = second.json(&format!("pull {}", second.game_flags()), T0 + 30);
+    assert_eq!(code, 0, "{envelope}");
+
+    first.store.save_pending(&waiting_held()).unwrap();
+    let (code, envelope) = first.json(&format!("answer {GAME} play-anyway"), T0 + 60);
+
+    assert_eq!(code, 0, "{envelope}");
+    assert!(envelope["data"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("Applied play-anyway"));
+    assert!(first.store.load_pending(GAME).unwrap().is_none());
 }
 
 #[test]

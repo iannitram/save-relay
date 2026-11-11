@@ -7,6 +7,7 @@
 //! <data>/save-relay/games/<game>.json    GameRecord: the manifest and saves folder last used
 //! <data>/save-relay/session/<game>.json  Session: when this machine's last `pull` ran (M14 playtime)
 //! <data>/save-relay/pending/<game>.json  pending::PendingChoice: a choice `wrap` waits on (M12)
+//! <data>/save-relay/waiting/<game>       a live `wrap` wait, so a late answer can resolve itself
 //! <data>/save-relay/ludusavi/            the ludusavi data cache (`ludusavi::Cache`, M13)
 //! ```
 //!
@@ -190,6 +191,46 @@ impl LocalStore {
         }
         choices.sort_by(|a, b| a.game.cmp(&b.game));
         Ok(choices)
+    }
+
+    /// Mark that `wrap` is actively waiting for an answer to this game's pending choice.
+    pub fn set_waiting(&self, game: &str, waiting: bool) -> Result<()> {
+        let path = self.dirs.data.join("waiting").join(game);
+        if waiting {
+            let parent = path
+                .parent()
+                .ok_or_else(|| Error::Io("waiting marker has no parent folder".into()))?;
+            fs::create_dir_all(parent)?;
+            fs::write(path, std::process::id().to_string())?;
+            Ok(())
+        } else {
+            match fs::remove_file(path) {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(error.into()),
+            }
+        }
+    }
+
+    /// Whether a live `wrap` is waiting for an answer to this game's pending choice.
+    pub fn is_waiting(&self, game: &str) -> Result<bool> {
+        let path = self.dirs.data.join("waiting").join(game);
+        match fs::metadata(&path) {
+            Ok(metadata) if metadata.is_file() => {
+                let live = metadata
+                    .modified()
+                    .ok()
+                    .and_then(|time| std::time::SystemTime::now().duration_since(time).ok())
+                    .is_some_and(|age| age.as_secs() <= 180);
+                if !live {
+                    self.set_waiting(game, false)?;
+                }
+                Ok(live)
+            }
+            Ok(_) => Ok(false),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error.into()),
+        }
     }
 
     /// `None` when no `pull` ran since the last push. A session of another format is

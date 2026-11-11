@@ -62,7 +62,11 @@ fn no_wait(_: u64) {
 /// A `sleep` that moves the clock on, and answers the pending choice the first time it is asked.
 fn answer_then_tick(store: &LocalStore, answer: Answer) -> impl Fn(u64) + '_ {
     let answered = Cell::new(false);
+    let checked_wait_marker = Cell::new(false);
     move |secs| {
+        if !checked_wait_marker.replace(true) {
+            assert!(store.is_waiting(GAME).unwrap(), "wrap should mark its wait");
+        }
         if !answered.get() {
             answered.set(true);
             pending::answer(store, GAME, answer).expect("the choice is pending");
@@ -337,6 +341,7 @@ fn a_conflict_answered_keep_local_resolves_with_it() {
         fake.calls(),
         ["pull none false", "pull keep-local false", "push none"]
     );
+    assert!(!fx.store.is_waiting(GAME).unwrap());
 }
 
 #[test]

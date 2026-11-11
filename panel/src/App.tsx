@@ -97,6 +97,7 @@ export function App({ bridge, pictureUrl, token }: AppProps) {
           (r) => {
             setError(null);
             setNotice(r.message);
+            void load();
           },
           (e) => setError(message(e)),
         );

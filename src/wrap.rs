@@ -175,10 +175,18 @@ fn before_play(
         note(format!("{error}; starting on this machine's saves"));
         return;
     }
+    if let Err(error) = store.set_waiting(game, true) {
+        note(format!("{error}; starting on this machine's saves"));
+        clear_pending(store, game);
+        return;
+    }
     note(choice_line(game, &choice));
     // The whole wait, including a `Wait` answer's re-reads, ends this long after the hold.
     let deadline = now() + ANSWER_WAIT_SECS;
     let answer = pending::wait_for_answer(store, game, ANSWER_WAIT_SECS, now, sleep);
+    if let Err(error) = store.set_waiting(game, false) {
+        note(error);
+    }
     // The answer, if any, is in hand; the file goes either way, so a late answer is not kept.
     clear_pending(store, game);
     match answer {

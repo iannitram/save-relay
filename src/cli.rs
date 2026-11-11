@@ -747,6 +747,13 @@ pub fn connect_before(
     store: &LocalStore,
     creds: &dyn CredentialStore,
 ) -> Result<Box<dyn Remote>> {
+    if let Command::Answer { game, .. } = command {
+        return if store.is_waiting(game)? || store.load_pending(game)?.is_none() {
+            Ok(Box::new(NoRemote))
+        } else {
+            Ok(wrap_remote(store, creds))
+        };
+    }
     if !needs_server(command) || uses_service_tokens(store)? {
         return Ok(Box::new(NoRemote));
     }
@@ -1625,19 +1632,77 @@ fn where_command(cx: &Context) -> Result<Outcome> {
     Ok(outcome("where", &data, text, 0))
 }
 
-/// `answer <game> <answer>` (M12): records the choice for the `wrap` that waits on it
-/// (`pending::answer`, which refuses an answer that does not fit the choice). Local only: no
-/// server call, and the exit code is 0.
+/// `answer <game> <answer>` (M12): record an answer for a waiting `wrap`, or resolve a late
+/// answer immediately when no `wrap` is waiting.
 fn answer_command(game: &str, answer: Answer, cx: &Context) -> Result<Outcome> {
+    if cx.store.load_pending(game)?.is_none() {
+        return Err(Error::NoPendingChoice(game.into()));
+    }
+    let waiting = cx.store.is_waiting(game)?;
+    let loaded = if waiting {
+        None
+    } else {
+        match cx.store.load_config()? {
+            Some(config) => {
+                let saves_dir = cx
+                    .store
+                    .load_game(game)?
+                    .and_then(|record| record.saves_dir);
+                let arg = GameArg {
+                    id: game.into(),
+                    manifest: None,
+                    saves_dir,
+                };
+                Some((config, load_game(&arg, cx)?))
+            }
+            None => None,
+        }
+    };
     let choice = pending::answer(cx.store, game, answer)?;
-    let message = answer_text(&choice.game, answer);
+    if waiting || loaded.is_none() {
+        let message = answer_text(&choice.game, answer);
+        let data = AnswerData {
+            game: choice.game,
+            kind: choice.kind,
+            answer,
+            message: message.clone(),
+        };
+        return Ok(outcome("answer", &data, message, 0));
+    }
+
+    let (config, game_data) = loaded.expect("late answers loaded their game and config");
+    let (resolve, anyway) = match answer {
+        Answer::KeepServer => (Some(Resolve::KeepServer), false),
+        Answer::KeepLocal => (Some(Resolve::KeepLocal), false),
+        Answer::PlayAnyway => (None, true),
+        Answer::Wait => (None, false),
+    };
+    let report = with_remote(&config, cx, |remote| {
+        let s = session(&config, remote, cx)?;
+        sync::pull(&s, &game_data, cx.store, resolve, anyway)
+    })?;
+    let message = if let Some(pending) = wrap::choice_for(game, &report, cx.now) {
+        cx.store.save_pending(&pending)?;
+        format!(
+            "Still unresolved for {game}: {} The choice remains pending.",
+            report.sync.message
+        )
+    } else {
+        cx.store.clear_pending(game)?;
+        format!(
+            "Applied {} for {game}: {}",
+            answer.key(),
+            report.sync.message
+        )
+    };
     let data = AnswerData {
         game: choice.game,
         kind: choice.kind,
         answer,
         message: message.clone(),
     };
-    Ok(outcome("answer", &data, message, 0))
+    let code = api::exit_code_for(report.sync.action);
+    Ok(outcome("answer", &data, message, code))
 }
 
 /// What `answer` says back: the answer on record, and what the waiting `wrap` does with it.

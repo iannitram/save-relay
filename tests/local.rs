@@ -79,6 +79,16 @@ fn nothing_saved_yet_is_none() {
 }
 
 #[test]
+fn waiting_markers_track_only_an_active_wrap_wait() {
+    let store = LocalStore::new(dirs("waiting"));
+    assert!(!store.is_waiting("game").unwrap());
+    store.set_waiting("game", true).unwrap();
+    assert!(store.is_waiting("game").unwrap());
+    store.set_waiting("game", false).unwrap();
+    assert!(!store.is_waiting("game").unwrap());
+}
+
+#[test]
 fn config_round_trips_at_config_json_without_a_password() {
     let d = dirs("config");
     let store = LocalStore::new(d.clone());
