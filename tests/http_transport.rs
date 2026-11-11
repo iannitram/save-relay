@@ -114,6 +114,17 @@ fn get_sends_headers_and_returns_the_answer() {
 }
 
 #[test]
+fn response_body_limit_stops_an_oversized_answer() {
+    let (base, server) = serve_once(200, "hello");
+    let request = Request::new("GET", &format!("{base}/manifest")).max_response_bytes(4);
+
+    assert!(
+        matches!(transport().send(&request), Err(Error::Server(message)) if message.contains("4-byte limit"))
+    );
+    server.join().unwrap();
+}
+
+#[test]
 fn put_sends_the_body() {
     let (base, server) = serve_once(201, "made");
     let request = Request::new("PUT", &format!("{base}/files/me/save")).body(b"saves".to_vec());
