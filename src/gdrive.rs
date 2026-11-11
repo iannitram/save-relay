@@ -688,6 +688,81 @@ fn oldest(files: Vec<DriveFile>) -> Vec<DriveFile> {
 }
 
 impl Remote for Drive {
+    fn repair_missing_state_claim(&self, path: &str, apply: bool) -> Result<Option<String>> {
+        let state = self.resolve(path)?;
+        if state.is_dir {
+            return Err(Error::NotFound(path.into()));
+        }
+        let (bytes, etag) = self.get(path)?;
+        let (version, claim) = guard::parse_etag(&etag).ok_or(Error::Changed)?;
+        if claim.is_empty() {
+            return Ok(Some(
+                "state has no Drive claim; cannot repair automatically".into(),
+            ));
+        }
+        // A fresh claim id is intentionally absent until the next writer tries to claim it.
+        // Only treat a missing id as stranded when a surviving predecessor proves it was
+        // consumed before; otherwise this is the normal healthy state.
+        let (parent_path, _) = split_path(path);
+        let parent = self.folder(parent_path)?;
+        let predecessors = self.children(&parent.id, None)?;
+        let linked = predecessors
+            .iter()
+            .any(|file| is_claim(file) && file.claim.as_deref() == Some(claim.as_str()));
+        if !linked {
+            return Ok(None);
+        }
+        match self.metadata(&claim, path) {
+            Ok(_) => return Ok(None),
+            Err(Error::NotFound(_)) => {}
+            Err(error) => return Err(error),
+        }
+        if !apply {
+            return Ok(Some(format!(
+                "missing Drive claim {claim}; recovery is available. Stop sync on every other device before applying"
+            )));
+        }
+
+        // Drive v3 exposes no conditional metadata update here. Require a single writer,
+        // revalidate immediately before PATCH, and prove the state bytes did not change after.
+        let (before_bytes, before_etag) = self.get(path)?;
+        if before_etag != etag || before_bytes != bytes {
+            return Err(Error::Changed);
+        }
+        let before = self.metadata(&state.id, path)?;
+        if before.version != version || before.claim.as_deref() != Some(&claim) {
+            return Err(Error::Changed);
+        }
+        match self.metadata(&claim, path) {
+            Ok(_) => return Err(Error::Changed),
+            Err(Error::NotFound(_)) => {}
+            Err(error) => return Err(error),
+        }
+        let fresh = self.generate_id()?;
+        self.json(
+            "PATCH",
+            &format!(
+                "{API}/files/{}?fields={FILE_FIELDS}",
+                encode_segment(&state.id)
+            ),
+            &json!({"appProperties": {guard::CLAIM_PROPERTY: fresh}}),
+            path,
+        )?;
+        let after = self.metadata(&state.id, path)?;
+        if after.version <= version || after.claim.as_deref() != Some(&fresh) {
+            return Err(Error::Changed);
+        }
+        let (after_bytes, after_etag) = self.get(path)?;
+        if after_bytes != bytes
+            || guard::parse_etag(&after_etag).map(|(v, _)| v) != Some(after.version)
+        {
+            return Err(Error::Changed);
+        }
+        Ok(Some(format!(
+            "rotated missing Drive claim {claim} to {fresh}; state bytes were preserved"
+        )))
+    }
+
     fn list(&self, dir: &str) -> Result<Vec<RemoteEntry>> {
         let folder = self.folder(dir)?;
         Ok(oldest(self.children(&folder.id, None)?)

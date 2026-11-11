@@ -719,6 +719,61 @@ fn the_claim_named_by_state_survives_day_old_cleanup_and_allows_the_next_push() 
 }
 
 #[test]
+fn explicit_repair_rotates_only_a_proven_deleted_claim() {
+    let fake = fake();
+    let drive = drive(&fake);
+    let old = drive.put("state.json", b"saved state", ANY).unwrap();
+    let (_, missing) = guard::parse_etag(&old).unwrap();
+    dead_claim(&fake, "v1.predecessor", Some(&missing));
+    // The test models a permanently deleted ID at the end of a surviving claim chain.
+    assert!(matches!(
+        drive.get(".claim-does-not-exist"),
+        Err(Error::NotFound(_))
+    ));
+
+    let preview = drive
+        .repair_missing_state_claim("state.json", false)
+        .unwrap();
+    assert!(preview
+        .as_deref()
+        .is_some_and(|m| m.starts_with("missing Drive claim")));
+    let (before, _) = drive.get("state.json").unwrap();
+    assert_eq!(before, b"saved state");
+
+    let applied = drive
+        .repair_missing_state_claim("state.json", true)
+        .unwrap()
+        .unwrap();
+    assert!(applied.contains("state bytes were preserved"));
+    let (after, new_etag) = drive.get("state.json").unwrap();
+    assert_eq!(after, b"saved state");
+    assert_ne!(new_etag, old);
+    assert!(drive
+        .put("state.json", b"next", &Precondition::Match(new_etag))
+        .is_ok());
+}
+
+#[test]
+fn explicit_repair_leaves_a_normal_unused_claim_unchanged() {
+    let fake = fake();
+    let drive = drive(&fake);
+    let etag = drive.put("state.json", b"saved state", ANY).unwrap();
+    assert_eq!(
+        drive
+            .repair_missing_state_claim("state.json", false)
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        drive
+            .repair_missing_state_claim("state.json", true)
+            .unwrap(),
+        None
+    );
+    assert_eq!(drive.get("state.json").unwrap().1, etag);
+}
+
+#[test]
 fn stale_or_forged_etags_never_write() {
     let fake = fake();
     let (first, _, etag) = state(&fake);

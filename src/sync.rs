@@ -812,12 +812,18 @@ pub fn history(s: &Session, game: &str) -> Result<HistoryData> {
 /// claims whose body is not an entry name are kept. `state.json` is checked before each change
 /// and again after a move, so a publication that races with repair is never overwritten.
 pub fn repair(s: &Session, game: &str, release: bool) -> Result<RepairData> {
+    let claim_recovery = s
+        .remote
+        .repair_missing_state_claim(&s.layout.state_path(game), release)?;
     if !s.remote.needs_rev_marker() {
         return Ok(RepairData {
             game: game.into(),
             revision: 0,
             markers: vec![],
-            message: "nothing to repair".into(),
+            message: claim_recovery
+                .clone()
+                .unwrap_or_else(|| "nothing to repair".into()),
+            claim_recovery,
         });
     }
     let (state, original_pre, reachable) = read_server(s, game)?;
@@ -904,6 +910,7 @@ pub fn repair(s: &Session, game: &str, release: bool) -> Result<RepairData> {
         game: game.into(),
         revision,
         markers,
+        claim_recovery,
         message,
     })
 }

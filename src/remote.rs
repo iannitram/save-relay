@@ -57,6 +57,11 @@ pub trait Remote {
     fn needs_rev_marker(&self) -> bool {
         false
     }
+    /// Preview or explicitly rotate a missing Google Drive state claim. Other remotes do not
+    /// have Drive's metadata guard and return `None`.
+    fn repair_missing_state_claim(&self, _path: &str, _apply: bool) -> Result<Option<String>> {
+        Ok(None)
+    }
 }
 
 /// `mkcol` `dir` and every missing folder above it, top down.

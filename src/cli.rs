@@ -1645,16 +1645,22 @@ fn repair_command(
         let eligible = preview
             .markers
             .iter()
-            .any(|m| m.status == "releasable" || m.status == "releasable_set_aside");
+            .any(|m| m.status == "releasable" || m.status == "releasable_set_aside")
+            || preview
+                .claim_recovery
+                .as_deref()
+                .is_some_and(|message| message.starts_with("missing Drive claim "));
         let approved = if yes {
             true
         } else if json || !eligible {
             false
         } else {
-            eprint!(
-                "{} Release eligible revision claim(s)? A complete entry is moved to set-aside/ first, never deleted. [y/N] ",
-                preview.message
-            );
+            let prompt = if preview.claim_recovery.is_some() {
+                "Apply eligible repair? Drive claim recovery requires sync stopped on every other device; it changes claim metadata only and preserves state bytes. [y/N] "
+            } else {
+                "Release eligible revision claim(s)? A complete entry is moved to set-aside/ first, never deleted. [y/N] "
+            };
+            eprint!("{} {}", preview.message, prompt);
             let mut answer = String::new();
             let mut byte = [0u8; 1];
             while stdin.read(&mut byte)? == 1 && byte[0] != b'\n' {

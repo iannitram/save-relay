@@ -150,6 +150,9 @@ pub struct RepairData {
     pub game: String,
     pub revision: u64,
     pub markers: Vec<RepairMarker>,
+    /// Drive state-claim recovery result, when supported by the backend.
+    #[serde(default)]
+    pub claim_recovery: Option<String>,
     pub message: String,
 }
 
