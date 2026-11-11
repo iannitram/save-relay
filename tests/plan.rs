@@ -115,9 +115,19 @@ fn only_local_changed_is_push() {
     assert_eq!(both(&v2(), Some(&l), &at(5, v1())), (Push, Push));
     let extra = set(&[("s/0.sav", H1, 100), ("s/1.sav", H2, 100)]);
     assert_eq!(both(&extra, Some(&l), &at(5, v1())), (Push, Push));
+}
+
+#[test]
+fn empty_local_set_with_nonempty_server_is_pulled_on_launch_and_exit() {
+    let l = last(5, v1());
     assert_eq!(
         both(&SaveSet::default(), Some(&l), &at(5, v1())),
-        (Push, Push)
+        (Pull, Pull)
+    );
+    // Also protect saves if the server advanced while this folder was unavailable.
+    assert_eq!(
+        both(&SaveSet::default(), Some(&l), &at(6, v2())),
+        (Pull, Pull)
     );
 }
 

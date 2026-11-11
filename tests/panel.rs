@@ -279,7 +279,6 @@ fn api_posts_run_the_known_commands_with_the_token() {
 fn commands_outside_the_panel_list_and_malformed_api_paths_are_not_found() {
     for path in [
         "/api/wrap",
-        "/api/install-wrap",
         "/api/panel",
         "/api/",
         "/api/status/extra",
@@ -416,6 +415,8 @@ fn every_panel_command_is_accepted_by_its_own_shape() {
         let line = match command {
             "where" => args(command, "{}"),
             "which" => args(command, r#"{"appid":1}"#),
+            "launch-option" => args(command, r#"{"appid":1}"#),
+            "install-wrap" | "steam-games" => args(command, "{}"),
             "restore" | "picture" => args(command, r#"{"game":"g","entry":"e"}"#),
             "answer" => args(command, r#"{"game":"g","answer":"wait"}"#),
             "setup" => args(command, r#"{"service":"gdrive","no-browser":true}"#),
@@ -436,11 +437,39 @@ fn appids_must_be_whole_numbers_in_range() {
         args("which", r#"{"appid":4294967295}"#),
         ["which", "4294967295", "--json"]
     );
+    assert_eq!(
+        args("steam-games", r#"{"no-steam-cloud":true}"#),
+        ["steam-games", "--no-steam-cloud", "--json"]
+    );
+    assert_eq!(
+        args("install-wrap", r#"{"app-ids":[42,43],"dry-run":true}"#),
+        ["install-wrap", "42", "43", "--dry-run", "--json"]
+    );
+    assert_eq!(
+        args("install-wrap", r#"{"no-steam-cloud":true}"#),
+        ["install-wrap", "--no-steam-cloud", "--json"]
+    );
+    assert_eq!(
+        args(
+            "launch-option",
+            r#"{"appid":42,"current":"-novid %command%"}"#
+        ),
+        [
+            "launch-option",
+            "42",
+            "--current=-novid %command%",
+            "--json"
+        ]
+    );
+    assert_eq!(
+        args("launch-option", r#"{"appid":42,"current":""}"#),
+        ["launch-option", "42", "--current=", "--json"]
+    );
 }
 
 #[test]
 fn commands_outside_the_panel_are_refused() {
-    for command in ["wrap", "install-wrap", "panel", "nope", ""] {
+    for command in ["wrap", "panel", "nope", ""] {
         refused(command, "{}");
     }
 }
@@ -454,6 +483,8 @@ fn fields_the_command_does_not_take_or_a_missing_one_are_refused() {
     refused("restore", r#"{"game":"g"}"#);
     refused("picture", r#"{"game":"g","entry":"e","out":"/tmp/x"}"#);
     refused("answer", r#"{"game":"g"}"#);
+    refused("launch-option", r#"{"appid":42,"other":true}"#);
+    refused("install-wrap", r#"{"app-ids":[42],"other":true}"#);
 }
 
 #[test]
@@ -464,6 +495,10 @@ fn values_must_be_strings_that_do_not_look_like_flags() {
     refused("status", "{\"game\":\"g\\u0000x\"}");
     refused("pull", r#"{"game":"g","anyway":"yes"}"#);
     refused("pull", r#"{"game":"g","resolve":true}"#);
+    refused("launch-option", r#"{"appid":42,"current":"two\nlines"}"#);
+    refused("launch-option", r#"{"appid":42,"current":"bad\u0000text"}"#);
+    refused("install-wrap", r#"{"app-ids":["42"]}"#);
+    refused("install-wrap", r#"{"app-ids":[0]}"#);
 }
 
 #[test]
@@ -538,6 +573,40 @@ fn panel_parses_its_port_and_no_open_flags() {
     );
     assert!(both.json);
     assert_eq!(cli::command_name(&both.command), "panel");
+}
+
+#[test]
+fn launch_option_cli_keeps_current_text_verbatim() {
+    for (args, expected) in [
+        (
+            &["launch-option", "42", "--current=-novid %command%"] as &[_],
+            Some("-novid %command%"),
+        ),
+        (&["launch-option", "42", "--current="] as &[_], Some("")),
+        (
+            &["launch-option", "42", "--current", "--current=value"] as &[_],
+            Some("--current=value"),
+        ),
+    ] {
+        let parsed = command_line(args).unwrap();
+        assert_eq!(
+            parsed.command,
+            Command::LaunchOption {
+                app_id: 42,
+                remove: false,
+                current: expected.map(str::to_owned),
+            }
+        );
+    }
+    let parsed = command_line(&["launch-option", "42", "--current=--remove"]).unwrap();
+    assert_eq!(
+        parsed.command,
+        Command::LaunchOption {
+            app_id: 42,
+            remove: false,
+            current: Some("--remove".to_string()),
+        }
+    );
 }
 
 #[test]
@@ -704,6 +773,52 @@ fn an_api_post_runs_the_command_line_and_answers_its_envelope() {
     let (status, body) = post(data.port, "/api/status", None, r#"{"game":"g"}"#);
     assert_eq!(status, "HTTP/1.1 403 Forbidden");
     assert_eq!(body, b"forbidden".to_vec());
+}
+
+#[test]
+fn steam_game_api_routes_run_with_numeric_ids_and_reject_extra_fields() {
+    let data = start(fake_run(Vec::new()));
+    let header = format!("{TOKEN_HEADER}: {}", token_in(&data.url));
+    for (path, body, expected) in [
+        (
+            "/api/steam-games",
+            r#"{"no-steam-cloud":true}"#,
+            vec!["steam-games", "--no-steam-cloud", "--json"],
+        ),
+        (
+            "/api/install-wrap",
+            r#"{"app-ids":[42,43],"dry-run":true}"#,
+            vec!["install-wrap", "42", "43", "--dry-run", "--json"],
+        ),
+        (
+            "/api/launch-option",
+            r#"{"appid":42,"current":"-novid %command%"}"#,
+            vec![
+                "launch-option",
+                "42",
+                "--current=-novid %command%",
+                "--json",
+            ],
+        ),
+    ] {
+        let (status, body) = post(data.port, path, Some(header.clone()), body);
+        assert_eq!(status, "HTTP/1.1 200 OK", "{path}");
+        let envelope: Value = serde_json::from_slice(&body).expect("JSON envelope");
+        assert_eq!(
+            envelope["data"]["argv"],
+            serde_json::json!(expected),
+            "{path}"
+        );
+    }
+    for (path, body) in [
+        ("/api/install-wrap", r#"{"app-ids":["42"]}"#),
+        ("/api/launch-option", r#"{"appid":42,"extra":true}"#),
+    ] {
+        let (status, body) = post(data.port, path, Some(header.clone()), body);
+        assert_eq!(status, "HTTP/1.1 400 Bad Request", "{path}");
+        let envelope: Value = serde_json::from_slice(&body).expect("JSON failure");
+        assert_eq!(envelope["error"]["code"], "usage");
+    }
 }
 
 #[test]

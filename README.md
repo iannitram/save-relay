@@ -2,6 +2,8 @@
 
 Share game saves between my machines through the service I pick once at setup (my own Nextcloud, Google Drive or Dropbox): the launcher pulls the newest saves before a game starts and pushes them after it quits. Built once, reused by every game port I maintain.
 
+For Steam games without Steam Cloud, `save-relay steam-games` shows the store state and whether save-relay knows a saves folder. `save-relay install-wrap --no-steam-cloud` adds only games with a definite no and a known saves folder; unknown stays unknown. The panel also has an Add games view. See [`docs/wrap.md`](docs/wrap.md) and [`docs/panel.md`](docs/panel.md) for the browser and Game Mode flows. The Game Mode Steam-client callback is covered by automated tests and still needs a handheld check.
+
 **Stage:** see `PIPELINE.md`.
 
 ## Install

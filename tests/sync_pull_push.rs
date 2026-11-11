@@ -217,7 +217,7 @@ fn decision_rows_for_both_intents() {
         ("local", Some((5, "server")), None, Conflict, Conflict),
         ("old", Some((5, "old")), Some((5, "old")), Noop, Noop),
         ("new", Some((5, "old")), Some((5, "old")), Pushed, Pushed),
-        ("", Some((5, "old")), Some((5, "old")), Pushed, Pushed),
+        ("", Some((5, "old")), Some((5, "old")), Pulled, Pulled),
         ("old", Some((6, "new")), Some((5, "old")), Pulled, Noop),
         ("old", Some((4, "new")), Some((5, "old")), Pulled, Noop),
         ("new", Some((6, "new")), Some((5, "old")), Adopted, Adopted),

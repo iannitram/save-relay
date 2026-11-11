@@ -142,6 +142,51 @@ export interface WhichData {
   message: string;
 }
 
+export type SteamCloud = "yes" | "no" | "unknown";
+export type SteamSaves = "manifest" | "ludusavi" | "none";
+
+export interface SteamGame {
+  app_id: number;
+  name: string;
+  steam_cloud: SteamCloud;
+  saves: SteamSaves;
+  wrapped: boolean;
+}
+
+export interface SteamGamesData {
+  games: SteamGame[];
+  unknown: number;
+}
+
+export interface InstallWrapApp {
+  app_id: number;
+  user_id: string;
+  before: string | null;
+  after: string | null;
+}
+
+export type InstallWrapSkipReason = "steam_cloud_unknown" | "no_saves_entry";
+
+export interface InstallWrapSkipped {
+  app_id: number;
+  name: string;
+  reason: InstallWrapSkipReason;
+}
+
+export interface InstallWrapData {
+  dry_run: boolean;
+  changed: InstallWrapApp[];
+  skipped: InstallWrapSkipped[];
+  backups: string[];
+  message: string;
+}
+
+export interface LaunchOptionData {
+  app_id: number;
+  before: string | null;
+  after: string | null;
+}
+
 export interface AnswerData {
   game: string;
   kind: ChoiceKind;

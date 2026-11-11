@@ -55,6 +55,7 @@ pub enum Decision {
 /// | At | none | local same content as server | Adopt | Adopt |
 /// | At | none | local empty | Pull | Pull |
 /// | At | none | otherwise | Conflict | Conflict |
+/// | At | some | local empty and server non-empty | Pull | Pull |
 /// | At | some | neither changed | Noop | Noop |
 /// | At | some | only local changed | Push | Push |
 /// | At | some | only server changed | Pull | Noop |
@@ -88,6 +89,12 @@ pub fn decide(
                 }
             }
             Some(last) => {
+                // An empty local set can mean the saves folder is missing (for example, a
+                // removable drive or Proton prefix has not mounted). Never publish that as a
+                // deletion of the server's saves during the automatic launch/exit flow.
+                if local.is_empty() && !files.is_empty() {
+                    return Decision::Pull;
+                }
                 let local_changed = !local.same_content(&last.save_set());
                 let server_changed = *revision != last.revision;
                 match (local_changed, server_changed) {

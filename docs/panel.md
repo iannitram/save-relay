@@ -29,6 +29,14 @@ Use the controller: the D-pad moves between buttons, A presses the focused butto
 - **Open elsewhere**: **Wait** for the other machine, or **Play anyway**. Playing anyway can lose the other machine's newest saves.
 - **Pending choices**: every choice waiting for an answer.
 
+## Add games
+
+Choose **Add games…** from the Games view to see installed Steam games, their Steam Cloud state, whether save-relay knows a saves folder, and whether a game is already added. The list puts games with no Steam Cloud first. A game with an unknown store answer stays marked **Unknown**; unknown is never treated as no. Add all selects only games with a definite no and a known saves folder, then asks you to confirm the number before it changes their launch options. A known-save game marked Unknown can still be added by its app id. Only Steam app ids are sent to the public store lookup.
+
+In the browser, Add and Remove call `install-wrap` for the selected app ids. Bulk Add confirms the selected eligible ids before calling it. Steam must be closed; if Steam is running, the panel says **Close Steam, then press Add again.**
+
+In Game Mode, the Decky bridge reads the current Launch Options through Steam's app-details callback, asks `save-relay launch-option` for the updated text, then sends it to Steam's client and waits for Steam to echo the requested value. The panel marks the row Added only after that echo. This callback and echo flow has automated tests; checking that Steam accepts it on a handheld is still pending.
+
 ## Sign-in for Google Drive or Dropbox
 
 Pick Google Drive or Dropbox in the panel. It shows a QR code and the sign-in address. Open the address on a phone or computer and sign in; for Google Drive, type the code the panel shows.

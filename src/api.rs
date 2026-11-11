@@ -254,6 +254,58 @@ pub struct WhichData {
     pub message: String,
 }
 
+/// The Steam Cloud state shown by `steam-games` and reused by the bulk-wrap command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SteamCloud {
+    Yes,
+    No,
+    Unknown,
+}
+
+/// Where save-relay can find this installed game's saves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SteamSaves {
+    Manifest,
+    Ludusavi,
+    None,
+}
+
+/// One installed game in `steam-games`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SteamGame {
+    pub app_id: u32,
+    pub name: String,
+    pub steam_cloud: SteamCloud,
+    pub saves: SteamSaves,
+    pub wrapped: bool,
+}
+
+/// `data` of `steam-games`. `unknown` counts listed games with unknown store answers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SteamGamesData {
+    pub games: Vec<SteamGame>,
+    pub unknown: usize,
+}
+
+/// `data` of `launch-option`: Steam's launch option before and after applying Save Relay.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LaunchOptionData {
+    pub app_id: u32,
+    pub before: Option<String>,
+    pub after: Option<String>,
+}
+
+impl SteamGamesData {
+    /// The install-wrap selection shared with F75: definitely no Steam Cloud and known saves.
+    pub fn no_cloud_with_saves(&self) -> impl Iterator<Item = &SteamGame> {
+        self.games
+            .iter()
+            .filter(|game| game.steam_cloud == SteamCloud::No && game.saves != SteamSaves::None)
+    }
+}
+
 /// One launch option `install-wrap` changed (or would, with `--dry-run`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InstallWrapApp {
@@ -264,11 +316,29 @@ pub struct InstallWrapApp {
     pub after: Option<String>,
 }
 
+/// Why an installed Steam game was skipped by `install-wrap --no-steam-cloud`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstallWrapSkipReason {
+    SteamCloudUnknown,
+    NoSavesEntry,
+}
+
+/// One game not selected by `install-wrap --no-steam-cloud`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstallWrapSkipped {
+    pub app_id: u32,
+    pub name: String,
+    pub reason: InstallWrapSkipReason,
+}
+
 /// `data` of `install-wrap`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InstallWrapData {
     pub dry_run: bool,
     pub changed: Vec<InstallWrapApp>,
+    #[serde(default)]
+    pub skipped: Vec<InstallWrapSkipped>,
     /// The backup files written (none with `--dry-run`).
     pub backups: Vec<String>,
     pub message: String,
