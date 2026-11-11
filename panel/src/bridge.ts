@@ -28,6 +28,10 @@ export type ApiArgs = Record<string, string | number | boolean | string[] | numb
 
 export interface Bridge {
   call<T>(command: ApiCommand, args: ApiArgs): Promise<Envelope<T>>;
+  /** Present in Game Mode when Steam can report the current app launch option. */
+  getLaunchOption?(appId: number): Promise<string>;
+  /** Present in Game Mode when Steam can accept and confirm a launch option update. */
+  setLaunchOption?(appId: number, text: string): Promise<void>;
 }
 
 /** The header that carries the panel's token (src/panel.rs `TOKEN_HEADER`). */
