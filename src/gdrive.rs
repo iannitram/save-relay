@@ -117,10 +117,15 @@ fn parse_drive_file(value: &serde_json::Value) -> Option<DriveFile> {
         .and_then(serde_json::Value::as_str)
         .unwrap_or("")
         .to_owned();
+    let claim_key = if name == format!(".claim-{id}") {
+        guard::NEXT_PROPERTY
+    } else {
+        guard::CLAIM_PROPERTY
+    };
     let claim = object
         .get("appProperties")
         .and_then(serde_json::Value::as_object)
-        .and_then(|properties| properties.get(guard::CLAIM_PROPERTY))
+        .and_then(|properties| properties.get(claim_key))
         .and_then(serde_json::Value::as_str)
         .map(str::to_owned);
     Some(DriveFile {
@@ -580,16 +585,29 @@ impl Drive {
             return Ok(());
         };
         let files = self.children(parent, None)?;
-        // `state.json`'s etag names the claim that guards its next conditional write. Keep
-        // that claim even when it is old: removing it consumes the Drive id permanently and
-        // every later guarded write would get 409 on create followed by 404 on read.
-        let active_claim = files
+        // `state.json`'s etag names the first claim in a guard chain. Keep every old claim
+        // reachable through NEXT_PROPERTY: deleting any active id consumes it permanently and
+        // a later conditional write can no longer follow the chain.
+        let mut active_claims = std::collections::BTreeSet::new();
+        let mut next_claim = files
             .iter()
             .find(|file| file.name == "state.json" && !file.is_dir)
             .and_then(|file| file.claim.clone());
+        for _ in 0..=guard::MAX_HOPS {
+            let Some(claim_id) = next_claim else {
+                break;
+            };
+            if !active_claims.insert(claim_id.clone()) {
+                break;
+            }
+            next_claim = files
+                .iter()
+                .find(|file| file.id == claim_id && is_claim(file))
+                .and_then(|file| file.claim.clone());
+        }
         for file in files {
             if is_claim(&file)
-                && active_claim.as_deref() != Some(file.id.as_str())
+                && !active_claims.contains(&file.id)
                 && created_secs(&file.created)
                     .is_some_and(|created| now.saturating_sub(created) >= 86400)
             {

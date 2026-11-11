@@ -693,12 +693,18 @@ fn the_claim_named_by_state_survives_day_old_cleanup_and_allows_the_next_push() 
     let (first, _, etag) = state(&fake);
     let (_, claim) = guard::parse_etag(&etag).unwrap();
     let path = format!(".claim-{claim}");
-    dead_claim(&fake, &etag, Some("unused-next"));
+    dead_claim(&fake, &etag, Some("chain-1"));
+    raw_file(
+        &fake,
+        json!({"id": "chain-1", "name": ".claim-chain-1", "parents": ["root"],
+        "appProperties": {guard::NEXT_PROPERTY: "chain-2"}}),
+    );
 
     advance(&fake, 86_400);
     first.put("playing.json", b"open", ANY).unwrap();
 
     assert!(fake.file_paths().contains(&path));
+    assert!(fake.file_paths().contains(&".claim-chain-1".to_string()));
     first
         .put(
             "state.json",
