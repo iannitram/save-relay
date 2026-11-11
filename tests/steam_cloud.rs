@@ -44,6 +44,7 @@ fn malformed_or_missing_store_answers_are_state_errors() {
     for text in [
         r#"{"504230":{"success":true,"data":{}}}"#,
         r#"{"504230":{"success":true,"data":{"type":"game","categories":"bad"}}}"#,
+        r#"{"504230":{"success":true,"data":{"type":"game","categories":[{"id":"23"}]}}}"#,
     ] {
         assert!(
             matches!(parse_appdetails(text, 504230), Err(save_relay::Error::StateInvalid(message)) if message.starts_with("steam store: "))
