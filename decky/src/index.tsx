@@ -7,6 +7,7 @@ import { App } from "panel/App";
 import type { Envelope, HistoryData } from "panel/api";
 import type { ApiArgs, ApiCommand, Bridge } from "panel/bridge";
 import { deckyBridge, type RunBackend } from "./bridge.ts";
+import { readLaunchOption, writeLaunchOption, type SteamLaunchOptionsApi } from "./launch-options.ts";
 import { pressKey } from "../../panel/src/focus.ts";
 import panelTokens from "../../panel/src/tokens.css?inline";
 import panelCss from "../../panel/src/app.css?inline";
@@ -15,6 +16,11 @@ import jetBrainsFont from "../../panel/src/fonts/JetBrainsMono[wght].ttf?asset";
 
 const run = callable<[command: ApiCommand, args: ApiArgs], string>("run");
 const picture = callable<[game: string, entry: string], string | null>("picture");
+
+function steamLaunchOptionsApi(): SteamLaunchOptionsApi | null {
+  if (typeof SteamClient === "undefined" || !SteamClient.Apps) return null;
+  return SteamClient.Apps;
+}
 
 // Reuse the panel stylesheet, scoped so its body/header/button rules never style Steam.
 const scoped = (source: string) => source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/([^{}]+)\{/g, (_, selectors: string) =>
@@ -77,6 +83,16 @@ function DeckyPanel({ run, picture }: {
           }));
         }
         return envelope;
+      },
+      async getLaunchOption(appId: number): Promise<string> {
+        const apps = steamLaunchOptionsApi();
+        if (!apps) throw new Error("Steam app details are unavailable in this session.");
+        return readLaunchOption(apps, appId);
+      },
+      async setLaunchOption(appId: number, text: string): Promise<void> {
+        const apps = steamLaunchOptionsApi();
+        if (!apps) throw new Error("Steam cannot set launch options in this session. Add games from Desktop Mode with Steam closed.");
+        await writeLaunchOption(apps, appId, text);
       },
     };
     return { bridge, pictures };

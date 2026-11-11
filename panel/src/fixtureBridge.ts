@@ -3,6 +3,8 @@
 
 import answer from "./fixtures/answer.json";
 import history from "./fixtures/history.json";
+import installWrap from "./fixtures/install-wrap.json";
+import launchOption from "./fixtures/launch-option.json";
 import pullConflict from "./fixtures/pull-conflict.json";
 import pullPulled from "./fixtures/pull-pulled.json";
 import restore from "./fixtures/restore.json";
@@ -11,6 +13,7 @@ import setupGdrive from "./fixtures/setup-gdrive.json";
 import statusHeld from "./fixtures/status-pending-held.json";
 import statusIdle from "./fixtures/status-idle.json";
 import statusPending from "./fixtures/status-pending.json";
+import steamGames from "./fixtures/steam-games.json";
 import where from "./fixtures/where.json";
 import type { Envelope } from "./api.ts";
 import type { ApiArgs, ApiCommand, Bridge } from "./bridge.ts";
@@ -18,10 +21,40 @@ import { setWhenClock } from "./format.ts";
 
 const fixtureClock = { now: new Date("2026-11-01T00:30:00Z"), timeZone: "UTC" };
 
-function pick(command: ApiCommand, args: ApiArgs): unknown {
+function pick(command: ApiCommand, args: ApiArgs, added: Set<number>): unknown {
   switch (command) {
     case "where":
       return where;
+    case "steam-games":
+      return {
+        ...steamGames,
+        data: {
+          ...steamGames.data,
+          games: steamGames.data.games.map((game) => ({
+            ...game,
+            wrapped: added.has(game.app_id) ? true : game.wrapped,
+          })),
+        },
+      };
+    case "install-wrap": {
+      const ids = Array.isArray(args["app-ids"]) ? args["app-ids"] as number[] : [];
+      for (const id of ids) {
+        if (args.remove === true) added.delete(id);
+        else added.add(id);
+      }
+      return {
+        ...installWrap,
+        data: {
+          ...installWrap.data,
+          dry_run: args["dry-run"] === true,
+          changed: ids.map((app_id) => ({ app_id, user_id: "123", before: null, after: "save-relay wrap -- %command%" })),
+          skipped: [],
+          message: args.remove === true ? `removed ${ids.length} launch option(s)` : `wrapped ${ids.length} launch option(s)`,
+        },
+      };
+    }
+    case "launch-option":
+      return launchOption;
     case "status":
       if (args.game === "hades") return statusPending;
       if (args.game === "celeste") return statusHeld;
@@ -48,9 +81,10 @@ function pick(command: ApiCommand, args: ApiArgs): unknown {
 
 export function fixtureBridge(): Bridge {
   setWhenClock(fixtureClock);
+  const added = new Set<number>();
   return {
     async call<T>(command: ApiCommand, args: ApiArgs): Promise<Envelope<T>> {
-      return pick(command, args) as Envelope<T>;
+      return pick(command, args, added) as Envelope<T>;
     },
   };
 }

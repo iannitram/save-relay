@@ -1,0 +1,4 @@
+"UserLocalConfigStore"
+{
+  "Software" { "Valve" { "Steam" { "apps" { "504230" { "LaunchOptions" "\"save-relay\" wrap -- %command%" } } } } }
+}

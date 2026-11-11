@@ -4,7 +4,12 @@ From `SPEC.md` (re-approved 2026-11-01) to 1.0: Uncharted on the AMD handheld, t
 
 ## Where it stands (2026-11-11)
 
-Stages 1-7 are built and merged: F01-F25, F27-F45, F48-F66 and F69 are closed, CI is green on Linux, Windows and macOS, and the design pass's 20 findings (#164-#179, #197, #198, #201, #202) are fixed. Pull requests #215-#222 (M16) are open. The 2026-11-11 audit (`docs/audit-2026-11-11.md`) found six blockers, B1-B6, that were not in the run order; the owner put all six in 1.0, before `rc.1`, and they are added below. No release exists yet (`Cargo.toml` says `0.0.0`). What is left: M16 (added 2026-11-10: Steam games without Steam Cloud, `docs/adr/0004-steam-games-without-steam-cloud.md`), the Game Mode re-check, the app registrations, one release candidate, and the owner's device checks.
+**Audited checkpoint:** main at `a8e07ff` has Stages 1–7 merged (F01–F25, F27–F45, F48–F66 and F69). **You are here: Dev Loop, M16 implementation through F78 (#213), with Game Mode handheld acceptance still pending.** The M16 implementation adds the Steam Cloud parser and cache, CLI, Add games view, integration coverage and usage docs.
+
+- **Verified on main:** the [check run for `a8e07ff`](https://github.com/iannitram/save-relay/actions/runs/42939286063) passed Rust and WebDAV integration on Linux, Windows and macOS, plus the frontend build and tests. Dropbox and Drive have automated fake-service coverage; live sign-in and round trips remain in #47.
+- **Stage 8 remains open:** the 20 design findings (#164–#179, #197, #198, #201, #202) are fixed. #73 tracks the controller-only Game Mode re-check after handheld acceptance for #212.
+- **Audit blockers:** the 2026-11-11 audit (`docs/audit-2026-11-11.md`) found B1–B6; all remain in the 1.0 run order ahead of `rc.1`. This M16 integration does not implement them.
+- **Release and acceptance:** Cargo is at `0.0.0` and GitHub has no release. The owner can register Google and Dropbox in #36 while M16 proceeds. The release candidate (#205) waits for M16, #36, handheld acceptance and B1–B6.
 
 ### Run order to 1.0
 
@@ -16,17 +21,17 @@ Each step is one issue. An automated run takes the **agent** steps whose "Waits 
 | 2 | agent | #208 (F73) | The Steam Cloud answer cache | step 1 | its tests pass against a fake transport |
 | 3 | agent | #209 (F74) | `save-relay steam-games` | step 2 | the fixture Steam folder lists yes, no, unknown |
 | 4 | agent | #210 (F75) | `install-wrap --no-steam-cloud` | step 3 | only the no-cloud game is wrapped; unknown is skipped |
-| 5 | agent | #211 (F76) | `save-relay launch-option`; the panel API runs the M16 commands | step 3 | the three routes answer |
+| 5 | agent | #211 (F76) | `save-relay launch-option`; the panel API runs the M16 commands | steps 3, 4 | the three routes answer |
 | 6 | agent, check on a SteamOS handheld | #212 (F77) | The panel's Add games view | steps 3, 4, 5 | vitest and the contract fixtures pass; the Game Mode add is tried on a handheld |
 | 7 | agent | #213 (F78) | M16 integration test and docs | steps 4, 6 | the flow test and the doc test pass |
 | 8 | owner | #36 (F47) | Register the app with Google and Dropbox; set the five values as this repo's Actions variables and secrets (a tagged release refuses to build without them) and put them in `src/clients.rs` | nothing, any time | `gh variable list` and `gh secret list` show the five names; the values are on `main` |
-| 9 | agent, on a SteamOS handheld | #73 (F68) | Re-check the panel in Game Mode after #201 and #202, with the Add games view; file and fix any new `design-pass` finding; record the pass in `PIPELINE.md` and `CHANGELOG.md` | step 6 | every view re-checked at 1280x800, controller only; #73 closed |
+| 9 | agent, on a SteamOS handheld | #73 (F68) | Re-check the panel in Game Mode after #201 and #202, with the Add games view; file and fix any new `design-pass` finding; record the pass in `PIPELINE.md` and `CHANGELOG.md` | step 6 handheld acceptance | every view re-checked at 1280x800, controller only; #73 closed |
 | B1 | agent | #223 | An empty or missing saves folder is pushed as the newest revision: pull the server's saves instead (`src/plan.rs`, `src/scan.rs`, `tests/plan.rs`) | nothing | the audit's "Expected" for B1 holds, with tests |
-| B2 | agent | not filed yet | The panel never shows a pending choice, and a late answer does nothing: fill `pending` in `status`, apply a late answer right away (`src/sync.rs`, `src/pending.rs`, `src/wrap.rs`, panel) | nothing | the audit's "Expected" for B2 holds, with tests |
+| B2 | agent | #224 | The panel never shows a pending choice, and a late answer does nothing: fill `pending` in `status`, apply a late answer right away (`src/sync.rs`, `src/pending.rs`, `src/wrap.rs`, panel) | nothing | the audit's "Expected" for B2 holds, with tests |
 | B3 | agent | #226 | A wrapped game found through the ludusavi data is never remembered: save its record on the first locate (`src/cli.rs`) | nothing | the audit's "Expected" for B3 holds, with tests |
-| B4 | agent | not filed yet | Wire the Steam screenshot into a wrapped game's card (`src/steam.rs`, `src/sync.rs`) | nothing | the audit's "Expected" for B4 holds, with tests |
-| B5 | agent | not filed yet | Refuse a ludusavi saves folder that is a root, the home folder or a bare platform folder; cap the download size (`src/ludusavi.rs`, `src/manifest.rs`, `src/http.rs`) | nothing | the audit's "Expected" for B5 holds, with tests |
-| B6 | agent | not filed yet | Google Drive: `clean_claims` never deletes the claim `state.json` names; `repair` recovers a game already stuck (`src/gdrive.rs`) | nothing | the audit's "Expected" for B6 holds, with tests |
+| B4 | agent | #225 | Wire the Steam screenshot into a wrapped game's card (`src/steam.rs`, `src/sync.rs`) | nothing | the audit's "Expected" for B4 holds, with tests |
+| B5 | agent | #228 | Refuse a ludusavi saves folder that is a root, the home folder or a bare platform folder; cap the download size (`src/ludusavi.rs`, `src/manifest.rs`, `src/http.rs`) | nothing | the audit's "Expected" for B5 holds, with tests |
+| B6 | agent | #227 | Google Drive: `clean_claims` never deletes the claim `state.json` names; `repair` recovers a game already stuck (`src/gdrive.rs`) | nothing | the audit's "Expected" for B6 holds, with tests |
 | 10 | agent | #205 (F71) | Cut `v1.0.0-rc.1`: version bump, release dry run, tag, checksum check | steps 7, 8, B1-B6 | the GitHub release holds the three binaries, `SHA256SUMS`, the Decky zip and the panel zip |
 | 11 | owner, an agent may drive with the owner signing in | #47 (F46) | Real round trips on Dropbox and Google Drive; Game Mode sign-in | step 10 | `cargo test --test live_services -- --ignored` passes on Windows and a handheld; written up on #47 |
 | 12 | owner | #72 (F67) | Device checks: suspend hand-off, wrap and install-wrap, the panel in Game Mode, adding a game without Steam Cloud | steps 9, 10 | written up on #72 |
@@ -34,7 +39,7 @@ Each step is one issue. An automated run takes the **agent** steps whose "Waits 
 | 14 | owner | #26 (F26) | 1.0 acceptance on the three PCs | steps 11, 12, 13 | written up on #26 |
 | 15 | agent | new issue when step 14 passes | Tag `v1.0.0`; `PIPELINE.md` moves to Prototype / Beta with a CHANGELOG line | step 14 | the 1.0 release is out |
 
-Rows B1-B6 are the audit's blockers (2026-11-11); the Project Manager files each from the drafts in `docs/audit-2026-11-11.md` and gives them issue numbers. They do not wait on each other or on steps 1-9.
+Rows B1-B6 are the audit's blockers (2026-11-11), filed as #223-#228 from the drafts in `docs/audit-2026-11-11.md`. They do not wait on each other or on steps 1-9.
 
 A bug found in steps 11, 12 or 14 becomes its own issue, is fixed by an agent, and ships in the next `rc` before the step is run again. Before step 10, a device can try a build from the release workflow's dry run (`gh workflow run release.yml --ref main`): Nextcloud works in it, Google Drive and Dropbox say they are not registered.
 

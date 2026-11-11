@@ -16,7 +16,7 @@ TIMEOUT = 60
 PLUGIN_DIR = Path(__file__).resolve().parent
 API_COMMANDS = {
     "status", "history", "restore", "pull", "push", "answer", "where", "which",
-    "picture", "setup",
+    "picture", "setup", "steam-games", "install-wrap", "launch-option",
 }
 
 
@@ -33,6 +33,8 @@ def api_args(command, args, picture_out):
         "where": (), "setup": (), "which": ("appid",),
         "restore": ("game", "entry"), "picture": ("game", "entry"),
         "answer": ("game", "answer"),
+        "steam-games": (), "install-wrap": ("app-ids",),
+        "launch-option": ("appid",),
     }.get(command, ("game",))
     flags = {
         "status": ("manifest", "saves-dir"),
@@ -40,12 +42,24 @@ def api_args(command, args, picture_out):
         "pull": ("manifest", "saves-dir", "resolve", "anyway"),
         "push": ("manifest", "saves-dir", "resolve"),
         "setup": ("service", "server", "user", "device", "root", "no-browser", "finish"),
+        "steam-games": ("no-steam-cloud", "refresh"),
+        "install-wrap": ("no-steam-cloud", "remove", "dry-run"),
+        "launch-option": ("remove", "current"),
     }.get(command, ())
     if set(args) - set(positionals) - set(flags):
         raise ValueError("Unexpected command argument")
     result = [command]
     for key in positionals:
         value = args.get(key)
+        if command == "launch-option" and key == "appid" and type(value) is not int:
+            raise ValueError("appid must be a whole number")
+        if key == "app-ids":
+            if value is None:
+                continue
+            if not isinstance(value, list) or any(type(app_id) is not int or not 1 <= app_id <= 4294967295 for app_id in value):
+                raise ValueError("app-ids must be positive whole numbers")
+            result.extend(str(app_id) for app_id in value)
+            continue
         if key == "appid" and type(value) is int and 0 <= value <= 4294967295:
             value = str(value)
         if not isinstance(value, str) or not value or value.startswith("-") or "\0" in value:
@@ -55,12 +69,17 @@ def api_args(command, args, picture_out):
         if key not in args:
             continue
         value = args[key]
-        if key in {"anyway", "no-browser", "finish"}:
+        if key in {"anyway", "no-browser", "finish", "no-steam-cloud", "refresh", "remove", "dry-run"}:
             if type(value) is not bool:
                 raise ValueError(f"{key} must be a boolean")
             if value:
                 result.append(f"--{key}")
         else:
+            if command == "launch-option" and key == "current":
+                if not isinstance(value, str) or "\n" in value or "\r" in value or "\0" in value:
+                    raise ValueError("current must be single-line text without NUL")
+                result.append(f"--current={value}")
+                continue
             if not isinstance(value, str) or not value or value.startswith("-") or "\0" in value:
                 raise ValueError(f"Invalid {key}")
             result.extend([f"--{key}", value])

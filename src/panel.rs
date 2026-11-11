@@ -70,9 +70,22 @@ pub const TOKEN_HEADER: &str = "X-Save-Relay-Token";
 
 /// The commands `POST /api/<command>` may run. `setup` only for Google Drive with `no-browser`
 /// or `finish`, and for Dropbox with `no-browser` (its `finish` needs a terminal); never `wrap`,
-/// `install-wrap`, `panel` or a Nextcloud setup (its password stays on standard input).
-pub const API_COMMANDS: [&str; 10] = [
-    "status", "history", "restore", "pull", "push", "answer", "where", "which", "picture", "setup",
+/// `panel` or a Nextcloud setup (its password stays on standard input). Steam game commands are
+/// available to the M16 panel, which delegates launch-option writes to Steam's own client.
+pub const API_COMMANDS: [&str; 13] = [
+    "status",
+    "history",
+    "restore",
+    "pull",
+    "push",
+    "answer",
+    "where",
+    "which",
+    "picture",
+    "setup",
+    "steam-games",
+    "install-wrap",
+    "launch-option",
 ];
 
 /// Request headers larger than this are refused.
@@ -82,7 +95,15 @@ const MAX_BODY: usize = 1024 * 1024;
 /// A connection that sends nothing for this long is dropped: requests are answered one at a time.
 const READ_TIMEOUT: Duration = Duration::from_secs(10);
 /// The flags of `api_args` that are switches (`true` adds the flag, `false` leaves it out).
-const SWITCHES: [&str; 3] = ["anyway", "no-browser", "finish"];
+const SWITCHES: [&str; 7] = [
+    "anyway",
+    "no-browser",
+    "finish",
+    "no-steam-cloud",
+    "refresh",
+    "remove",
+    "dry-run",
+];
 const TEXT: &str = "text/plain; charset=utf-8";
 const JSON: &str = "application/json; charset=utf-8";
 
@@ -267,10 +288,29 @@ pub fn api_args(command: &str, body: &[u8]) -> Result<Vec<String>> {
     }
     let mut argv = vec![command.to_string()];
     for name in positionals {
+        if *name == "app-ids" {
+            if let Some(Value::Array(values)) = fields.get(*name) {
+                for value in values {
+                    let app_id = value
+                        .as_u64()
+                        .filter(|id| (1..=u64::from(u32::MAX)).contains(id))
+                        .ok_or_else(|| {
+                            usage_error("app-ids must contain only positive whole numbers")
+                        })?;
+                    argv.push(app_id.to_string());
+                }
+            } else if fields.contains_key(*name) {
+                return Err(usage_error("app-ids must be an array of whole numbers"));
+            }
+            continue;
+        }
         let text = match (*name, fields.get(*name)) {
+            ("appid", Some(Value::String(_))) if command == "launch-option" => {
+                return Err(usage_error("appid must be a whole number"));
+            }
             ("appid", Some(Value::Number(number))) => number
                 .as_u64()
-                .filter(|appid| *appid <= u64::from(u32::MAX))
+                .filter(|appid| (1..=u64::from(u32::MAX)).contains(appid))
                 .map(|appid| appid.to_string())
                 .ok_or_else(|| usage_error("appid must be a whole number"))?,
             (_, Some(Value::String(text))) => text.clone(),
@@ -290,9 +330,18 @@ pub fn api_args(command: &str, body: &[u8]) -> Result<Vec<String>> {
                 }
             }
             Value::String(text) if !SWITCHES.contains(name) => {
-                check_value(name, text)?;
-                argv.push(format!("--{name}"));
-                argv.push(text.clone());
+                if *name == "current" {
+                    if text.contains('\n') || text.contains('\r') || text.contains('\0') {
+                        return Err(usage_error(
+                            "'current' must be single-line text without NUL",
+                        ));
+                    }
+                    argv.push(format!("--current={text}"));
+                } else {
+                    check_value(name, text)?;
+                    argv.push(format!("--{name}"));
+                    argv.push(text.clone());
+                }
             }
             _ => return Err(usage_error(format!("'{name}' has the wrong type"))),
         }
@@ -598,6 +647,9 @@ fn fields_of(command: &str) -> (&'static [&'static str], &'static [&'static str]
         "picture" => (&["game", "entry"], &[]),
         "answer" => (&["game", "answer"], &[]),
         "which" => (&["appid"], &[]),
+        "steam-games" => (&[], &["no-steam-cloud", "refresh"]),
+        "install-wrap" => (&["app-ids"], &["no-steam-cloud", "remove", "dry-run"]),
+        "launch-option" => (&["appid"], &["remove", "current"]),
         "setup" => (&[], &["service", "device", "root", "no-browser", "finish"]),
         _ => (&[], &[]),
     }

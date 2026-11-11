@@ -1,0 +1,9 @@
+{
+  "ok": true,
+  "command": "launch-option",
+  "data": {
+    "app_id": 42,
+    "before": "-novid %command%",
+    "after": "-novid save-relay wrap -- %command%"
+  }
+}

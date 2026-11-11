@@ -3,7 +3,7 @@
 // control is a <button data-focus="id"> (controller focus, see focus.ts); none hides on hover.
 
 import QRCode from "qrcode";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type {
   Answer,
   Card,
@@ -12,6 +12,7 @@ import type {
   PendingChoice,
   Side,
   SignInPrompt,
+  SteamGame,
 } from "./api.ts";
 import { useFocusScope } from "./focus.ts";
 import { playtime, when } from "./format.ts";
@@ -97,6 +98,7 @@ export function GamesView(props: {
   onOpen: (game: string) => void;
   onPending: () => void;
   onSignIn: () => void;
+  onAddGames?: () => void;
 }) {
   const waiting = props.games.filter((g) => g.pending).length;
   return (
@@ -128,7 +130,120 @@ export function GamesView(props: {
         <button data-focus="signin" className="btn" onClick={props.onSignIn}>
           Sign in…
         </button>
+        {props.onAddGames && (
+          <button data-focus="add-games" className="btn" onClick={props.onAddGames}>
+            Add games…
+          </button>
+        )}
       </footer>
+    </Screen>
+  );
+}
+
+export function AddGamesView(props: {
+  games: SteamGame[] | null;
+  added: Readonly<Record<number, boolean>>;
+  loading: boolean;
+  busy: boolean;
+  busyAppId: number | null;
+  error: string | null;
+  notice: string | null;
+  initial?: string;
+  onRefresh: () => void;
+  onAdd: (appId: number) => void;
+  onRemove: (appId: number) => void;
+  onAddMany: (appIds: number[]) => void;
+  onBack: () => void;
+}) {
+  const [confirmIds, setConfirmIds] = useState<number[] | null>(null);
+  const games = [...(props.games ?? [])].sort((a, b) => {
+    const rank = (cloud: SteamGame["steam_cloud"]) => cloud === "no" ? 0 : cloud === "unknown" ? 1 : 2;
+    return rank(a.steam_cloud) - rank(b.steam_cloud) || a.name.localeCompare(b.name) || a.app_id - b.app_id;
+  });
+  const added = (game: SteamGame) => props.added[game.app_id] ?? game.wrapped;
+  const eligible = games.filter((game) => game.steam_cloud === "no" && game.saves !== "none" && !added(game));
+  const confirming = confirmIds !== null;
+  return (
+    <Screen
+      title="Add games"
+      onBack={confirming ? () => setConfirmIds(null) : props.onBack}
+      initial={confirming ? "bulk-cancel" : (props.initial ?? "back")}
+      ariaLabel={confirming ? "Add all games without Steam Cloud?" : undefined}
+      inertBackground={confirming}
+    >
+      <ErrorBanner message={props.error} />
+      {props.notice && <Banner tone="success">{props.notice}</Banner>}
+      {props.loading && <p className="meta">Loading installed games…</p>}
+      {props.games && (
+        <>
+          <ul className="list" {...(confirming ? { inert: "" } : {})}>
+            <li>
+              <button
+                data-focus="add-all"
+                className="btn btn-primary"
+                disabled={props.busy || eligible.length === 0}
+                onClick={() => setConfirmIds(eligible.map((game) => game.app_id))}
+              >
+                Add all without Steam Cloud ({eligible.length})
+              </button>
+            </li>
+            {games.map((game) => {
+              const isAdded = added(game);
+              const canAdd = game.saves !== "none";
+              const label = isAdded ? "Remove" : canAdd ? "Add" : "Unavailable";
+              return (
+                <li key={game.app_id}>
+                  <button
+                    data-focus={`steam-game:${game.app_id}`}
+                    className="btn row steam-game-row"
+                    disabled={props.busy || (!isAdded && !canAdd)}
+                    onClick={() => isAdded ? props.onRemove(game.app_id) : props.onAdd(game.app_id)}
+                  >
+                    <span className="name label" style={{ minWidth: 0 }}>{game.name}</span>
+                    <span className="meta">
+                      {game.steam_cloud === "no" ? "No Steam Cloud" : game.steam_cloud === "yes" ? "Steam Cloud" : "Unknown"}
+                      {game.saves === "none" ? " · Saves folder not known" : ` · Saves: ${game.saves}`}
+                    </span>
+                    {isAdded ? <>
+                      <span className="badge badge-success">Added</span>
+                      <span className="btn">Remove</span>
+                    </> : (
+                      <span className={`btn ${canAdd ? "btn-primary" : ""}`}>{props.busyAppId === game.app_id ? "Working…" : label}</span>
+                    )}
+                  </button>
+                </li>
+              );
+            })}
+            {games.length === 0 && !props.loading && <li className="meta">No installed games found.</li>}
+          </ul>
+          <footer {...(confirming ? { inert: "" } : {})}>
+            <button data-focus="refresh-games" className="btn" disabled={props.busy || props.loading} onClick={props.onRefresh}>
+              Refresh list
+            </button>
+          </footer>
+        </>
+      )}
+      {confirming && (
+        <div className="scrim">
+          <div className="dialog" role="dialog" aria-modal="true" aria-label="Add all games without Steam Cloud?">
+            <h2>Add {confirmIds.length} {confirmIds.length === 1 ? "game" : "games"}?</h2>
+            <p>These {confirmIds.length} selected games have no Steam Cloud and known saves folders.</p>
+            <div className="dialog-actions">
+              <button data-focus="bulk-cancel" className="btn" onClick={() => setConfirmIds(null)}>Cancel</button>
+              <button
+                data-focus="bulk-confirm"
+                className="btn btn-primary"
+                disabled={props.busy}
+                onClick={() => {
+                  const selected = confirmIds;
+                  setConfirmIds(null);
+                  if (selected.length) props.onAddMany(selected);
+                }}
+              >Add {confirmIds.length}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </Screen>
   );
 }
