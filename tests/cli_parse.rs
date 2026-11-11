@@ -80,6 +80,19 @@ fn launch_option_accepts_numeric_ids_and_preserves_empty_or_dash_prefixed_curren
             json: false,
         })
     );
+    for value in ["--json", "--password", "--current", "--current=value"] {
+        assert_eq!(
+            parse_args(&["launch-option", "42", "--current", value, "--json"]),
+            Ok(Args {
+                command: Command::LaunchOption {
+                    app_id: 42,
+                    remove: false,
+                    current: Some(value.to_string()),
+                },
+                json: true,
+            })
+        );
+    }
     usage_err("launch-option 0", "appid");
 }
 

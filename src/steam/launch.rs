@@ -351,7 +351,7 @@ fn program_start(head: &str) -> Option<usize> {
 /// True when the program path's last part is `save-relay` or `save-relay.exe` (any case): the
 /// names `is_wrapped` finds. Another name (a release build's, `save-relay (1).exe`) would be
 /// written into the launch option and never found again by `--remove` or a second run.
-fn is_program_name(binary: &str) -> bool {
+pub(crate) fn is_program_name(binary: &str) -> bool {
     let name = binary.rsplit(['/', '\\']).next().unwrap_or(binary);
     name.eq_ignore_ascii_case("save-relay") || name.eq_ignore_ascii_case("save-relay.exe")
 }
