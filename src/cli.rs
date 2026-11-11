@@ -267,6 +267,10 @@ pub fn parse(args: &[String]) -> Result<Args> {
         .find(|arg| arg.as_str() != "--json")
         .map(String::as_str);
 
+    if first_non_json == Some("launch-option") {
+        return parse_launch_option(args);
+    }
+
     if first_non_json == Some("wrap") {
         let dash_pos = args.iter().position(|arg| arg.as_str() == "--");
         let before_dash = match dash_pos {
@@ -576,41 +580,6 @@ pub fn parse(args: &[String]) -> Result<Args> {
                 }
             }
         }
-        "launch-option" => {
-            // Preserve launch options that are empty or start with `-`. The panel passes this
-            // argument as `--current=<text>` so it remains one argv item.
-            let mut normalized = Vec::with_capacity(args.len().saturating_sub(1) * 2);
-            let mut expecting_current = false;
-            for arg in &args[1..] {
-                if !expecting_current {
-                    if let Some(value) = arg.strip_prefix("--current=") {
-                        normalized.push("--current");
-                        normalized.push(value);
-                    } else {
-                        normalized.push(arg);
-                    }
-                } else {
-                    normalized.push(arg);
-                }
-                expecting_current = *arg == "--current";
-            }
-            let flags = split(&normalized, &["--current"], &["--remove"])?;
-            require(&flags.positionals, 1, &["<appid>"])?;
-            let app_id = parse_app_id(flags.positionals[0])?;
-            let current = flags.flag("--current");
-            if current.is_some_and(|text| {
-                text.contains('\n') || text.contains('\r') || text.contains('\0')
-            }) {
-                return Err(Error::Usage(
-                    "--current must be single-line text without NUL".into(),
-                ));
-            }
-            Command::LaunchOption {
-                app_id,
-                remove: flags.has("--remove"),
-                current: current.map(str::to_owned),
-            }
-        }
         "answer" => {
             let flags = split(&args[1..], &[], &[])?;
             require(&flags.positionals, 2, &["<game>", "<answer>"])?;
@@ -679,6 +648,45 @@ pub fn parse(args: &[String]) -> Result<Args> {
         }
     };
     Ok(Args { command, json })
+}
+
+fn parse_launch_option(args: &[String]) -> Result<Args> {
+    let mut json = false;
+    let mut positionals_and_flags = Vec::with_capacity(args.len());
+    let mut args = args.iter().map(String::as_str);
+    while let Some(arg) = args.next() {
+        if arg == "--json" {
+            json = true;
+        } else if arg == "--current" {
+            positionals_and_flags.push(arg);
+            positionals_and_flags.extend(args.next());
+        } else if let Some(value) = arg.strip_prefix("--current=") {
+            positionals_and_flags.extend(["--current", value]);
+        } else if is_password_flag(arg) {
+            return Err(Error::Usage(
+                "the password is read from standard input, not from --password".into(),
+            ));
+        } else {
+            positionals_and_flags.push(arg);
+        }
+    }
+    let flags = split(&positionals_and_flags[1..], &["--current"], &["--remove"])?;
+    require(&flags.positionals, 1, &["<appid>"])?;
+    let app_id = parse_app_id(flags.positionals[0])?;
+    let current = flags.flag("--current");
+    if current.is_some_and(|text| text.contains(['\n', '\r', '\0'])) {
+        return Err(Error::Usage(
+            "--current must be single-line text without NUL".into(),
+        ));
+    }
+    Ok(Args {
+        command: Command::LaunchOption {
+            app_id,
+            remove: flags.has("--remove"),
+            current: current.map(str::to_owned),
+        },
+        json,
+    })
 }
 
 struct Flags<'a> {
@@ -2098,19 +2106,18 @@ fn launch_option(
     current: Option<&str>,
     cx: &Context,
 ) -> Result<Outcome> {
-    if current.is_some_and(|text| text.contains('\n') || text.contains('\r')) {
-        return Err(Error::Usage("--current must be one line".into()));
-    }
-    let binary = std::env::current_exe()?;
     let before = current.map(str::to_owned);
     let after = if remove {
         current.and_then(crate::steam::launch::unwrapped)
     } else {
-        Some(crate::steam::launch::wrapped(
-            current,
-            &binary.display().to_string(),
-            cx.platform,
-        ))
+        let binary = std::env::current_exe()?;
+        let binary = binary.display().to_string();
+        if !steam::launch::is_program_name(&binary) {
+            return Err(Error::Usage(
+                "launch-option needs the program named save-relay or save-relay.exe".into(),
+            ));
+        }
+        Some(steam::launch::wrapped(current, &binary, cx.platform))
     };
     let data = LaunchOptionData {
         app_id,
@@ -2187,6 +2194,12 @@ fn steam_games_data(root: &Path, force: bool, cx: &Context) -> Result<SteamGames
             };
             installed.insert(*app_id, name);
         }
+    }
+    if installed.is_empty() {
+        return Ok(SteamGamesData {
+            unknown: 0,
+            games: Vec::new(),
+        });
     }
     let app_ids: Vec<u32> = installed.keys().copied().collect();
 
@@ -2341,6 +2354,14 @@ fn install_wrap(
             message: "no installed game without Steam Cloud and with known saves".into(),
         };
         return Ok(install_wrap_outcome(&data));
+    }
+    // Resolving either bulk selector can contact the network. Steam may have started
+    // while the lookup was running.
+    if !dry_run
+        && (all_known || no_steam_cloud)
+        && steam::launch::steam_running(cx.platform, &cx.vars.home)?
+    {
+        return Err(Error::SteamRunning);
     }
     let binary = std::env::current_exe()?;
     let mut data = steam::launch::install(
