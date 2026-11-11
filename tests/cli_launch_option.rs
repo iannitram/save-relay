@@ -1,3 +1,4 @@
+use save_relay::steam::launch::{is_wrapped, unwrapped};
 use serde_json::Value;
 use std::fs;
 use std::process::Command;
@@ -32,14 +33,10 @@ fn launch_option_uses_the_cli_binary_and_preserves_current_option_text() {
     assert_eq!(existing["ok"], true);
     assert_eq!(existing["data"]["app_id"], 42);
     assert_eq!(existing["data"]["before"], "-novid %command%");
-    assert!(existing["data"]["after"]
-        .as_str()
-        .unwrap()
-        .starts_with("-novid "));
-    assert!(existing["data"]["after"]
-        .as_str()
-        .unwrap()
-        .contains("save-relay wrap -- %command%"));
+    let after = existing["data"]["after"].as_str().unwrap();
+    assert!(after.starts_with("-novid "), "{after}");
+    assert!(is_wrapped(after), "{after}");
+    assert_eq!(unwrapped(after).as_deref(), Some("-novid %command%"));
 
     let empty = run(&root, "");
     assert_eq!(empty["data"]["before"], "");
