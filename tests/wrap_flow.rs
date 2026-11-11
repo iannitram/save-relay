@@ -405,6 +405,45 @@ fn a_held_game_answered_wait_starts_once_the_mark_is_gone() {
 }
 
 #[test]
+fn a_second_answer_during_wait_snooze_is_queued_until_the_wrap_acts_on_it() {
+    let _serial = serial();
+    let fx = Fixture::new("wait-reanswer");
+    let fake = Fake::new(
+        vec![
+            Ok(held()),
+            Ok(held()),
+            Ok(report(Action::Pulled, "downloaded")),
+        ],
+        vec![Ok(report(Action::Noop, ""))],
+    );
+    let first_sleep = Cell::new(true);
+    let answered_again = Cell::new(false);
+    let sleep = |secs| {
+        assert!(fx.store.is_waiting(GAME).unwrap());
+        if first_sleep.replace(false) {
+            pending::answer(&fx.store, GAME, Answer::Wait).unwrap();
+        } else if !answered_again.get() {
+            answered_again.set(true);
+            pending::answer(&fx.store, GAME, Answer::PlayAnyway).unwrap();
+        }
+        tick(secs);
+    };
+    let code = wrap::run(&fake, &fx.store, &child("child_exits_7"), clock, &sleep);
+    assert_eq!(code, 7);
+    assert_eq!(
+        fake.calls(),
+        [
+            "pull none false",
+            "pull none false",
+            "pull none true",
+            "push none"
+        ]
+    );
+    assert!(!fx.store.is_waiting(GAME).unwrap());
+    assert!(fx.store.load_pending(GAME).unwrap().is_none());
+}
+
+#[test]
 fn a_held_game_that_stays_held_starts_on_the_local_saves_after_the_wait() {
     let _serial = serial();
     let fx = Fixture::new("wait-forever");
