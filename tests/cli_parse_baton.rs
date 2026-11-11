@@ -236,6 +236,7 @@ fn install_wrap_with_and_without_json_in_two_flag_orders() {
         all_known: false,
         remove: true,
         dry_run: true,
+        no_steam_cloud: false,
     };
     assert_eq!(p(line1), ok(want1, false));
 
@@ -246,6 +247,7 @@ fn install_wrap_with_and_without_json_in_two_flag_orders() {
         all_known: false,
         remove: true,
         dry_run: true,
+        no_steam_cloud: false,
     };
     assert_eq!(p(line2), ok(want2, false));
 
@@ -256,6 +258,7 @@ fn install_wrap_with_and_without_json_in_two_flag_orders() {
         all_known: false,
         remove: true,
         dry_run: false,
+        no_steam_cloud: false,
     };
     assert_eq!(p(line3), ok(want3, true));
 
@@ -266,6 +269,7 @@ fn install_wrap_with_and_without_json_in_two_flag_orders() {
         all_known: false,
         remove: true,
         dry_run: false,
+        no_steam_cloud: false,
     };
     assert_eq!(p(line4), ok(want4, true));
 
@@ -276,6 +280,7 @@ fn install_wrap_with_and_without_json_in_two_flag_orders() {
         all_known: true,
         remove: false,
         dry_run: true,
+        no_steam_cloud: false,
     };
     assert_eq!(p(line5), ok(want5, false));
 
@@ -286,6 +291,7 @@ fn install_wrap_with_and_without_json_in_two_flag_orders() {
         all_known: true,
         remove: false,
         dry_run: true,
+        no_steam_cloud: false,
     };
     assert_eq!(p(line6), ok(want6, false));
 
@@ -296,6 +302,7 @@ fn install_wrap_with_and_without_json_in_two_flag_orders() {
         all_known: true,
         remove: false,
         dry_run: false,
+        no_steam_cloud: false,
     };
     assert_eq!(p(line7), ok(want7, true));
 
@@ -306,6 +313,7 @@ fn install_wrap_with_and_without_json_in_two_flag_orders() {
         all_known: true,
         remove: false,
         dry_run: false,
+        no_steam_cloud: false,
     };
     assert_eq!(p(line8), ok(want8, true));
 }
@@ -321,8 +329,33 @@ fn install_wrap_sorts_and_deduplicates_app_ids() {
             all_known: false,
             remove: false,
             dry_run: false,
+            no_steam_cloud: false,
         }
     );
+}
+
+#[test]
+fn install_wrap_no_steam_cloud_contract_and_conflicts() {
+    assert_eq!(
+        p("install-wrap --no-steam-cloud --dry-run --json"),
+        ok(
+            Command::InstallWrap {
+                app_ids: vec![],
+                all_known: false,
+                remove: false,
+                dry_run: true,
+                no_steam_cloud: true,
+            },
+            true,
+        )
+    );
+    usage_err("install-wrap --no-steam-cloud 123", "--no-steam-cloud");
+    usage_err(
+        "install-wrap --no-steam-cloud --all-known",
+        "--no-steam-cloud",
+    );
+    usage_err("install-wrap --no-steam-cloud --remove", "--no-steam-cloud");
+    assert!(usage().contains("install-wrap --no-steam-cloud [--dry-run]"));
 }
 
 #[test]
@@ -599,6 +632,7 @@ fn command_name_covers_every_variant() {
                 all_known: false,
                 remove: false,
                 dry_run: false,
+                no_steam_cloud: false,
             },
             "install-wrap",
         ),

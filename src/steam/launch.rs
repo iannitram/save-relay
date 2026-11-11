@@ -292,6 +292,7 @@ pub fn install(
     Ok(InstallWrapData {
         dry_run,
         changed,
+        skipped: Vec::new(),
         backups,
         message,
     })

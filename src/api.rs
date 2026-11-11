@@ -308,11 +308,29 @@ pub struct InstallWrapApp {
     pub after: Option<String>,
 }
 
+/// Why an installed Steam game was skipped by `install-wrap --no-steam-cloud`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstallWrapSkipReason {
+    SteamCloudUnknown,
+    NoSavesEntry,
+}
+
+/// One game not selected by `install-wrap --no-steam-cloud`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstallWrapSkipped {
+    pub app_id: u32,
+    pub name: String,
+    pub reason: InstallWrapSkipReason,
+}
+
 /// `data` of `install-wrap`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InstallWrapData {
     pub dry_run: bool,
     pub changed: Vec<InstallWrapApp>,
+    #[serde(default)]
+    pub skipped: Vec<InstallWrapSkipped>,
     /// The backup files written (none with `--dry-run`).
     pub backups: Vec<String>,
     pub message: String,
