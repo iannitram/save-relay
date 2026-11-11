@@ -5,6 +5,7 @@
 //! is `launch`. Pure functions over text and file lists, plus small reads; never a network
 //! call, never Steam's binary files.
 
+pub mod cloud;
 pub mod launch;
 pub mod vdf;
 
@@ -154,6 +155,15 @@ pub fn parse_install_dir(text: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// The installed application's display name from `appmanifest_<id>.acf`.
+pub fn parse_app_name(text: &str) -> Option<String> {
+    vdf::parse(text)
+        .ok()?
+        .get_path(&["AppState", "name"])?
+        .as_str()
+        .map(str::to_owned)
+}
+
 /// `<library>/steamapps/compatdata/<app id>/pfx`: the Proton prefix of a Windows game on
 /// Linux, whose `drive_c/users/steamuser/` holds `AppData/Roaming`, `AppData/Local` and
 /// `Documents`.
@@ -214,4 +224,43 @@ pub fn pick_screenshot(files: &[(String, u64)], session_start: u64, now: u64) ->
             time_a.cmp(time_b).then_with(|| name_a.cmp(name_b))
         })
         .map(|(name, _)| name.clone())
+}
+
+/// The newest eligible screenshot file across Steam users for an app. Its filesystem
+/// modification time is used as the capture time; unreadable folders and files are skipped.
+pub fn screenshot_file(root: &Path, app_id: u32, session_start: u64, now: u64) -> Option<PathBuf> {
+    use std::time::UNIX_EPOCH;
+
+    let mut candidates = Vec::new();
+    for user_id in user_ids(root).ok()? {
+        let directory = screenshot_dir(root, &user_id, app_id);
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let Ok(modified) = entry.metadata().and_then(|metadata| metadata.modified()) else {
+                continue;
+            };
+            let Ok(time) = modified.duration_since(UNIX_EPOCH) else {
+                continue;
+            };
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            candidates.push((format!("{user_id}/{name}"), time.as_secs(), path));
+        }
+    }
+    let listed: Vec<_> = candidates
+        .iter()
+        .map(|(name, time, _)| (name.clone(), *time))
+        .collect();
+    let chosen = pick_screenshot(&listed, session_start, now)?;
+    candidates
+        .into_iter()
+        .find(|(name, _, _)| *name == chosen)
+        .map(|(_, _, path)| path)
 }

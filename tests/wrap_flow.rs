@@ -12,7 +12,7 @@ use save_relay::clients::ClientSet;
 use save_relay::creds::{self, CredentialStore, MemoryStore, Secret};
 use save_relay::http::{Request, Response, Transport};
 use save_relay::local::{Config, LocalStore};
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 use save_relay::ludusavi;
 use save_relay::pending::{self, Answer, ChoiceKind, ANSWER_WAIT_SECS};
 use save_relay::platform::{AppDirs, PathVars};
@@ -982,43 +982,39 @@ fn another_commands_parse_failure_still_prints_on_standard_output() {
 
 // ---- the ludusavi fallback with --saves-dir -------------------------------------------------
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 const LUDUSAVI_FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/fixtures/ludusavi/manifest.yaml"
 );
 
 /// A transport that answers every request with the ludusavi data (the cache is filled once).
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 struct Canned(Vec<u8>);
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 impl Transport for Canned {
     fn send(&self, _: &Request) -> Result<Response, Error> {
         Ok(Response::new(200, self.0.clone()).header("ETag", "\"v1\""))
     }
 }
 
-/// `wrap` on a Steam app with no manifest of the person's own: the ludusavi data is the game, and
-/// `--saves-dir` names the folder synced instead of the ludusavi one. The Steam folder is found
-/// by the platform's own rule, so this runs on Linux and macOS, as the `which` test does.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+/// `wrap` on a Steam app with no manifest of the person's own remembers the manifest and saves
+/// folder located from ludusavi data, so later commands can load the game by id alone.
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 #[test]
-fn wrap_syncs_the_saves_dir_given_over_the_ludusavi_folder() {
+fn wrap_remembers_the_ludusavi_game_after_sync() {
+    let _serial = serial();
     let fx = Fixture::new("ludusavi-saves-dir");
     let vars = PathVars {
         home: fx.root.join("home"),
         data: fx.root.join("data"),
         config: fx.root.join("config"),
-        documents: None,
+        documents: Some(fx.root.join("documents")),
     };
-    let steam_home = if cfg!(target_os = "macos") {
-        "Library/Application Support/Steam"
-    } else {
-        ".local/share/Steam"
-    };
+    let steam = fx.root.join("steam");
     let library = fx.root.join("library");
-    let steamapps = vars.home.join(steam_home).join("steamapps");
+    let steamapps = steam.join("steamapps");
     fs::create_dir_all(&steamapps).unwrap();
     fs::write(
         steamapps.join("libraryfolders.vdf"),
@@ -1035,13 +1031,10 @@ fn wrap_syncs_the_saves_dir_given_over_the_ludusavi_folder() {
     )
     .unwrap();
 
-    // The ludusavi folder exists too, with its own save, so the synced folder shows which one ran.
+    // The folder located from ludusavi data has a file to sync.
     let ludusavi_saves = vars.home.join("Example Quest Saves");
     fs::create_dir_all(&ludusavi_saves).unwrap();
     fs::write(ludusavi_saves.join("other.sav"), "ludusavi save").unwrap();
-    let named = fx.root.join("named-saves");
-    fs::create_dir_all(&named).unwrap();
-    fs::write(named.join("slot.sav"), "named save").unwrap();
 
     // The ludusavi data is cached (a fresh copy, so `wrap` makes no request).
     let cached = ludusavi::Cache::new(&AppDirs::from_vars(&vars))
@@ -1068,13 +1061,12 @@ fn wrap_syncs_the_saves_dir_given_over_the_ludusavi_folder() {
         .unwrap();
 
     let remote = MemoryRemote::new();
-    let named_arg = named.to_string_lossy().into_owned();
-    let args = wrap_args(
-        &["--game", "steam-1000001", "--saves-dir", &named_arg],
-        child("child_exits_7"),
-    );
+    let args = wrap_args(&["--game", "steam-1000001"], child("child_exits_7"));
     // The Steam app id the launcher passes; `wrap` reads it from the environment.
+    let old_app_id = std::env::var_os("SteamAppId");
+    let old_steam_dir = std::env::var_os("SAVE_RELAY_STEAM_DIR");
     std::env::set_var("SteamAppId", "1000001");
+    std::env::set_var("SAVE_RELAY_STEAM_DIR", &steam);
     let mut stdin = Cursor::new(Vec::<u8>::new());
     let mut stdout = Vec::<u8>::new();
     let code = run_with(
@@ -1087,22 +1079,30 @@ fn wrap_syncs_the_saves_dir_given_over_the_ludusavi_folder() {
         &vars,
         T0,
     );
-    std::env::remove_var("SteamAppId");
+    match old_app_id {
+        Some(value) => std::env::set_var("SteamAppId", value),
+        None => std::env::remove_var("SteamAppId"),
+    }
+    match old_steam_dir {
+        Some(value) => std::env::set_var("SAVE_RELAY_STEAM_DIR", value),
+        None => std::env::remove_var("SAVE_RELAY_STEAM_DIR"),
+    }
 
     assert_eq!(code, 7, "{}", String::from_utf8_lossy(&stdout));
     assert!(stdout.is_empty(), "{}", String::from_utf8_lossy(&stdout));
     let paths = remote.file_paths();
     assert!(
-        paths.iter().any(|path| path.ends_with("slot.sav")),
-        "the folder the person named is synced: {paths:?}"
+        paths.iter().any(|path| path.ends_with("other.sav")),
+        "the folder found in ludusavi data is synced: {paths:?}"
     );
     assert!(
-        !paths.iter().any(|path| path.ends_with("other.sav")),
-        "the ludusavi folder is not synced: {paths:?}"
+        !paths.iter().any(|path| path.ends_with("slot.sav")),
+        "no other folder was synced: {paths:?}"
     );
     let record = store
         .load_game("steam-1000001")
         .unwrap()
-        .expect("the folder is remembered with the game");
-    assert_eq!(record.saves_dir, Some(named));
+        .expect("the wrapped game is remembered");
+    assert_eq!(record.saves_dir, Some(ludusavi_saves));
+    assert_eq!(store.list_games().unwrap(), vec!["steam-1000001"]);
 }

@@ -4,6 +4,7 @@ use save_relay::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 fn env<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
     move |key| {
@@ -326,4 +327,29 @@ fn screenshot_filters_extension_and_session_then_breaks_ties_by_name() {
         steam::pick_screenshot(&reversed, 100, 200),
         Some("z.JpG".into())
     );
+}
+
+#[test]
+fn screenshot_file_selects_the_newest_app_screenshot_from_a_steam_folder() {
+    let temp = TempDir::new();
+    let selected = steam::screenshot_dir(&temp.0, "12345", 42);
+    let other_app = steam::screenshot_dir(&temp.0, "12345", 43);
+    fs::create_dir_all(&selected).unwrap();
+    fs::create_dir_all(&other_app).unwrap();
+    fs::write(selected.join("older.jpg"), [0xff, 0xd8, 0xff]).unwrap();
+    fs::write(selected.join("newest.PNG"), b"png ignored").unwrap();
+    fs::write(selected.join("z-latest.JPG"), [0xff, 0xd8, 0xff, 1]).unwrap();
+    fs::write(other_app.join("other.jpg"), [0xff, 0xd8, 0xff]).unwrap();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + 10;
+    let start = now.saturating_sub(10);
+
+    assert_eq!(
+        steam::screenshot_file(&temp.0, 42, start, now),
+        Some(selected.join("z-latest.JPG"))
+    );
+    assert_eq!(steam::screenshot_file(&temp.0, 42, now + 1, now), None);
 }

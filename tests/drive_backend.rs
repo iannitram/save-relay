@@ -688,6 +688,37 @@ fn old_claims_are_retained_a_day_then_cleaned_by_a_later_write() {
 }
 
 #[test]
+fn the_claim_named_by_state_survives_day_old_cleanup_and_allows_the_next_push() {
+    let fake = fake();
+    let (first, _, etag) = state(&fake);
+    let (_, claim) = guard::parse_etag(&etag).unwrap();
+    let path = format!(".claim-{claim}");
+    dead_claim(&fake, &etag, Some("chain-1"));
+    raw_file(
+        &fake,
+        json!({"id": "chain-1", "name": ".claim-chain-1", "parents": ["root"],
+        "appProperties": {guard::NEXT_PROPERTY: "chain-2"}}),
+    );
+
+    advance(&fake, 86_400);
+    first.put("playing.json", b"open", ANY).unwrap();
+
+    assert!(fake.file_paths().contains(&path));
+    assert!(fake.file_paths().contains(&".claim-chain-1".to_string()));
+    first
+        .put(
+            "state.json",
+            b"recovered by next push",
+            &Precondition::Match(etag),
+        )
+        .unwrap();
+    assert_eq!(
+        first.get("state.json").unwrap().0,
+        b"recovered by next push"
+    );
+}
+
+#[test]
 fn stale_or_forged_etags_never_write() {
     let fake = fake();
     let (first, _, etag) = state(&fake);

@@ -15,9 +15,10 @@ use save_relay::state::ServerState;
 use save_relay::sync::{history, picture, pull, push, restore, Game, Resolve, Session};
 use save_relay::transfer::{read_card, read_record, upload_entry, RECORD};
 use save_relay::Error;
-use std::fs;
+use std::fs::{self, FileTimes, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, UNIX_EPOCH};
 
 const NOW: u64 = 1_793_476_260;
 const GAME: &str = "cards";
@@ -207,6 +208,67 @@ fn a_push_with_a_sidecar_and_a_png_carries_the_card_and_the_picture() {
     }
     // Nothing was written into the saves folder.
     assert_eq!(listing(&f.game.saves_dir), saves_before);
+}
+
+#[test]
+fn a_wrapped_game_card_uses_a_steam_screenshot_taken_during_the_session() {
+    const JPEG: &[u8] = &[0xff, 0xd8, 0xff, 0xe0, 1, 2, 3];
+    const SCREENSHOT_TIME: u64 = NOW + 10;
+    let f = Fixture::new();
+    let game = Game {
+        manifest: Manifest::from_json(
+            r#"{"format":1,"id":"steam-42","name":"Wrapped game",
+                "saves_from":"launcher","saves":{},"include":["**/*.sav"],"exclude":[]}"#,
+        )
+        .unwrap(),
+        saves_dir: f.game.saves_dir.clone(),
+    };
+    let steam = f.root.join("steam");
+    fs::create_dir_all(steam.join("steamapps")).unwrap();
+    fs::write(
+        steam.join("steamapps/libraryfolders.vdf"),
+        "\"libraryfolders\" {}",
+    )
+    .unwrap();
+    let screenshot = save_relay::steam::screenshot_dir(&steam, "12345", 42).join("capture.jpg");
+    fs::create_dir_all(screenshot.parent().unwrap()).unwrap();
+    fs::write(&screenshot, JPEG).unwrap();
+    OpenOptions::new()
+        .write(true)
+        .open(&screenshot)
+        .unwrap()
+        .set_times(FileTimes::new().set_modified(UNIX_EPOCH + Duration::from_secs(SCREENSHOT_TIME)))
+        .unwrap();
+    let previous = std::env::var_os(save_relay::steam::STEAM_DIR_VAR);
+    std::env::set_var(save_relay::steam::STEAM_DIR_VAR, &steam);
+
+    pull(&f.session(DEVICE, NOW + 5), &game, &f.store, None, false).unwrap();
+    f.write("slot.sav", b"save");
+    let pushed = push(&f.session(DEVICE, NOW + 15), &game, &f.store, None).unwrap();
+
+    if let Some(previous) = previous {
+        std::env::set_var(save_relay::steam::STEAM_DIR_VAR, previous);
+    } else {
+        std::env::remove_var(save_relay::steam::STEAM_DIR_VAR);
+    }
+    assert_eq!(pushed.sync.action, Action::Pushed);
+    let state_bytes = f
+        .remote
+        .read(&layout().state_path("steam-42"))
+        .expect("the wrapped game state");
+    let entry = ServerState::from_json(std::str::from_utf8(&state_bytes).unwrap())
+        .unwrap()
+        .entry;
+    let card = read_card(&f.remote, &layout(), "steam-42", &entry)
+        .unwrap()
+        .expect("the wrapped game card");
+    assert_eq!(card.picture.as_deref(), Some(".save-relay-picture.jpg"));
+    let entry_dir = layout().entry_dir("steam-42", &entry);
+    assert_eq!(
+        f.remote
+            .read(&format!("{entry_dir}/.save-relay-picture.jpg")),
+        Some(JPEG.to_vec())
+    );
 }
 
 #[test]
