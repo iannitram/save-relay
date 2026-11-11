@@ -579,8 +579,17 @@ impl Drive {
         let Some(now) = now else {
             return Ok(());
         };
-        for file in self.children(parent, None)? {
+        let files = self.children(parent, None)?;
+        // `state.json`'s etag names the claim that guards its next conditional write. Keep
+        // that claim even when it is old: removing it consumes the Drive id permanently and
+        // every later guarded write would get 409 on create followed by 404 on read.
+        let active_claim = files
+            .iter()
+            .find(|file| file.name == "state.json" && !file.is_dir)
+            .and_then(|file| file.claim.clone());
+        for file in files {
             if is_claim(&file)
+                && active_claim.as_deref() != Some(file.id.as_str())
                 && created_secs(&file.created)
                     .is_some_and(|created| now.saturating_sub(created) >= 86400)
             {
