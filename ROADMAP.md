@@ -4,10 +4,11 @@ From `SPEC.md` (re-approved 2026-11-01) to 1.0: Uncharted on the AMD handheld, t
 
 ## Where it stands (2026-11-11)
 
-**You are here: Dev Loop, starting M16 at step 1 ([#207](https://github.com/iannitram/save-relay/issues/207)).** Stages 1–7 are merged (F01–F25, F27–F45, F48–F66 and F69). The sync engine, Steam wrapper, browser panel and Decky shell are in the tree. M16 starts with the Steam Cloud parser, then adds the cache, CLI, Add games view and integration coverage.
+**Audited checkpoint:** main at `a8e07ff` has Stages 1–7 merged (F01–F25, F27–F45, F48–F66 and F69). **You are here: Dev Loop, M16 implementation through F78 (#213), with Game Mode handheld acceptance still pending.** The stacked M16 branches add the Steam Cloud parser and cache, CLI, Add games view, integration coverage and usage docs.
 
 - **Verified on main:** the [check run for `a8e07ff`](https://github.com/iannitram/save-relay/actions/runs/42939286063) passed Rust and WebDAV integration on Linux, Windows and macOS, plus the frontend build and tests. Dropbox and Drive have automated fake-service coverage. Live sign-in and round trips remain in #47.
 - **Stage 8 remains open:** the 20 design findings (#164–#179, #197, #198, #201, #202) are fixed. #73 tracks the controller-only Game Mode re-check once the Add games view is ready.
+- **M16 progress at the tip:** F72–F78 are assembled in the stacked implementation branches. The Add games UI and Steam-client echo path have automated coverage, but Game Mode has not been checked on a handheld. Finish that check before #73, then #36 registration can proceed in parallel; #205 waits on both #36 and #213.
 - **Release and acceptance:** Cargo is at `0.0.0` and GitHub has no release. The owner can register Google and Dropbox in #36 while M16 proceeds. The release candidate (#205) waits for both. The device and Uncharted acceptance steps below remain open.
 
 ### Run order to 1.0
@@ -16,7 +17,7 @@ Each step is one issue. An automated run takes the **agent** steps whose "Waits 
 
 | Step | Who | Issue | What | Waits on | Done when |
 |---|---|---|---|---|---|
-| 1 | agent | #207 (F72) | Steam store answer parser; a game's name from its appmanifest | nothing (**current step**) | its tests pass |
+| 1 | agent | #207 (F72) | Steam store answer parser; a game's name from its appmanifest | nothing | its tests pass |
 | 2 | agent | #208 (F73) | The Steam Cloud answer cache | step 1 | its tests pass against a fake transport |
 | 3 | agent | #209 (F74) | `save-relay steam-games` | step 2 | the fixture Steam folder lists yes, no, unknown |
 | 4 | agent | #210 (F75) | `install-wrap --no-steam-cloud` | step 3 | only the no-cloud game is wrapped; unknown is skipped |
@@ -24,7 +25,7 @@ Each step is one issue. An automated run takes the **agent** steps whose "Waits 
 | 6 | agent, check on a SteamOS handheld | #212 (F77) | The panel's Add games view | steps 3, 4, 5 | vitest and the contract fixtures pass; the Game Mode add is tried on a handheld |
 | 7 | agent | #213 (F78) | M16 integration test and docs | steps 4, 6 | the flow test and the doc test pass |
 | 8 | owner | #36 (F47) | Register the app with Google and Dropbox; set the five values as this repo's Actions variables and secrets (a tagged release refuses to build without them) and put them in `src/clients.rs` | nothing, any time | `gh variable list` and `gh secret list` show the five names; the values are on `main` |
-| 9 | agent, on a SteamOS handheld | #73 (F68) | Re-check the panel in Game Mode after #201 and #202, with the Add games view; file and fix any new `design-pass` finding; record the pass in `PIPELINE.md` and `CHANGELOG.md` | step 6 | every view re-checked at 1280x800, controller only; #73 closed |
+| 9 | agent, on a SteamOS handheld | #73 (F68) | Re-check the panel in Game Mode after #201 and #202, with the Add games view; file and fix any new `design-pass` finding; record the pass in `PIPELINE.md` and `CHANGELOG.md` | step 6 handheld acceptance | every view re-checked at 1280x800, controller only; #73 closed |
 | 10 | agent | #205 (F71) | Cut `v1.0.0-rc.1`: version bump, release dry run, tag, checksum check | steps 7, 8 | the GitHub release holds the three binaries, `SHA256SUMS`, the Decky zip and the panel zip |
 | 11 | owner, an agent may drive with the owner signing in | #47 (F46) | Real round trips on Dropbox and Google Drive; Game Mode sign-in | step 10 | `cargo test --test live_services -- --ignored` passes on Windows and a handheld; written up on #47 |
 | 12 | owner | #72 (F67) | Device checks: suspend hand-off, wrap and install-wrap, the panel in Game Mode, adding a game without Steam Cloud | steps 9, 10 | written up on #72 |

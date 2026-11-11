@@ -386,3 +386,23 @@ fn f78_wrap_docs_explain_cloud_states_and_commands() {
     }
     assert_each_command_parses("docs/wrap.md", &doc);
 }
+
+#[test]
+fn f78_panel_docs_explain_add_games_and_device_verification_limit() {
+    let doc = panel_doc();
+    let section = section(&doc, "Add games").expect("the Add games section");
+    assert_has_all(
+        "docs/panel.md Add games",
+        &section,
+        &[
+            "Unknown",
+            "known saves folder",
+            "confirm",
+            "app ids",
+            "Steam must be closed",
+            "Steam's app-details callback",
+            "echo",
+            "handheld is still pending",
+        ],
+    );
+}
