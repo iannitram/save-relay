@@ -8,7 +8,7 @@ From `SPEC.md` (re-approved 2026-11-01) to 1.0: Uncharted on the AMD handheld, t
 
 - **Verified on main:** the [check run for `a8e07ff`](https://github.com/iannitram/save-relay/actions/runs/42939286063) passed Rust and WebDAV integration on Linux, Windows and macOS, plus the frontend build and tests. Dropbox and Drive have automated fake-service coverage. Live sign-in and round trips remain in #47.
 - **Stage 8 remains open:** the 20 design findings (#164–#179, #197, #198, #201, #202) are fixed. #73 tracks the controller-only Game Mode re-check once the Add games view is ready.
-- **M16 progress at the tip:** F72–F78 are assembled in the stacked implementation branches. The Add games UI and Steam-client echo path have automated coverage, but Game Mode has not been checked on a handheld. Finish that check before #73, then #36 registration can proceed in parallel; #205 waits on both #36 and #213.
+- **M16 progress at the tip:** F72–F78 are assembled in the stacked implementation branches. The Add games UI and Steam-client echo path have automated coverage, but Game Mode has not been checked on a handheld. Handheld acceptance for #212 and the #73 Game Mode re-check remain open.
 - **Release and acceptance:** Cargo is at `0.0.0` and GitHub has no release. The owner can register Google and Dropbox in #36 while M16 proceeds. The release candidate (#205) waits for both. The device and Uncharted acceptance steps below remain open.
 
 ### Run order to 1.0
