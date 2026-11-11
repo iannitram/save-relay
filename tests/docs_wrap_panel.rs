@@ -354,3 +354,35 @@ fn code_map_rows_move_to_present() {
         );
     }
 }
+
+#[test]
+fn f78_wrap_docs_explain_cloud_states_and_commands() {
+    let doc = wrap_doc();
+    let section = section(&doc, "Games without Steam Cloud").expect("the F78 section");
+    assert_has_all(
+        "docs/wrap.md Games without Steam Cloud",
+        &section,
+        &[
+            "steam-games",
+            "--no-steam-cloud",
+            "unknown",
+            "app ids",
+            "skipped",
+        ],
+    );
+    let lines = commands(&doc);
+    for want in [
+        "steam-games",
+        "steam-games --no-steam-cloud",
+        "install-wrap --no-steam-cloud --dry-run",
+        "install-wrap --no-steam-cloud",
+    ] {
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == &format!("save-relay {want}")),
+            "docs/wrap.md has the F78 command: {want}"
+        );
+    }
+    assert_each_command_parses("docs/wrap.md", &doc);
+}
