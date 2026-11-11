@@ -2,7 +2,7 @@
 
 Newest first. One line per change of stage, release or decision that the next session needs.
 
-- 2026-11-11 Prepared v1.0.0-rc.1 packaging: the binary and Decky/panel packages share the RC version, and tag releases from hyphenated refs are marked pre-release. This is preparation only; no tag or release was created. Still gated on app registrations (#36), M16/SteamOS integration (#213), and the audit blockers (#224-#229).
+- 2026-11-11 Prepared v1.0.0-rc.1 packaging: the binary and Decky/panel packages share the RC version, and tag releases from hyphenated refs are marked pre-release. This is preparation only; no tag or release was created. Still gated on app registrations (#36), M16/SteamOS integration (#213), and the audit blockers (#223-#228).
 
 
 - 2026-11-11 Audit of `main` at `a8e07ff` (`docs/audit-2026-11-11.md`): verdict not 1.0; six blockers B1-B6 added to the run order before `rc.1`. Owner rulings (question tool): "Pull server saves (Recommended)" (empty local saves folder with saves on the server), "Apply right away (Recommended)" (a pending choice answered after the 120-second wait), "All six in 1.0 (Recommended)", "Write issue drafts (Recommended)". B1 and B2 change behaviour that SPEC.md or locked tests describe: the Project Manager should check whether SPEC.md needs a re-approval line (not edited here). Audit issues #224-#229 are filed; the six blockers remain in progress.
