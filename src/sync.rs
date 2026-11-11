@@ -760,9 +760,9 @@ pub fn status(s: &Session, game: &Game, store: &LocalStore) -> Result<StatusData
         last_synced_revision: last.as_ref().map(|last| last.revision),
         local_changed: local_changed(&local, last.as_ref()),
         message,
-        // Another machine's mark (M11); pending choices (M12) are not read yet.
+        // Another machine's mark (M11) and this machine's pending choice (M12).
         held,
-        pending: None,
+        pending: store.load_pending(id)?,
     })
 }
 
