@@ -21,6 +21,7 @@ use crate::layout::{entry_name, parse_entry_name, Layout};
 use crate::local::LocalStore;
 use crate::manifest::Manifest;
 use crate::plan::{self, Decision, Intent, ServerView};
+use crate::platform::{PathVars, Platform};
 use crate::presence::{self, Hold, Mark};
 use crate::remote::{ensure_dir, Precondition, Remote, RemoteEntry};
 use crate::scan::{scan, SaveSet};
@@ -213,6 +214,11 @@ fn sync(
                 Intent::Exit => session_start(store, id, &mut found.notes),
                 Intent::Launch => None,
             };
+            if found.picture.is_none() {
+                if let Some(started) = started {
+                    add_steam_screenshot(id, started, s.now, &mut found);
+                }
+            }
             let card = card_of(s, &found, started);
             write_card(s, id, &entry, &card, &mut found);
             let next = ServerState {
@@ -404,6 +410,44 @@ fn card_of(s: &Session, found: &Found, started: Option<u64>) -> Card {
         found.place.as_deref(),
         found.picture.as_ref().map(|(kind, _)| *kind),
     )
+}
+
+/// For a wrapped Steam game, use its newest screenshot captured during this play session when
+/// the port did not supply a checked sidecar picture. Any lookup or validation failure only
+/// leaves the optional card picture out.
+fn add_steam_screenshot(game: &str, started: u64, now: u64, found: &mut Found) {
+    let Some(app_id) = game.strip_prefix("steam-").and_then(|id| id.parse().ok()) else {
+        return;
+    };
+    let env = |name: &str| std::env::var(name).ok();
+    let platform = Platform::current();
+    let vars = match PathVars::from_env(platform, &env) {
+        Ok(vars) => vars,
+        Err(error) => {
+            found
+                .notes
+                .push(format!("Steam screenshot left out: {error}"));
+            return;
+        }
+    };
+    let root = match crate::steam::find_root(platform, &vars, &env) {
+        Ok(root) => root,
+        Err(error) => {
+            found
+                .notes
+                .push(format!("Steam screenshot left out: {error}"));
+            return;
+        }
+    };
+    let Some(path) = crate::steam::screenshot_file(&root, app_id, started, now) else {
+        return;
+    };
+    match read_picture(&path)
+        .and_then(|bytes| card::check_picture(&bytes).map(|kind| (kind, bytes)))
+    {
+        Ok(picture) => found.picture = Some(picture),
+        Err(note) => found.notes.push(note),
+    }
 }
 
 /// The session start (M14) for a push at exit. Unreadable is a note and no playtime, never an
