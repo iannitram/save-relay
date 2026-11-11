@@ -1640,7 +1640,7 @@ fn repair_command(
     let result = (|| -> Result<Outcome> {
         let config = load_config(cx)?;
         let preview = with_remote(&config, cx, |remote| {
-            sync::repair(&session(&config, remote, cx)?, game, false)
+            sync::repair_with_store(&session(&config, remote, cx)?, game, false, cx.store)
         })?;
         let eligible = preview
             .markers
@@ -1655,7 +1655,11 @@ fn repair_command(
         } else if json || !eligible {
             false
         } else {
-            let prompt = if preview.claim_recovery.is_some() {
+            let prompt = if preview
+                .claim_recovery
+                .as_deref()
+                .is_some_and(|message| message.starts_with("missing Drive claim "))
+            {
                 "Apply eligible repair? Drive claim recovery requires sync stopped on every other device; it changes claim metadata only and preserves state bytes. [y/N] "
             } else {
                 "Release eligible revision claim(s)? A complete entry is moved to set-aside/ first, never deleted. [y/N] "
@@ -1672,7 +1676,7 @@ fn repair_command(
         };
         let data = if approved && eligible {
             with_remote(&config, cx, |remote| {
-                sync::repair(&session(&config, remote, cx)?, game, true)
+                sync::repair_with_store(&session(&config, remote, cx)?, game, true, cx.store)
             })?
         } else {
             preview

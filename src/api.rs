@@ -452,6 +452,7 @@ pub fn exit_code(error: &Error) -> i32 {
         | Error::StateInvalid(_)
         | Error::Changed
         | Error::ChangedRepair(_)
+        | Error::MissingDriveClaim { .. }
         | Error::NotFound(_) => 5,
         Error::Io(_) => 1,
     }

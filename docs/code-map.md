@@ -236,7 +236,7 @@ A save card (`Card`): `{"format":1,"device","time","playtime_secs":3120|null,"pl
 
 `history` (`HistoryData`): `{"game","current":"20261031T195100Z-strix-halo-tablet","entries":[{"entry":"20261031T195100Z-strix-halo-tablet","device":"strix-halo-tablet","time":"2026-10-31T19:51:00Z","current":true,"card":Card|null}, ...]}`, newest first.
 
-`repair` (`RepairData`): `{"game","revision":7,"markers":[{"revision":8,"entry":"<entry>"|null,"status":"releasable|releasable_set_aside|released|set_aside|kept_later|unreadable|skipped_state_moved","set_aside":"<path>"|null}],"claim_recovery":"<Drive claim status>"|null,"message"}`. `--json` previews by default. Pass `--yes` to apply eligible repairs. Drive claim recovery requires sync stopped on every other device and changes only claim metadata; it never uploads state bytes. Interactive text mode prompts before applying a repair.
+`repair` (`RepairData`): `{"game","revision":7,"markers":[{"revision":8,"entry":"<entry>"|null,"status":"releasable|releasable_set_aside|released|set_aside|kept_later|unreadable|skipped_state_moved","set_aside":"<path>"|null}],"claim_recovery":"<Drive claim status>"|null,"message"}`. `--json` previews by default. Pass `--yes` to apply eligible repairs. Drive claim recovery requires machine-local evidence from the exact guarded 409/404 failure, matching state path, file ID, version and claim; it requires sync stopped on every other device and changes only claim metadata. It never uploads state bytes. Interactive text mode prompts before applying a repair.
 
 `restore` (`RestoreData`): `{"game","entry":"<restored from>","revision":8,"new_entry":"<copy made now>","backup":"<local changes kept first>"|null,"counts":{...},"message"}`.
 

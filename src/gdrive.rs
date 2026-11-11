@@ -481,6 +481,7 @@ impl Drive {
 
     fn guarded_put(
         &self,
+        path: &str,
         file: &DriveFile,
         parent: &str,
         bytes: &[u8],
@@ -526,7 +527,21 @@ impl Drive {
                         None,
                     )
                     .map_err(|error| match error {
-                        Error::NotFound(_) => Error::Changed,
+                        Error::NotFound(_) => match self.metadata(&file.id, path) {
+                            Ok(current)
+                                if current.version == expected
+                                    && current.claim.as_deref() == Some(&claim_id) =>
+                            {
+                                Error::MissingDriveClaim {
+                                    path: path.to_string(),
+                                    file_id: file.id.clone(),
+                                    version: expected,
+                                    claim: claim_id.clone(),
+                                }
+                            }
+                            Ok(_) | Err(Error::NotFound(_)) => Error::Changed,
+                            Err(other) => other,
+                        },
                         other => other,
                     })?;
                 let value: Value = serde_json::from_slice(&taken.body)
@@ -688,38 +703,45 @@ fn oldest(files: Vec<DriveFile>) -> Vec<DriveFile> {
 }
 
 impl Remote for Drive {
-    fn repair_missing_state_claim(&self, path: &str, apply: bool) -> Result<Option<String>> {
+    fn repair_missing_state_claim(
+        &self,
+        path: &str,
+        evidence: Option<&crate::local::DriveClaimEvidence>,
+        apply: bool,
+    ) -> Result<Option<String>> {
+        let Some(evidence) = evidence else {
+            return Ok(None);
+        };
         let state = self.resolve(path)?;
-        if state.is_dir {
-            return Err(Error::NotFound(path.into()));
+        if state.is_dir || evidence.state_path != path || evidence.file_id != state.id {
+            return Ok(Some(
+                "saved Drive claim evidence does not match this state file".into(),
+            ));
         }
         let (bytes, etag) = self.get(path)?;
         let (version, claim) = guard::parse_etag(&etag).ok_or(Error::Changed)?;
-        if claim.is_empty() {
+        if version != evidence.version || claim != evidence.claim {
             return Ok(Some(
-                "state has no Drive claim; cannot repair automatically".into(),
+                "saved Drive claim evidence is stale; state metadata has changed".into(),
             ));
         }
-        // A fresh claim id is intentionally absent until the next writer tries to claim it.
-        // Only treat a missing id as stranded when a surviving predecessor proves it was
-        // consumed before; otherwise this is the normal healthy state.
-        let (parent_path, _) = split_path(path);
-        let parent = self.folder(parent_path)?;
-        let predecessors = self.children(&parent.id, None)?;
-        let linked = predecessors
-            .iter()
-            .any(|file| is_claim(file) && file.claim.as_deref() == Some(claim.as_str()));
-        if !linked {
-            return Ok(None);
+        if claim.is_empty() {
+            return Ok(Some(
+                "saved Drive claim evidence has no claim id; cannot repair automatically".into(),
+            ));
         }
         match self.metadata(&claim, path) {
-            Ok(_) => return Ok(None),
+            Ok(_) => {
+                return Ok(Some(
+                    "saved Drive claim evidence is stale; the named claim now exists".into(),
+                ));
+            }
             Err(Error::NotFound(_)) => {}
             Err(error) => return Err(error),
         }
         if !apply {
             return Ok(Some(format!(
-                "missing Drive claim {claim}; recovery is available. Stop sync on every other device before applying"
+                "missing Drive claim {claim} was confirmed by a guarded 409/404; recovery is available. Stop sync on every other device before applying"
             )));
         }
 
@@ -807,7 +829,7 @@ impl Remote for Drive {
             Precondition::Absent if existing.is_some() => return Err(Error::Changed),
             Precondition::Match(etag) => {
                 let file = existing.filter(|file| !file.is_dir).ok_or(Error::Changed)?;
-                return self.guarded_put(&file, &parent.id, bytes, etag);
+                return self.guarded_put(path, &file, &parent.id, bytes, etag);
             }
             _ => {}
         }

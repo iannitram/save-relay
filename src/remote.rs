@@ -6,6 +6,7 @@
 //! files root, which always exists.
 
 use crate::error::{Error, Result};
+use crate::local::DriveClaimEvidence;
 use std::collections::BTreeMap;
 use std::sync::{Mutex, MutexGuard};
 
@@ -57,9 +58,14 @@ pub trait Remote {
     fn needs_rev_marker(&self) -> bool {
         false
     }
-    /// Preview or explicitly rotate a missing Google Drive state claim. Other remotes do not
-    /// have Drive's metadata guard and return `None`.
-    fn repair_missing_state_claim(&self, _path: &str, _apply: bool) -> Result<Option<String>> {
+    /// Preview or explicitly rotate a missing Google Drive state claim, but only with local
+    /// evidence from its exact guarded 409/404 sequence. Other remotes return `None`.
+    fn repair_missing_state_claim(
+        &self,
+        _path: &str,
+        _evidence: Option<&DriveClaimEvidence>,
+        _apply: bool,
+    ) -> Result<Option<String>> {
         Ok(None)
     }
 }

@@ -719,29 +719,81 @@ fn the_claim_named_by_state_survives_day_old_cleanup_and_allows_the_next_push() 
 }
 
 #[test]
-fn explicit_repair_rotates_only_a_proven_deleted_claim() {
+fn guarded_409_then_404_records_exact_root_claim_evidence_for_explicit_repair() {
     let fake = fake();
     let drive = drive(&fake);
     let old = drive.put("state.json", b"saved state", ANY).unwrap();
-    let (_, missing) = guard::parse_etag(&old).unwrap();
-    dead_claim(&fake, "v1.predecessor", Some(&missing));
-    // The test models a permanently deleted ID at the end of a surviving claim chain.
-    assert!(matches!(
-        drive.get(".claim-does-not-exist"),
-        Err(Error::NotFound(_))
-    ));
-
-    let preview = drive
-        .repair_missing_state_claim("state.json", false)
-        .unwrap();
-    assert!(preview
-        .as_deref()
-        .is_some_and(|m| m.starts_with("missing Drive claim")));
+    let (_, claim) = guard::parse_etag(&old).unwrap();
+    let target = fake.clone();
+    let injected = Rc::new(Cell::new(false));
+    let did_inject = injected.clone();
+    fake.set_hook(Some(Box::new(move |request| {
+        if request.method == "POST"
+            && request.url.starts_with(&format!("{API}/files?fields="))
+            && !did_inject.replace(true)
+        {
+            let body: Value = serde_json::from_slice(&request.body).unwrap();
+            assert_eq!(body["id"], claim);
+            let id = body["id"].as_str().unwrap().to_string();
+            // Create a competing file, then simulate cleanup deleting it before the guarded
+            // writer's GET. The writer therefore sees the required 409 then 404 sequence.
+            assert_eq!(raw(&target, "POST", "files", body).status, 201);
+            assert_eq!(
+                raw(&target, "DELETE", &format!("files/{id}"), json!({})).status,
+                204
+            );
+        }
+    })));
+    let error = drive
+        .put(
+            "state.json",
+            b"not written",
+            &Precondition::Match(old.clone()),
+        )
+        .unwrap_err();
+    fake.set_hook(None);
+    let evidence = match error {
+        Error::MissingDriveClaim {
+            path,
+            file_id,
+            version,
+            claim,
+        } => save_relay::local::DriveClaimEvidence {
+            format: save_relay::local::FORMAT,
+            state_path: path,
+            file_id,
+            version,
+            claim,
+        },
+        other => panic!("expected exact 409/404 evidence, got {other:?}"),
+    };
+    assert!(injected.get());
+    assert_eq!(evidence.state_path, "state.json");
+    assert_eq!(evidence.claim, guard::parse_etag(&old).unwrap().1);
+    assert_eq!(
+        drive
+            .repair_missing_state_claim("state.json", None, true)
+            .unwrap(),
+        None,
+        "an absent claim without local 409/404 evidence must not be rotated"
+    );
+    let mut stale = evidence.clone();
+    stale.version += 1;
+    assert!(drive
+        .repair_missing_state_claim("state.json", Some(&stale), true)
+        .unwrap()
+        .unwrap()
+        .contains("stale"));
     let (before, _) = drive.get("state.json").unwrap();
     assert_eq!(before, b"saved state");
 
+    let preview = drive
+        .repair_missing_state_claim("state.json", Some(&evidence), false)
+        .unwrap()
+        .unwrap();
+    assert!(preview.starts_with("missing Drive claim"));
     let applied = drive
-        .repair_missing_state_claim("state.json", true)
+        .repair_missing_state_claim("state.json", Some(&evidence), true)
         .unwrap()
         .unwrap();
     assert!(applied.contains("state bytes were preserved"));
@@ -760,13 +812,13 @@ fn explicit_repair_leaves_a_normal_unused_claim_unchanged() {
     let etag = drive.put("state.json", b"saved state", ANY).unwrap();
     assert_eq!(
         drive
-            .repair_missing_state_claim("state.json", false)
+            .repair_missing_state_claim("state.json", None, false)
             .unwrap(),
         None
     );
     assert_eq!(
         drive
-            .repair_missing_state_claim("state.json", true)
+            .repair_missing_state_claim("state.json", None, true)
             .unwrap(),
         None
     );

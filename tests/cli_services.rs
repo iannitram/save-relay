@@ -450,6 +450,89 @@ fn drive_device_flow_asks_for_drive_file_only_and_stores_the_refresh_token() {
 }
 
 #[test]
+fn drive_missing_root_claim_is_repaired_only_after_cli_observes_409_then_404() {
+    let (fake, transport) = drive();
+    let machine = Machine::new();
+    machine.json(
+        &transport,
+        "setup --service gdrive --no-browser --device desk",
+        "",
+    );
+    let (code, setup) = machine.json(
+        &transport,
+        "setup --service gdrive --finish --device desk",
+        "",
+    );
+    assert_eq!(code, 0, "{setup}");
+
+    fs::write(machine.root.join("saves/demo.sav"), b"first").unwrap();
+    let (code, first) = machine.json(&transport, &format!("push {}", machine.game_flags()), "");
+    assert_eq!(code, 0, "{first}");
+
+    fs::write(machine.root.join("saves/demo.sav"), b"second").unwrap();
+    let target = fake.clone();
+    let injected = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let did_inject = injected.clone();
+    fake.set_hook(Some(Box::new(move |request| {
+        if request.method == "POST"
+            && request
+                .url
+                .starts_with("https://www.googleapis.com/drive/v3/files?fields=")
+            && !did_inject.swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            let body: Value = serde_json::from_slice(&request.body).unwrap();
+            let id = body["id"].as_str().unwrap();
+            // Simulate the old cleanup deleting the root claim between create conflict and GET.
+            let mut create = request.clone();
+            assert_eq!(target.send(&create).unwrap().status, 201);
+            create.method = "DELETE".into();
+            create.url = format!("https://www.googleapis.com/drive/v3/files/{id}");
+            create.body.clear();
+            assert_eq!(target.send(&create).unwrap().status, 204);
+        }
+    })));
+    let (code, failed) = machine.json(&transport, &format!("push {}", machine.game_flags()), "");
+    fake.set_hook(None);
+    assert!(injected.load(std::sync::atomic::Ordering::SeqCst));
+    assert_eq!(code, 5, "{failed}");
+    assert_eq!(failed["error"]["code"], "changed_on_server");
+    let evidence = machine
+        .store
+        .load_drive_claim_evidence("demo-game")
+        .unwrap()
+        .expect("the guarded 409/404 records local evidence");
+    assert_eq!(evidence.state_path, "save-relay/demo-game/state.json");
+
+    let (code, preview) = machine.json(&transport, "repair demo-game", "");
+    assert_eq!(code, 0, "{preview}");
+    assert!(preview["data"]["claim_recovery"]
+        .as_str()
+        .unwrap()
+        .starts_with("missing Drive claim"));
+    assert!(machine
+        .store
+        .load_drive_claim_evidence("demo-game")
+        .unwrap()
+        .is_some());
+
+    let (code, applied) = machine.json(&transport, "repair demo-game --yes", "");
+    assert_eq!(code, 0, "{applied}");
+    assert!(applied["data"]["claim_recovery"]
+        .as_str()
+        .unwrap()
+        .contains("state bytes were preserved"));
+    assert_eq!(
+        machine
+            .store
+            .load_drive_claim_evidence("demo-game")
+            .unwrap(),
+        None
+    );
+    let (code, pushed) = machine.json(&transport, &format!("push {}", machine.game_flags()), "");
+    assert_eq!(code, 0, "{pushed}");
+}
+
+#[test]
 fn a_google_refresh_goes_back_to_the_client_that_issued_the_token() {
     let (fake, transport) = drive();
     let machine = Machine::new();
