@@ -2257,6 +2257,14 @@ fn install_wrap(
         };
         return Ok(install_wrap_outcome(&data));
     }
+    // Resolving either bulk selector can contact the network. Steam may have started
+    // while the lookup was running.
+    if !dry_run
+        && (all_known || no_steam_cloud)
+        && steam::launch::steam_running(cx.platform, &cx.vars.home)?
+    {
+        return Err(Error::SteamRunning);
+    }
     let binary = std::env::current_exe()?;
     let mut data = steam::launch::install(
         &root,

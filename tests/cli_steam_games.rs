@@ -243,3 +243,40 @@ fn missing_steam_root_keeps_the_existing_error_code() {
     let envelope: Value = serde_json::from_str(&output).unwrap();
     assert_eq!(envelope["error"]["code"], "steam_not_found");
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn bulk_wrap_refuses_when_steam_starts_during_lookup() {
+    struct StartsSteam {
+        pid_file: PathBuf,
+        transport: FakeTransport,
+    }
+
+    impl Transport for StartsSteam {
+        fn send(&self, request: &Request) -> Result<Response> {
+            fs::write(&self.pid_file, std::process::id().to_string()).unwrap();
+            self.transport.send(request)
+        }
+    }
+
+    let machine = Machine::new();
+    let steam = steam_games_fixture::fixture(&machine.root);
+    let _root = steam_games_fixture::set_root(&steam);
+    let config = steam.join("userdata/123/config/localconfig.vdf");
+    let before = fs::read(&config).unwrap();
+    let pid_dir = machine.vars.home.join(".steam");
+    fs::create_dir_all(&pid_dir).unwrap();
+    let transport = Arc::new(StartsSteam {
+        pid_file: pid_dir.join("steam.pid"),
+        transport: FakeTransport::new(),
+    });
+    let (code, output) = run(
+        &machine,
+        transport,
+        &["install-wrap", "--no-steam-cloud", "--json"],
+    );
+    assert_eq!(code, 2, "{output}");
+    let output: Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(output["error"]["code"], "steam_running");
+    assert_eq!(fs::read(config).unwrap(), before);
+}
