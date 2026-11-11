@@ -20,3 +20,4 @@ The project's own words, one line each. `/grill-with-docs` adds to this during t
 | sidecar | A port's `.save-relay-meta.json` in the saves folder giving the place name and picture for the next card; never part of the save set | the manifest |
 | panel | The Save Relay views: in Game Mode as the Decky plugin, on the desktop as `save-relay panel` in the browser; one front end (`panel/`) | the `panel` Rust module alone, which is only the desktop server |
 | ludusavi data | The ludusavi-manifest project's shared list of where PC games keep saves, downloaded and cached to find a wrapped game's saves folder (`ludusavi`) | a manifest (ours, which always wins) |
+| Steam Cloud state | Whether Steam itself syncs a game's saves: yes, no or unknown, from Steam's public store and kept a week (`steam::cloud`) | the ludusavi data's `cloud.steam` flag, which only ever says yes |

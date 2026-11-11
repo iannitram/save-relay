@@ -2,6 +2,34 @@
 
 From `SPEC.md` (re-approved 2026-11-01) to 1.0: Uncharted on the AMD handheld, the Strix Halo tablet and the RTX 3090 Ti desktop sharing saves through Play alone, through the service chosen at setup: Nextcloud, Google Drive or Dropbox (`docs/adr/0002-storage-backends.md`); a game still open on another machine said before I play; any Steam game synced with one launch option; and each save shown as a card in a Game Mode panel (`docs/adr/0003-baton-wrap-cards-panel.md`). How the code is laid out: `docs/code-map.md`. Each feature below is one GitHub issue (number in brackets), sized by the pipeline's rubric; Easy ones carry a Qwen brief and locked tests.
 
+## Where it stands (2026-11-10)
+
+Stages 1-7 are built and merged: F01-F25, F27-F45, F48-F66 and F69 are closed, CI is green on Linux, Windows and macOS, and the design pass's 20 findings (#164-#179, #197, #198, #201, #202) are fixed. No pull request is open. No release exists yet (`Cargo.toml` says `0.0.0`). What is left: M16 (added 2026-11-10: Steam games without Steam Cloud, `docs/adr/0004-steam-games-without-steam-cloud.md`), the Game Mode re-check, the app registrations, one release candidate, and the owner's device checks.
+
+### Run order to 1.0
+
+Each step is one issue. An automated run takes the **agent** steps whose "Waits on" is done, in this order, and stops at an **owner** step. Steps 1-7 and step 8 do not wait on each other.
+
+| Step | Who | Issue | What | Waits on | Done when |
+|---|---|---|---|---|---|
+| 1 | agent | #207 (F72) | Steam store answer parser; a game's name from its appmanifest | nothing | its tests pass |
+| 2 | agent | #208 (F73) | The Steam Cloud answer cache | step 1 | its tests pass against a fake transport |
+| 3 | agent | #209 (F74) | `save-relay steam-games` | step 2 | the fixture Steam folder lists yes, no, unknown |
+| 4 | agent | #210 (F75) | `install-wrap --no-steam-cloud` | step 3 | only the no-cloud game is wrapped; unknown is skipped |
+| 5 | agent | #211 (F76) | `save-relay launch-option`; the panel API runs the M16 commands | step 3 | the three routes answer |
+| 6 | agent, check on a SteamOS handheld | #212 (F77) | The panel's Add games view | steps 3, 4, 5 | vitest and the contract fixtures pass; the Game Mode add is tried on a handheld |
+| 7 | agent | #213 (F78) | M16 integration test and docs | steps 4, 6 | the flow test and the doc test pass |
+| 8 | owner | #36 (F47) | Register the app with Google and Dropbox; set the five values as this repo's Actions variables and secrets (a tagged release refuses to build without them) and put them in `src/clients.rs` | nothing, any time | `gh variable list` and `gh secret list` show the five names; the values are on `main` |
+| 9 | agent, on a SteamOS handheld | #73 (F68) | Re-check the panel in Game Mode after #201 and #202, with the Add games view; file and fix any new `design-pass` finding; record the pass in `PIPELINE.md` and `CHANGELOG.md` | step 6 | every view re-checked at 1280x800, controller only; #73 closed |
+| 10 | agent | #205 (F71) | Cut `v1.0.0-rc.1`: version bump, release dry run, tag, checksum check | steps 7, 8 | the GitHub release holds the three binaries, `SHA256SUMS`, the Decky zip and the panel zip |
+| 11 | owner, an agent may drive with the owner signing in | #47 (F46) | Real round trips on Dropbox and Google Drive; Game Mode sign-in | step 10 | `cargo test --test live_services -- --ignored` passes on Windows and a handheld; written up on #47 |
+| 12 | owner | #72 (F67) | Device checks: suspend hand-off, wrap and install-wrap, the panel in Game Mode, adding a game without Steam Cloud | steps 9, 10 | written up on #72 |
+| 13 | agent | Uncharted-Universal #163 | The launcher calls the released binary around Play. Its own note (2026-11-06) holds it until the integration contract is ready: the `--json` API shape in `docs/code-map.md` at the `rc.1` tag is that contract | step 10 | merged there, bundling a save-relay release |
+| 14 | owner | #26 (F26) | 1.0 acceptance on the three PCs | steps 11, 12, 13 | written up on #26 |
+| 15 | agent | new issue when step 14 passes | Tag `v1.0.0`; `PIPELINE.md` moves to Prototype / Beta with a CHANGELOG line | step 14 | the 1.0 release is out |
+
+A bug found in steps 11, 12 or 14 becomes its own issue, is fixed by an agent, and ships in the next `rc` before the step is run again. Before step 10, a device can try a build from the release workflow's dry run (`gh workflow run release.yml --ref main`): Nextcloud works in it, Google Drive and Dropbox say they are not registered.
+
 ## Features
 
 | Id | Feature | Module | Musts | Issue |
@@ -31,7 +59,7 @@ From `SPEC.md` (re-approved 2026-11-01) to 1.0: Uncharted on the AMD handheld, t
 | F23 | Integration tests against a WebDAV server in CI, with a fixture game | `tests/` | M1-M5, M7, M8 | #23 |
 | F24 | Release binaries for Linux, Windows (and macOS) | `.github/workflows/release.yml` | M8 | #24 |
 | F25 | Manifest guide for port maintainers | `docs/manifest.md` | M7 | #25 |
-| F26 | 1.0 acceptance: uncharted_pc's launcher on the three PCs | uncharted_pc #163 | M8 (all) | #26 |
+| F26 | 1.0 acceptance: the Uncharted launcher on the three PCs | Uncharted-Universal #163 | M8 (all) | #26 |
 | F27 | Service names, the config's service field, token accounts | `service` (pure part) | M6, M9 | #27 |
 | F28 | PKCE verifier and S256 challenge | `oauth` (pure) | M6, M10 | #28 |
 | F29 | Sign-in URL with the narrow scope; the loopback redirect | `oauth` (pure) | M6, M10 | #29 |
@@ -75,8 +103,16 @@ From `SPEC.md` (re-approved 2026-11-01) to 1.0: Uncharted on the AMD handheld, t
 | F67 | Device checks: suspend hand-off on a handheld, wrap and install-wrap on a PC and a handheld, the panel in Game Mode (`needs-owner-device`) | — | M11-M15 | #72 |
 | F68 | Design pass on the panel (stage 8, `design-pass`) | `panel/`, `decky/` | M15 | #73 |
 | F69 | Manifest "saves_from": "launcher" (TotK) | manifest, cli | M7 | #48 |
+| F71 | The first release candidate, `v1.0.0-rc.1`, for the device checks | `Cargo.toml`, `.github/workflows/release.yml` (run) | M8 | #205 |
+| F72 | Steam store answer parser (Steam Cloud yes, no, not a game, unknown); a game's name from its appmanifest | `steam::cloud` (pure), `steam` | M16 | #207 |
+| F73 | The Steam Cloud answer cache: one request per installed game, kept a week | `steam::cloud::Cache` | M16 | #208 |
+| F74 | `save-relay steam-games`: installed games with Steam Cloud state, saves, wrapped | `cli`, `api`, `steam` | M16 | #209 |
+| F75 | `install-wrap --no-steam-cloud`, with `skipped` | `cli`, `steam::launch` | M16 | #210 |
+| F76 | `save-relay launch-option`; the panel API and the Decky backend run the M16 commands | `cli`, `panel` (Rust), `decky/` | M16 | #211 |
+| F77 | The panel's Add games view, in the browser and in Game Mode | `panel/`, `decky/` | M16 | #212 |
+| F78 | M16 integration test and docs | `tests/`, `docs/wrap.md`, `docs/panel.md` | M16 | #213 |
 
-Every Must has an issue: M1 (F07, F11, F19, F20, F23, F43), M2 (F02, F03, F20, F23, F43), M3 (F07, F19, F20, F23, F43), M4 (F08, F21, F23, F43), M5 (F07, F12, F20, F23, F43), M6 (F13, F14, F18, F22, F27-F30, F35, F37, F42, F44-F47), M7 (F01, F05, F23, F25, F69), M8 (F09, F10, F22, F24, F26, F44), M9 (F12, F27, F31-F34, F36, F38-F41, F43, F46), M10 (F28, F29, F33, F40-F42, F44-F47), M11 (F48-F52, F65, F67), M12 (F52-F54, F57, F58, F65-F67), M13 (F52-F56, F59, F65-F67), M14 (F52, F54, F60, F61, F65-F67), M15 (F52, F62-F64, F66-F68).
+Every Must has an issue: M1 (F07, F11, F19, F20, F23, F43), M2 (F02, F03, F20, F23, F43), M3 (F07, F19, F20, F23, F43), M4 (F08, F21, F23, F43), M5 (F07, F12, F20, F23, F43), M6 (F13, F14, F18, F22, F27-F30, F35, F37, F42, F44-F47), M7 (F01, F05, F23, F25, F69), M8 (F09, F10, F22, F24, F26, F44, F71), M9 (F12, F27, F31-F34, F36, F38-F41, F43, F46), M10 (F28, F29, F33, F40-F42, F44-F47), M11 (F48-F52, F65, F67), M12 (F52-F54, F57, F58, F65-F67), M13 (F52-F56, F59, F65-F67), M14 (F52, F54, F60, F61, F65-F67), M15 (F52, F62-F64, F66-F68), M16 (F67, F72-F78).
 
 ## Mac, PC and Linux (R04)
 
@@ -119,6 +155,8 @@ Every Must has an issue: M1 (F07, F11, F19, F20, F23, F43), M2 (F02, F03, F20, F
 
 ## Development stages
 
+Stages 1-7 are done (2026-11-06); the "free now" and "after" notes below are the order they were built in, kept as history. What is left, M16 (F72-F78) included, is in "Run order to 1.0" above.
+
 1. **Pure core** (F01-F10): all Easy, no dependencies between them except F03 (stamp) and F08 (layout). Satellites can take them in parallel.
 2. **Local I/O and fakes** (F11-F15): the save set scan, the in-memory server, the memory credential store, this machine's files, WebDAV URLs. Easy.
 3. **The server** (F16-F19): PROPFIND parsing, the real WebDAV client (checked on the Nextcloud test container, R12), the system credential store, safe transfers. Medium, one Hard (F18).
@@ -139,7 +177,7 @@ Every Must has an issue: M1 (F07, F11, F19, F20, F23, F43), M2 (F02, F03, F20, F
    - **7f, together:** F65 the integration tests (after F50, F58, F61), F66 the docs (after F58, F63).
    - **7g, the owner's part:** F67 the device checks (`needs-owner-device`, after all of the above), F68 the design pass (stage 8).
 8. **Design pass** (R04, before the 1.0 acceptance; F68): **no longer skipped**, because save-relay now has a screen: the panel (M15), in Game Mode and in the browser. The pass checks its views (the games list, the card timeline, restore, the conflict and held choices, pending choices, the QR sign-in) against the design system all my apps share, at 1280x800 with a controller only, and its findings become `design-pass` issues. The prompts a port's launcher draws (the conflict and held choices, the service choice and the sign-in code) still get their look in that port's own design pass; the wording from here (the `message` lines and the prompt text in `docs/code-map.md` § API shape) is fixed by the API shape and reviewed with F22, F44 and F62.
-9. **1.0 acceptance** (F26, and F67 for M11-M15), last: uncharted_pc's launcher calls the released binary around Play (uncharted_pc #163); a save made on each of the three PCs loads on the others (`needs-owner-device`).
+9. **1.0 acceptance** (F26, and F67 for M11-M15), last: the Uncharted launcher calls the released binary around Play (Uncharted-Universal #163); a save made on each of the three PCs loads on the others (`needs-owner-device`).
 
 ## After 1.0
 
