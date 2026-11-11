@@ -15,6 +15,7 @@ fn facts(platform: Platform) -> Facts {
             documents: Some("fixture/documents".into()),
         },
         app_id: 1145360,
+        steam_root: "fixture/steam".into(),
         library: "fixture/library".into(),
         install_dir: Some("fixture/library/steamapps/common/Hades".into()),
         user_id: Some("123".into()),
@@ -49,6 +50,64 @@ fn unclear(result: Result<Located, Error>) -> String {
         Err(Error::SaveLocationUnclear(message)) => message,
         other => panic!("expected unclear save location, got {other:?}"),
     }
+}
+
+fn rejects_broad_folder(template: &str, facts: &Facts, folder: &str) {
+    let entry = entry(json!({template: {"tags": ["save"]}}));
+    let message = unclear(locate(&entry, facts, &[folder], &[folder]));
+    assert!(message.contains("overly broad"), "{message}");
+}
+
+#[test]
+fn bare_platform_roots_are_unclear() {
+    let windows = facts(Platform::Windows);
+    rejects_broad_folder("<home>", &windows, "fixture/home");
+    rejects_broad_folder("<winAppData>", &windows, "fixture/config");
+    rejects_broad_folder("<winLocalAppData>", &windows, "fixture/data");
+    rejects_broad_folder("<winDocuments>", &windows, "fixture/documents");
+    rejects_broad_folder("<root>", &windows, "fixture/library");
+    rejects_broad_folder("<base>", &windows, "fixture/library/steamapps/common/Hades");
+    rejects_broad_folder("fixture/steam", &windows, "fixture/steam");
+
+    let linux = facts(Platform::Linux);
+    rejects_broad_folder("<xdgData>", &linux, "fixture/data");
+    rejects_broad_folder("<xdgConfig>", &linux, "fixture/config");
+
+    let mut proton = linux;
+    proton.proton = true;
+    rejects_broad_folder(
+        "<home>",
+        &proton,
+        "fixture/library/steamapps/compatdata/1145360/pfx/drive_c/users/steamuser",
+    );
+}
+
+#[test]
+fn windows_path_comparison_handles_case_and_separator_variants() {
+    let mut windows = facts(Platform::Windows);
+    windows.vars.home = PathBuf::from("C:/Users/Player");
+    rejects_broad_folder(r"c:\Users", &windows, "c:/Users");
+
+    windows.vars.home = PathBuf::from("C:/Users/Émile");
+    rejects_broad_folder(r"c:\users\ÉMILE", &windows, "c:/users/ÉMILE");
+}
+
+#[cfg(windows)]
+#[test]
+fn refuses_windows_drive_root_and_users_parent_of_home() {
+    let windows = facts(Platform::Windows);
+    rejects_broad_folder("C:/", &windows, "C:/");
+
+    let mut windows = windows;
+    windows.vars.home = PathBuf::from("C:/Users/Player");
+    rejects_broad_folder("C:/Users", &windows, "C:/Users");
+    rejects_broad_folder("c:/users", &windows, "c:/users");
+}
+
+#[cfg(unix)]
+#[test]
+fn refuses_unix_filesystem_root() {
+    rejects_broad_folder("/", &facts(Platform::Linux), "/");
 }
 
 fn hades() -> Entry {

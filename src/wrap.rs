@@ -175,12 +175,15 @@ fn before_play(
         note(format!("{error}; starting on this machine's saves"));
         return;
     }
+    if let Err(error) = store.set_waiting(game, true) {
+        note(format!("{error}; starting on this machine's saves"));
+        clear_pending(store, game);
+        return;
+    }
     note(choice_line(game, &choice));
     // The whole wait, including a `Wait` answer's re-reads, ends this long after the hold.
     let deadline = now() + ANSWER_WAIT_SECS;
     let answer = pending::wait_for_answer(store, game, ANSWER_WAIT_SECS, now, sleep);
-    // The answer, if any, is in hand; the file goes either way, so a late answer is not kept.
-    clear_pending(store, game);
     match answer {
         Ok(Some(answer)) => act_on(
             engine,
@@ -192,10 +195,19 @@ fn before_play(
             deadline,
             sleep,
         ),
-        Ok(None) => note(format!(
-            "no answer in {ANSWER_WAIT_SECS} s; starting on this machine's saves"
-        )),
-        Err(error) => note(format!("{error}; starting on this machine's saves")),
+        Ok(None) => {
+            note(format!(
+                "no answer in {ANSWER_WAIT_SECS} s; starting on this machine's saves"
+            ));
+            clear_pending(store, game);
+        }
+        Err(error) => {
+            note(format!("{error}; starting on this machine's saves"));
+            clear_pending(store, game);
+        }
+    }
+    if let Err(error) = store.set_waiting(game, false) {
+        note(error);
     }
 }
 
@@ -235,7 +247,58 @@ fn wait_until_free(
     deadline: u64,
     sleep: &dyn Fn(u64),
 ) {
+    // A second answer during the snooze window is a new answer, not the `Wait` already consumed.
+    match store.load_pending(game) {
+        Ok(Some(mut choice)) => {
+            choice.answer = None;
+            if let Err(error) = store.save_pending(&choice) {
+                note(error);
+                return;
+            }
+        }
+        Ok(None) => return,
+        Err(error) => {
+            note(error);
+            return;
+        }
+    }
     loop {
+        match store.load_pending(game) {
+            Ok(Some(choice)) => match choice.answer {
+                Some(Answer::PlayAnyway) => {
+                    match engine.pull(None, true) {
+                        Ok(report) => {
+                            report_note(&report);
+                            settle(store, game, &report, now());
+                        }
+                        Err(error) => {
+                            note(error);
+                            clear_answer(store, game);
+                        }
+                    }
+                    return;
+                }
+                Some(Answer::Wait) => {
+                    let mut choice = choice;
+                    choice.answer = None;
+                    if let Err(error) = store.save_pending(&choice) {
+                        note(error);
+                        return;
+                    }
+                }
+                Some(Answer::KeepServer | Answer::KeepLocal) => {
+                    note("answer does not fit a held choice");
+                    return;
+                }
+                None => {}
+            },
+            Ok(None) => return,
+            Err(error) => {
+                note(error);
+                clear_answer(store, game);
+                return;
+            }
+        }
         match engine.pull(None, false) {
             Ok(report) if report.sync.action == Action::Held => {
                 if now() >= deadline {
@@ -253,9 +316,23 @@ fn wait_until_free(
             }
             Err(error) => {
                 note(error);
+                clear_answer(store, game);
                 return;
             }
         }
+    }
+}
+
+fn clear_answer(store: &LocalStore, game: &str) {
+    match store.load_pending(game) {
+        Ok(Some(mut choice)) => {
+            choice.answer = None;
+            if let Err(error) = store.save_pending(&choice) {
+                note(error);
+            }
+        }
+        Ok(None) => {}
+        Err(error) => note(error),
     }
 }
 

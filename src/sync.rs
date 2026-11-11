@@ -230,7 +230,7 @@ fn sync(
                 entry: entry.clone(),
                 files: local.files.clone(),
             };
-            if let Err(error) = write_state(s, id, revision, &entry, &next, &pre) {
+            if let Err(error) = write_state(s, Some(store), id, revision, &entry, &next, &pre) {
                 if error == Error::Changed
                     && claim_looks_stranded(s, id, revision, &pre, state.as_ref())
                 {
@@ -606,12 +606,14 @@ fn fresh_entry(now: u64, device: &str, taken: &[String]) -> String {
 /// Writes `state.json` for revision `revision`, which names `entry`, with `pre`. On a backend that
 /// needs the revision claim (`Remote::needs_rev_marker`, #149) the write comes second: only the
 /// write that creates `rev/<revision>` may write `state.json`. A refused claim or write is
-/// `Error::Changed`, and `entry` is removed: a rejected conditional write cannot have published
-/// it. Other failures may be ambiguous, so `entry` stays in history. A failed state write releases
+/// `Error::Changed` (or Drive's confirmed missing-claim failure), and `entry` is removed: a
+/// rejected conditional write cannot have published it. Other failures may be ambiguous, so
+/// `entry` stays in history. A failed state write releases
 /// the claim on a best-effort basis. A crash or failed cleanup can strand it;
 /// `repair` releases it safely (#159, ADR 0002).
 fn write_state(
     s: &Session,
+    store: Option<&LocalStore>,
     id: &str,
     revision: u64,
     entry: &str,
@@ -620,7 +622,7 @@ fn write_state(
 ) -> Result<()> {
     let name = revision.to_string();
     if let Err(error) = claim_revision(s, id, &name, entry) {
-        if error == Error::Changed {
+        if matches!(error, Error::Changed | Error::MissingDriveClaim { .. }) {
             let _ = s.remote.delete(&s.layout.entry_dir(id, entry));
         }
         return Err(error);
@@ -629,7 +631,27 @@ fn write_state(
         .remote
         .put(&s.layout.state_path(id), next.to_json().as_bytes(), pre)
     {
-        if error == Error::Changed {
+        if let Error::MissingDriveClaim {
+            path,
+            file_id,
+            version,
+            claim,
+        } = &error
+        {
+            if let Some(store) = store {
+                let _ = store.save_drive_claim_evidence(
+                    id,
+                    &crate::local::DriveClaimEvidence {
+                        format: crate::local::FORMAT,
+                        state_path: path.clone(),
+                        file_id: file_id.clone(),
+                        version: *version,
+                        claim: claim.clone(),
+                    },
+                );
+            }
+        }
+        if matches!(error, Error::Changed | Error::MissingDriveClaim { .. }) {
             let _ = s.remote.delete(&s.layout.entry_dir(id, entry));
         }
         if s.remote.needs_rev_marker() {
@@ -760,9 +782,9 @@ pub fn status(s: &Session, game: &Game, store: &LocalStore) -> Result<StatusData
         last_synced_revision: last.as_ref().map(|last| last.revision),
         local_changed: local_changed(&local, last.as_ref()),
         message,
-        // Another machine's mark (M11); pending choices (M12) are not read yet.
+        // Another machine's mark (M11) and this machine's pending choice (M12).
         held,
-        pending: None,
+        pending: store.load_pending(id)?,
     })
 }
 
@@ -804,7 +826,8 @@ pub fn history(s: &Session, game: &str) -> Result<HistoryData> {
     })
 }
 
-/// Inspect and, when `release` is set, repair Nextcloud revision claims (#159). A claim is
+/// Inspect and, when `release` is set, repair Nextcloud revision claims (#159) and, with this
+/// machine's verified evidence, a missing Google Drive state claim. A Nextcloud claim is
 /// eligible only when it is exactly the next revision, `n+1`, where `n` is the revision in
 /// `state.json`. Its named history entry is either incomplete or missing, and then the claim is
 /// released; or it is complete, and then the entry is moved to `set-aside/rev<n+1>-<entry>` (kept
@@ -812,12 +835,52 @@ pub fn history(s: &Session, game: &str) -> Result<HistoryData> {
 /// claims whose body is not an entry name are kept. `state.json` is checked before each change
 /// and again after a move, so a publication that races with repair is never overwritten.
 pub fn repair(s: &Session, game: &str, release: bool) -> Result<RepairData> {
+    repair_inner(s, game, release, None)
+}
+
+/// Repair with this machine's local Drive claim evidence available.
+pub fn repair_with_store(
+    s: &Session,
+    game: &str,
+    release: bool,
+    store: &LocalStore,
+) -> Result<RepairData> {
+    repair_inner(s, game, release, Some(store))
+}
+
+fn repair_inner(
+    s: &Session,
+    game: &str,
+    release: bool,
+    store: Option<&LocalStore>,
+) -> Result<RepairData> {
+    let evidence = store
+        .map(|store| store.load_drive_claim_evidence(game))
+        .transpose()?
+        .flatten();
+    let claim_recovery = s.remote.repair_missing_state_claim(
+        &s.layout.state_path(game),
+        evidence.as_ref(),
+        release,
+    )?;
+    if release
+        && claim_recovery
+            .as_deref()
+            .is_some_and(|message| message.starts_with("rotated missing Drive claim "))
+    {
+        if let Some(store) = store {
+            store.clear_drive_claim_evidence(game)?;
+        }
+    }
     if !s.remote.needs_rev_marker() {
         return Ok(RepairData {
             game: game.into(),
             revision: 0,
             markers: vec![],
-            message: "nothing to repair".into(),
+            message: claim_recovery
+                .clone()
+                .unwrap_or_else(|| "nothing to repair".into()),
+            claim_recovery,
         });
     }
     let (state, original_pre, reachable) = read_server(s, game)?;
@@ -904,6 +967,7 @@ pub fn repair(s: &Session, game: &str, release: bool) -> Result<RepairData> {
         game: game.into(),
         revision,
         markers,
+        claim_recovery,
         message,
     })
 }
@@ -1068,7 +1132,7 @@ pub fn restore(s: &Session, game: &Game, store: &LocalStore, entry: &str) -> Res
         entry: new_entry.clone(),
         files: wanted.files.clone(),
     };
-    write_state(s, id, revision, &new_entry, &next, &pre)?;
+    write_state(s, Some(store), id, revision, &new_entry, &next, &pre)?;
     let downloaded = transfer::download_entry(
         s.remote,
         &s.layout,
@@ -1335,7 +1399,7 @@ mod repair_tests {
             files: vec![],
         };
         let (_, pre, _) = read_server(&session(&remote), "game").unwrap();
-        assert!(write_state(&session(&remote), "game", 2, &next.entry, &next, &pre).is_ok());
+        assert!(write_state(&session(&remote), None, "game", 2, &next.entry, &next, &pre).is_ok());
     }
 
     #[test]

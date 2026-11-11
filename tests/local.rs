@@ -1,4 +1,4 @@
-use save_relay::local::{Config, GameRecord, LocalStore, FORMAT};
+use save_relay::local::{Config, DriveClaimEvidence, GameRecord, LocalStore, FORMAT};
 use save_relay::manifest::Manifest;
 use save_relay::platform::{AppDirs, Platform};
 use save_relay::scan::FileEntry;
@@ -43,6 +43,27 @@ fn last() -> LastSynced {
     }
 }
 
+#[test]
+fn drive_claim_evidence_is_local_scoped_and_removable() {
+    let store = LocalStore::new(dirs("drive-claim-evidence"));
+    let evidence = DriveClaimEvidence {
+        format: FORMAT,
+        state_path: "save-relay/game/state.json".into(),
+        file_id: "drive-file-id".into(),
+        version: 7,
+        claim: "claim-id".into(),
+    };
+    assert_eq!(store.load_drive_claim_evidence("game").unwrap(), None);
+    store.save_drive_claim_evidence("game", &evidence).unwrap();
+    assert_eq!(
+        store.load_drive_claim_evidence("game").unwrap(),
+        Some(evidence)
+    );
+    assert_eq!(store.load_drive_claim_evidence("other-game").unwrap(), None);
+    store.clear_drive_claim_evidence("game").unwrap();
+    assert_eq!(store.load_drive_claim_evidence("game").unwrap(), None);
+}
+
 fn record() -> GameRecord {
     let manifest = Manifest {
         format: 1,
@@ -76,6 +97,16 @@ fn nothing_saved_yet_is_none() {
     assert_eq!(store.load_config().unwrap(), None);
     assert_eq!(store.load_last("uncharted-1").unwrap(), None);
     assert_eq!(store.load_game("uncharted-1").unwrap(), None);
+}
+
+#[test]
+fn waiting_markers_track_only_an_active_wrap_wait() {
+    let store = LocalStore::new(dirs("waiting"));
+    assert!(!store.is_waiting("game").unwrap());
+    store.set_waiting("game", true).unwrap();
+    assert!(store.is_waiting("game").unwrap());
+    store.set_waiting("game", false).unwrap();
+    assert!(!store.is_waiting("game").unwrap());
 }
 
 #[test]

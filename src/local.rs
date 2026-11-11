@@ -7,6 +7,7 @@
 //! <data>/save-relay/games/<game>.json    GameRecord: the manifest and saves folder last used
 //! <data>/save-relay/session/<game>.json  Session: when this machine's last `pull` ran (M14 playtime)
 //! <data>/save-relay/pending/<game>.json  pending::PendingChoice: a choice `wrap` waits on (M12)
+//! <data>/save-relay/waiting/<game>       a live `wrap` wait, so a late answer can resolve itself
 //! <data>/save-relay/ludusavi/            the ludusavi data cache (`ludusavi::Cache`, M13)
 //! <data>/save-relay/steam/cloud.json     Steam Cloud answers (`steam::cloud::Cache`, F73)
 //! ```
@@ -26,6 +27,17 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 /// The config format this build reads and writes.
 pub const FORMAT: u32 = 1;
+
+/// Local evidence from one Drive guarded write that observed the exact 409 then 404 sequence.
+/// It is scoped to a game path and Drive file identity, and is never synced to another device.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DriveClaimEvidence {
+    pub format: u32,
+    pub state_path: String,
+    pub file_id: String,
+    pub version: u64,
+    pub claim: String,
+}
 
 /// Written by `save-relay setup`. Holds no password or token: those are in the credential
 /// store (M6). The chosen service is `service::Service::from_server(&config.server)`.
@@ -68,6 +80,54 @@ pub struct LocalStore {
 }
 
 impl LocalStore {
+    /// `None` when no confirmed missing-claim failure was observed on this machine.
+    pub fn load_drive_claim_evidence(&self, game: &str) -> Result<Option<DriveClaimEvidence>> {
+        let evidence: Option<DriveClaimEvidence> = read_json(
+            &self
+                .dirs
+                .data
+                .join("drive-claim-evidence")
+                .join(format!("{game}.json")),
+        )?;
+        match evidence {
+            Some(evidence) if evidence.format != FORMAT => Err(Error::StateInvalid(format!(
+                "Drive claim evidence format {} is not {FORMAT}",
+                evidence.format
+            ))),
+            other => Ok(other),
+        }
+    }
+
+    /// Record evidence from a verified Drive 409/404 sequence for a later explicit repair.
+    pub fn save_drive_claim_evidence(
+        &self,
+        game: &str,
+        evidence: &DriveClaimEvidence,
+    ) -> Result<()> {
+        write_json(
+            &self
+                .dirs
+                .data
+                .join("drive-claim-evidence")
+                .join(format!("{game}.json")),
+            evidence,
+        )
+    }
+
+    /// Remove evidence after a successful explicit repair.
+    pub fn clear_drive_claim_evidence(&self, game: &str) -> Result<()> {
+        match fs::remove_file(
+            self.dirs
+                .data
+                .join("drive-claim-evidence")
+                .join(format!("{game}.json")),
+        ) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
     pub fn new(dirs: AppDirs) -> LocalStore {
         LocalStore { dirs }
     }
@@ -191,6 +251,46 @@ impl LocalStore {
         }
         choices.sort_by(|a, b| a.game.cmp(&b.game));
         Ok(choices)
+    }
+
+    /// Mark that `wrap` is actively waiting for an answer to this game's pending choice.
+    pub fn set_waiting(&self, game: &str, waiting: bool) -> Result<()> {
+        let path = self.dirs.data.join("waiting").join(game);
+        if waiting {
+            let parent = path
+                .parent()
+                .ok_or_else(|| Error::Io("waiting marker has no parent folder".into()))?;
+            fs::create_dir_all(parent)?;
+            fs::write(path, std::process::id().to_string())?;
+            Ok(())
+        } else {
+            match fs::remove_file(path) {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(error.into()),
+            }
+        }
+    }
+
+    /// Whether a live `wrap` is waiting for an answer to this game's pending choice.
+    pub fn is_waiting(&self, game: &str) -> Result<bool> {
+        let path = self.dirs.data.join("waiting").join(game);
+        match fs::metadata(&path) {
+            Ok(metadata) if metadata.is_file() => {
+                let live = metadata
+                    .modified()
+                    .ok()
+                    .and_then(|time| std::time::SystemTime::now().duration_since(time).ok())
+                    .is_some_and(|age| age.as_secs() <= 180);
+                if !live {
+                    self.set_waiting(game, false)?;
+                }
+                Ok(live)
+            }
+            Ok(_) => Ok(false),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error.into()),
+        }
     }
 
     /// `None` when no `pull` ran since the last push. A session of another format is

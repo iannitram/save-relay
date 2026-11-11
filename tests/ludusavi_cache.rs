@@ -212,6 +212,10 @@ fn first_refresh_downloads_the_data_and_writes_the_index() {
     assert_eq!(sent[0].method, "GET");
     assert_eq!(sent[0].url, MANIFEST_URL);
     assert_eq!(sent[0].header_value("If-None-Match"), None);
+    assert_eq!(
+        sent[0].max_response_bytes,
+        Some(ludusavi::MAX_MANIFEST_BYTES)
+    );
     let index = cache.index().unwrap().expect("the index is written");
     assert_eq!(index.etag.as_deref(), Some("\"v1\""));
     assert_eq!(index.checked, NOW);

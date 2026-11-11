@@ -26,6 +26,8 @@ pub struct Request {
     /// In the order added; names as given.
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
+    /// Optional bound for the response body; the transport must stop after this many bytes.
+    pub max_response_bytes: Option<usize>,
 }
 
 impl Request {
@@ -35,6 +37,7 @@ impl Request {
             url: url.to_string(),
             headers: Vec::new(),
             body: Vec::new(),
+            max_response_bytes: None,
         }
     }
 
@@ -47,6 +50,12 @@ impl Request {
     /// Set the body (builder style).
     pub fn body(mut self, body: Vec<u8>) -> Request {
         self.body = body;
+        self
+    }
+
+    /// Limit how many response body bytes a transport may read.
+    pub fn max_response_bytes(mut self, bytes: usize) -> Request {
+        self.max_response_bytes = Some(bytes);
         self
     }
 
@@ -74,6 +83,7 @@ impl fmt::Debug for Request {
             .field("url", &self.url)
             .field("headers", &headers)
             .field("body_len", &self.body.len())
+            .field("max_response_bytes", &self.max_response_bytes)
             .finish()
     }
 }
@@ -122,6 +132,8 @@ fn find<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
 pub trait Transport {
     /// Send one request and return the answer, whatever its status. A connection, DNS, TLS
     /// or timeout failure is `Error::Unreachable(<short reason>)`, never naming a header value.
+    /// If `request.max_response_bytes` is set, implementations must cap bytes read from the
+    /// response stream and fail when the response is larger than that bound.
     fn send(&self, request: &Request) -> Result<Response>;
 }
 
@@ -182,12 +194,27 @@ impl Transport for UreqTransport {
             }
         }
         let mut body = Vec::new();
-        response
-            .into_reader()
-            .read_to_end(&mut body)
-            .map_err(|error| {
-                crate::error::Error::Unreachable(format!("{host}: reading the answer: {error}"))
-            })?;
+        if let Some(limit) = request.max_response_bytes {
+            response
+                .into_reader()
+                .take(limit.saturating_add(1) as u64)
+                .read_to_end(&mut body)
+                .map_err(|error| {
+                    crate::error::Error::Unreachable(format!("{host}: reading the answer: {error}"))
+                })?;
+            if body.len() > limit {
+                return Err(crate::error::Error::Server(format!(
+                    "HTTP response body exceeds the {limit}-byte limit"
+                )));
+            }
+        } else {
+            response
+                .into_reader()
+                .read_to_end(&mut body)
+                .map_err(|error| {
+                    crate::error::Error::Unreachable(format!("{host}: reading the answer: {error}"))
+                })?;
+        }
 
         Ok(Response {
             status,
