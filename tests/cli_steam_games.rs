@@ -138,6 +138,25 @@ fn run(machine: &Machine, transport: Arc<dyn Transport>, args: &[&str]) -> (i32,
 }
 
 #[test]
+fn empty_library_lists_without_contacting_store_or_ludusavi() {
+    let machine = Machine::new();
+    let steam = steam_games_fixture::fixture(&machine.root);
+    let _root = steam_games_fixture::set_root(&steam);
+    for id in 504230..=504233 {
+        fs::remove_file(steam.join(format!("steamapps/appmanifest_{id}.acf"))).unwrap();
+    }
+    let transport = Arc::new(FakeTransport::new());
+    let (code, output) = run(&machine, transport.clone(), &["steam-games", "--json"]);
+    assert_eq!(code, 0, "{output}");
+    let output: Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(
+        output["data"],
+        serde_json::json!({"games": [], "unknown": 0})
+    );
+    assert!(transport.sent.lock().unwrap().is_empty());
+}
+
+#[test]
 fn parses_steam_games_flags_and_usage_lists_the_command() {
     assert_eq!(
         parse(&[
