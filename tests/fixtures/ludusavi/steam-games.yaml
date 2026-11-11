@@ -1,0 +1,25 @@
+# Made-up F78 games with installed app ids and a single known save folder.
+Cloud Game:
+  files:
+    <base>/save:
+      tags: [save]
+  installDir:
+    Cloud Game: {}
+  steam:
+    id: 504230
+No Cloud Game:
+  files:
+    <base>/save:
+      tags: [save]
+  installDir:
+    No Cloud Game: {}
+  steam:
+    id: 504231
+Unknown Game:
+  files:
+    <base>/save:
+      tags: [save]
+  installDir:
+    Unknown Game: {}
+  steam:
+    id: 504232

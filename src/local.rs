@@ -8,6 +8,7 @@
 //! <data>/save-relay/session/<game>.json  Session: when this machine's last `pull` ran (M14 playtime)
 //! <data>/save-relay/pending/<game>.json  pending::PendingChoice: a choice `wrap` waits on (M12)
 //! <data>/save-relay/ludusavi/            the ludusavi data cache (`ludusavi::Cache`, M13)
+//! <data>/save-relay/steam/cloud.json     Steam Cloud answers (`steam::cloud::Cache`, F73)
 //! ```
 //!
 //! Every write goes to a temp file of its own in the same folder first and is renamed over the
@@ -242,7 +243,7 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &std::path::Path) -> Result<Opt
 /// Counts the temp files this process has made, so no two writes in it share a name.
 static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
-fn write_json<T: Serialize>(path: &std::path::Path, value: &T) -> Result<()> {
+pub(crate) fn write_json<T: Serialize>(path: &std::path::Path, value: &T) -> Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| Error::Io("local file has no parent folder".into()))?;

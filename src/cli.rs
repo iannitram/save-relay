@@ -12,6 +12,7 @@
 //!                    (Steam launch option `save-relay wrap -- %command%`: pull, run, push)
 //! save-relay which   <appid> [--json]
 //! save-relay install-wrap (<appid>... | --all-known) [--remove] [--dry-run] [--json]
+//! save-relay install-wrap --no-steam-cloud [--dry-run] [--json]
 //! save-relay answer  <game> keep-server|keep-local|play-anyway|wait [--json]
 //! save-relay where   [--json]
 //! save-relay picture <game> <entry> --out <file> [--json]
@@ -27,8 +28,9 @@
 //! ```
 
 use crate::api::{
-    self, Action, AnswerData, HistoryData, SetupData, Side, SignInPrompt, SyncReport, WhereData,
-    WhichData, WhichSource,
+    self, Action, AnswerData, HistoryData, InstallWrapData, InstallWrapSkipReason,
+    InstallWrapSkipped, LaunchOptionData, SetupData, Side, SignInPrompt, SteamCloud, SteamGame,
+    SteamGamesData, SteamSaves, SyncReport, WhereData, WhichData, WhichSource,
 };
 use crate::clients::{self, Client, ClientSet};
 use crate::creds::{self, CredentialStore, Secret};
@@ -51,8 +53,9 @@ use crate::webdav;
 use crate::webdav::WebDav;
 use crate::wrap;
 use serde::Serialize;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// The default server folder that holds every game.
@@ -187,13 +190,25 @@ pub enum Command {
     Which {
         app_id: u32,
     },
-    /// M12: `install-wrap <appid>...` or `--all-known` (every app id in the ludusavi data that
-    /// is installed); not both, and one of them.
+    /// M16 F74: list installed Steam games and their Steam Cloud and saves status.
+    SteamGames {
+        no_steam_cloud: bool,
+        refresh: bool,
+    },
+    /// M16 F76: compute an app's launch option without reading or writing Steam files.
+    LaunchOption {
+        app_id: u32,
+        remove: bool,
+        current: Option<String>,
+    },
+    /// M12 explicit / `--all-known` selection, or M16 `--no-steam-cloud` selection (mutually
+    /// exclusive; the latter may combine with `--dry-run` and `--json`).
     InstallWrap {
         app_ids: Vec<u32>,
         all_known: bool,
         remove: bool,
         dry_run: bool,
+        no_steam_cloud: bool,
     },
     /// M12: `answer <game> <answer>` (`pending::Answer::parse`).
     Answer {
@@ -251,6 +266,10 @@ pub fn parse(args: &[String]) -> Result<Args> {
         .iter()
         .find(|arg| arg.as_str() != "--json")
         .map(String::as_str);
+
+    if first_non_json == Some("launch-option") {
+        return parse_launch_option(args);
+    }
 
     if first_non_json == Some("wrap") {
         let dash_pos = args.iter().position(|arg| arg.as_str() == "--");
@@ -505,30 +524,60 @@ pub fn parse(args: &[String]) -> Result<Args> {
             let app_id = parse_app_id(flags.positionals[0])?;
             Command::Which { app_id }
         }
+        "steam-games" => {
+            let flags = split(&args[1..], &[], &["--no-steam-cloud", "--refresh"])?;
+            require(&flags.positionals, 0, &[])?;
+            Command::SteamGames {
+                no_steam_cloud: flags.has("--no-steam-cloud"),
+                refresh: flags.has("--refresh"),
+            }
+        }
         "install-wrap" => {
-            let flags = split(&args[1..], &[], &["--all-known", "--remove", "--dry-run"])?;
+            let flags = split(
+                &args[1..],
+                &[],
+                &["--all-known", "--remove", "--dry-run", "--no-steam-cloud"],
+            )?;
             let all_known = flags.has("--all-known");
             let remove = flags.has("--remove");
             let dry_run = flags.has("--dry-run");
-            if all_known && !flags.positionals.is_empty() {
-                return Err(Error::Usage(
-                    "cannot use both <appid> and --all-known".to_string(),
-                ));
-            }
-            if !all_known && flags.positionals.is_empty() {
-                return Err(Error::Usage("missing <appid> or --all-known".to_string()));
-            }
-            let mut app_ids = Vec::with_capacity(flags.positionals.len());
-            for pos in &flags.positionals {
-                app_ids.push(parse_app_id(pos)?);
-            }
-            app_ids.sort_unstable();
-            app_ids.dedup();
-            Command::InstallWrap {
-                app_ids,
-                all_known,
-                remove,
-                dry_run,
+            let no_steam_cloud = flags.has("--no-steam-cloud");
+            if no_steam_cloud {
+                if all_known || remove || !flags.positionals.is_empty() {
+                    return Err(Error::Usage(
+                        "--no-steam-cloud cannot be combined with <appid>, --all-known or --remove"
+                            .into(),
+                    ));
+                }
+                Command::InstallWrap {
+                    app_ids: Vec::new(),
+                    all_known: false,
+                    remove: false,
+                    dry_run,
+                    no_steam_cloud: true,
+                }
+            } else {
+                if all_known && !flags.positionals.is_empty() {
+                    return Err(Error::Usage(
+                        "cannot use both <appid> and --all-known".to_string(),
+                    ));
+                }
+                if !all_known && flags.positionals.is_empty() {
+                    return Err(Error::Usage("missing <appid> or --all-known".to_string()));
+                }
+                let mut app_ids = Vec::with_capacity(flags.positionals.len());
+                for pos in &flags.positionals {
+                    app_ids.push(parse_app_id(pos)?);
+                }
+                app_ids.sort_unstable();
+                app_ids.dedup();
+                Command::InstallWrap {
+                    app_ids,
+                    all_known,
+                    remove,
+                    dry_run,
+                    no_steam_cloud: false,
+                }
             }
         }
         "answer" => {
@@ -599,6 +648,45 @@ pub fn parse(args: &[String]) -> Result<Args> {
         }
     };
     Ok(Args { command, json })
+}
+
+fn parse_launch_option(args: &[String]) -> Result<Args> {
+    let mut json = false;
+    let mut positionals_and_flags = Vec::with_capacity(args.len());
+    let mut args = args.iter().map(String::as_str);
+    while let Some(arg) = args.next() {
+        if arg == "--json" {
+            json = true;
+        } else if arg == "--current" {
+            positionals_and_flags.push(arg);
+            positionals_and_flags.extend(args.next());
+        } else if let Some(value) = arg.strip_prefix("--current=") {
+            positionals_and_flags.extend(["--current", value]);
+        } else if is_password_flag(arg) {
+            return Err(Error::Usage(
+                "the password is read from standard input, not from --password".into(),
+            ));
+        } else {
+            positionals_and_flags.push(arg);
+        }
+    }
+    let flags = split(&positionals_and_flags[1..], &["--current"], &["--remove"])?;
+    require(&flags.positionals, 1, &["<appid>"])?;
+    let app_id = parse_app_id(flags.positionals[0])?;
+    let current = flags.flag("--current");
+    if current.is_some_and(|text| text.contains(['\n', '\r', '\0'])) {
+        return Err(Error::Usage(
+            "--current must be single-line text without NUL".into(),
+        ));
+    }
+    Ok(Args {
+        command: Command::LaunchOption {
+            app_id,
+            remove: flags.has("--remove"),
+            current: current.map(str::to_owned),
+        },
+        json,
+    })
 }
 
 struct Flags<'a> {
@@ -756,7 +844,7 @@ pub fn connect_before(
 
 /// The command's name as it appears in the envelope: "pull" (`Pull` and `PullAnyway`), "push",
 /// "status", "history", "restore", "setup" (both setup forms), "wrap", "which",
-/// "install-wrap", "answer", "where", "picture", "panel", "help", "version".
+/// "steam-games", "install-wrap", "answer", "where", "picture", "panel", "help", "version".
 pub fn command_name(command: &Command) -> &'static str {
     match command {
         Command::Pull { .. } | Command::PullAnyway { .. } => "pull",
@@ -768,6 +856,8 @@ pub fn command_name(command: &Command) -> &'static str {
         Command::Setup { .. } | Command::SetupService { .. } => "setup",
         Command::Wrap { .. } => "wrap",
         Command::Which { .. } => "which",
+        Command::SteamGames { .. } => "steam-games",
+        Command::LaunchOption { .. } => "launch-option",
         Command::InstallWrap { .. } => "install-wrap",
         Command::Answer { .. } => "answer",
         Command::Where => "where",
@@ -792,7 +882,10 @@ Commands:
   pull    <game> --anyway [...]
   wrap    [--game <id>] [--manifest <file>] [--saves-dir <dir>] -- <command>...
   which   <appid>
+  steam-games [--no-steam-cloud] [--refresh]
   install-wrap (<appid>... | --all-known) [--remove] [--dry-run]
+  install-wrap --no-steam-cloud [--dry-run]
+  launch-option <appid> [--remove] [--current=<text>]
   answer  <game> keep-server|keep-local|play-anyway|wait
   where
   picture <game> <entry> --out <file>
@@ -1097,7 +1190,7 @@ fn wrap_child(args: &[String]) -> Option<&[String]> {
 /// The command word for an envelope when the arguments did not parse: the first argument that
 /// is a command, else "unknown".
 fn guess_command(args: &[String]) -> String {
-    const NAMES: [&str; 16] = [
+    const NAMES: [&str; 18] = [
         "pull",
         "push",
         "status",
@@ -1107,7 +1200,9 @@ fn guess_command(args: &[String]) -> String {
         "setup",
         "wrap",
         "which",
+        "steam-games",
         "install-wrap",
+        "launch-option",
         "answer",
         "where",
         "picture",
@@ -1166,12 +1261,22 @@ fn execute(command: Command, stdin: &mut dyn Read, cx: &Context) -> Result<Outco
         // `wrap` is started by `run_with_net` before it gets here; the rest are plain commands.
         Command::Wrap { .. } => unreachable!("run_with_net starts wrap itself"),
         Command::Which { app_id } => which(app_id, cx),
+        Command::SteamGames {
+            no_steam_cloud,
+            refresh,
+        } => steam_games(no_steam_cloud, refresh, cx),
+        Command::LaunchOption {
+            app_id,
+            remove,
+            current,
+        } => launch_option(app_id, remove, current.as_deref(), cx),
         Command::InstallWrap {
             app_ids,
             all_known,
             remove,
             dry_run,
-        } => install_wrap(app_ids, all_known, remove, dry_run, cx),
+            no_steam_cloud,
+        } => install_wrap(app_ids, all_known, remove, dry_run, no_steam_cloud, cx),
         Command::Answer { game, answer } => answer_command(&game, answer, cx),
         Command::Where => where_command(cx),
         Command::Picture { game, entry, out } => picture_command(&game, &entry, &out, cx),
@@ -1987,13 +2092,195 @@ fn which(app_id: u32, cx: &Context) -> Result<Outcome> {
     Ok(which_outcome(&data, message))
 }
 
+/// `launch-option <appid>`: calculate the wrapped launch option the Decky shell hands back to
+/// Steam's client. This intentionally does not inspect Steam's files; `current` comes from
+/// Steam's app-details callback and the client owns the eventual write.
+fn launch_option(
+    app_id: u32,
+    remove: bool,
+    current: Option<&str>,
+    cx: &Context,
+) -> Result<Outcome> {
+    let before = current.map(str::to_owned);
+    let after = if remove {
+        current.and_then(crate::steam::launch::unwrapped)
+    } else {
+        let binary = std::env::current_exe()?;
+        let binary = binary.display().to_string();
+        if !steam::launch::is_program_name(&binary) {
+            return Err(Error::Usage(
+                "launch-option needs the program named save-relay or save-relay.exe".into(),
+            ));
+        }
+        Some(steam::launch::wrapped(current, &binary, cx.platform))
+    };
+    let data = LaunchOptionData {
+        app_id,
+        before,
+        after: after.clone(),
+    };
+    let text = format!(
+        "{}: {}",
+        app_id,
+        after.as_deref().unwrap_or("(no launch option)")
+    );
+    Ok(outcome("launch-option", &data, text, 0))
+}
+
+/// `steam-games`: refresh store and ludusavi data, then list installed games from Steam's
+/// library manifests. A failed network connection keeps using cached data; it never blocks the
+/// read-only listing. This shared data builder also supplies the selection used by F75.
+fn steam_games(no_steam_cloud: bool, force: bool, cx: &Context) -> Result<Outcome> {
+    let env = |name: &str| std::env::var(name).ok();
+    let root = steam::find_root(cx.platform, cx.vars, &env)?;
+    let mut data = steam_games_data(&root, force, cx)?;
+    if no_steam_cloud {
+        data.games.retain(|game| game.steam_cloud == SteamCloud::No);
+        data.unknown = 0;
+    }
+    let text = data
+        .games
+        .iter()
+        .map(|game| {
+            format!(
+                "{} ({})  Steam Cloud: {}  saves: {}  wrapped: {}",
+                game.name,
+                game.app_id,
+                match game.steam_cloud {
+                    SteamCloud::Yes => "yes",
+                    SteamCloud::No => "no",
+                    SteamCloud::Unknown => "unknown",
+                },
+                match game.saves {
+                    SteamSaves::Manifest => "manifest",
+                    SteamSaves::Ludusavi => "ludusavi",
+                    SteamSaves::None => "none",
+                },
+                if game.wrapped { "yes" } else { "no" },
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    Ok(outcome("steam-games", &data, text, 0))
+}
+
+/// Shared F74 game-data builder for `steam-games` and F75's wrap selection.
+fn steam_games_data(root: &Path, force: bool, cx: &Context) -> Result<SteamGamesData> {
+    let dirs = AppDirs::from_vars(cx.vars);
+    let library_text = std::fs::read_to_string(root.join("steamapps/libraryfolders.vdf"))?;
+    let libraries = steam::parse_libraries(&library_text)?;
+    let mut installed = BTreeMap::new();
+    for library in &libraries {
+        for app_id in &library.apps {
+            if installed.contains_key(app_id) {
+                continue;
+            }
+            let manifest_path = library
+                .path
+                .join("steamapps")
+                .join(format!("appmanifest_{app_id}.acf"));
+            let manifest_text = match std::fs::read_to_string(manifest_path) {
+                Ok(text) => text,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error.into()),
+            };
+            let Some(name) = steam::parse_app_name(&manifest_text) else {
+                continue;
+            };
+            installed.insert(*app_id, name);
+        }
+    }
+    if installed.is_empty() {
+        return Ok(SteamGamesData {
+            unknown: 0,
+            games: Vec::new(),
+        });
+    }
+    let app_ids: Vec<u32> = installed.keys().copied().collect();
+
+    let mut cloud = steam::cloud::Cache::open(&dirs)?;
+    cloud.refresh(&*cx.net.transport, &app_ids, cx.now, force)?;
+
+    let ludusavi_cache = ludusavi::Cache::new(&dirs);
+    if let Err(error) = ludusavi_cache.refresh(&*cx.net.transport, cx.now, false) {
+        if !matches!(error, Error::Unreachable(_)) {
+            return Err(error);
+        }
+    }
+    let index = ludusavi_cache
+        .index()?
+        .map(|index| index.apps)
+        .unwrap_or_default();
+    let users = steam::user_ids(root)?;
+    let mut wrapped = BTreeSet::new();
+    for user in users {
+        let path = root
+            .join("userdata")
+            .join(user)
+            .join("config/localconfig.vdf");
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        };
+        let config = steam::vdf::parse(&text)?;
+        for app_id in &app_ids {
+            if steam::launch::launch_options(&config, *app_id)
+                .as_deref()
+                .is_some_and(steam::launch::is_wrapped)
+            {
+                wrapped.insert(*app_id);
+            }
+        }
+    }
+
+    let mut games = Vec::new();
+    for (app_id, name) in installed {
+        let cloud_state = match cloud.state(app_id) {
+            steam::cloud::CloudState::Yes => SteamCloud::Yes,
+            steam::cloud::CloudState::No => SteamCloud::No,
+            steam::cloud::CloudState::Unknown => SteamCloud::Unknown,
+            steam::cloud::CloudState::NotAGame => continue,
+        };
+        if cloud_state == SteamCloud::Unknown && !index.contains_key(&app_id) {
+            continue;
+        }
+        let saves = if cx.store.load_game(&steam::game_id(app_id))?.is_some() {
+            SteamSaves::Manifest
+        } else if index.contains_key(&app_id) {
+            SteamSaves::Ludusavi
+        } else {
+            SteamSaves::None
+        };
+        games.push(SteamGame {
+            app_id,
+            name,
+            steam_cloud: cloud_state,
+            saves,
+            wrapped: wrapped.contains(&app_id),
+        });
+    }
+    games.sort_by(|left, right| {
+        left.name
+            .cmp(&right.name)
+            .then(left.app_id.cmp(&right.app_id))
+    });
+    Ok(SteamGamesData {
+        unknown: games
+            .iter()
+            .filter(|game| game.steam_cloud == SteamCloud::Unknown)
+            .count(),
+        games,
+    })
+}
+
 /// The text form names the folder and lists the files that count as saves under it.
 fn which_outcome(data: &WhichData, message: String) -> Outcome {
     let text = format!("{message}\nFiles: {}", data.include.join(", "));
     outcome("which", data, text, 0)
 }
 
-/// `install-wrap <appid>... | --all-known`: `save-relay wrap -- %command%` in the launch options
+/// `install-wrap <appid>... | --all-known | --no-steam-cloud`: `save-relay wrap -- %command%` in the launch options
 /// of the games picked, in every Steam user's `localconfig.vdf` (`steam::launch::install`).
 /// Steam must not be running: checked before anything is read or written, and Steam is never
 /// closed. `--all-known` takes every installed app id (`steam::parse_libraries`) that the
@@ -2003,6 +2290,7 @@ fn install_wrap(
     all_known: bool,
     remove: bool,
     dry_run: bool,
+    no_steam_cloud: bool,
     cx: &Context,
 ) -> Result<Outcome> {
     if steam::launch::steam_running(cx.platform, &cx.vars.home)? {
@@ -2010,7 +2298,32 @@ fn install_wrap(
     }
     let env = |name: &str| std::env::var(name).ok();
     let root = steam::find_root(cx.platform, cx.vars, &env)?;
-    let app_ids = if all_known {
+    let (app_ids, skipped) = if no_steam_cloud {
+        let listing = steam_games_data(&root, false, cx)?;
+        let selected = listing
+            .no_cloud_with_saves()
+            .map(|game| game.app_id)
+            .collect::<Vec<_>>();
+        let skipped = listing
+            .games
+            .iter()
+            .filter_map(|game| {
+                let reason = if game.steam_cloud == SteamCloud::Unknown {
+                    Some(InstallWrapSkipReason::SteamCloudUnknown)
+                } else if game.steam_cloud == SteamCloud::No && game.saves == SteamSaves::None {
+                    Some(InstallWrapSkipReason::NoSavesEntry)
+                } else {
+                    None
+                }?;
+                Some(InstallWrapSkipped {
+                    app_id: game.app_id,
+                    name: game.name.clone(),
+                    reason,
+                })
+            })
+            .collect::<Vec<_>>();
+        (selected, skipped)
+    } else if all_known {
         let cache = ludusavi::Cache::new(&AppDirs::from_vars(cx.vars));
         cache.refresh(&*cx.net.transport, cx.now, false)?;
         let known = cache
@@ -2020,12 +2333,33 @@ fn install_wrap(
         let libraries = steam::parse_libraries(&std::fs::read_to_string(
             root.join("steamapps/libraryfolders.vdf"),
         )?)?;
-        steam::launch::installed_among(&libraries, known)
+        (
+            steam::launch::installed_among(&libraries, known),
+            Vec::new(),
+        )
     } else {
-        app_ids
+        (app_ids, Vec::new())
     };
+    if no_steam_cloud && app_ids.is_empty() {
+        let data = InstallWrapData {
+            dry_run,
+            changed: Vec::new(),
+            skipped,
+            backups: Vec::new(),
+            message: "no installed game without Steam Cloud and with known saves".into(),
+        };
+        return Ok(install_wrap_outcome(&data));
+    }
+    // Resolving either bulk selector can contact the network. Steam may have started
+    // while the lookup was running.
+    if !dry_run
+        && (all_known || no_steam_cloud)
+        && steam::launch::steam_running(cx.platform, &cx.vars.home)?
+    {
+        return Err(Error::SteamRunning);
+    }
     let binary = std::env::current_exe()?;
-    let data = steam::launch::install(
+    let mut data = steam::launch::install(
         &root,
         &app_ids,
         &binary,
@@ -2034,6 +2368,11 @@ fn install_wrap(
         cx.platform,
         cx.now,
     )?;
+    data.skipped = skipped;
+    Ok(install_wrap_outcome(&data))
+}
+
+fn install_wrap_outcome(data: &InstallWrapData) -> Outcome {
     let mut text = data.message.clone();
     for change in &data.changed {
         text.push_str(&format!(
@@ -2046,7 +2385,17 @@ fn install_wrap(
     for backup in &data.backups {
         text.push_str(&format!("\nbackup: {backup}"));
     }
-    Ok(outcome("install-wrap", &data, text, 0))
+    for skipped in &data.skipped {
+        let reason = match skipped.reason {
+            InstallWrapSkipReason::SteamCloudUnknown => "steam_cloud_unknown",
+            InstallWrapSkipReason::NoSavesEntry => "no_saves_entry",
+        };
+        text.push_str(&format!(
+            "\nskipped {} ({}): {reason}",
+            skipped.name, skipped.app_id
+        ));
+    }
+    outcome("install-wrap", data, text, 0)
 }
 
 /// What this machine knows about a wrapped Steam game for `ludusavi::translate`: its Steam

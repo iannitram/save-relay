@@ -5,6 +5,7 @@
 //! is `launch`. Pure functions over text and file lists, plus small reads; never a network
 //! call, never Steam's binary files.
 
+pub mod cloud;
 pub mod launch;
 pub mod vdf;
 
@@ -150,6 +151,15 @@ pub fn parse_install_dir(text: &str) -> Option<String> {
     vdf::parse(text)
         .ok()?
         .get_path(&["AppState", "installdir"])?
+        .as_str()
+        .map(str::to_owned)
+}
+
+/// The installed application's display name from `appmanifest_<id>.acf`.
+pub fn parse_app_name(text: &str) -> Option<String> {
+    vdf::parse(text)
+        .ok()?
+        .get_path(&["AppState", "name"])?
         .as_str()
         .map(str::to_owned)
 }
