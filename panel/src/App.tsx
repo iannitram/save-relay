@@ -175,13 +175,14 @@ function AddGamesRoute(props: {
     try {
       const data = await call<SteamGamesData>(props.bridge, "steam-games", refresh ? { refresh: true } : {});
       setGames(data.games);
+      if (!props.bridge.setLaunchOption) props.setAdded({});
       setError(null);
     } catch (e) {
       setError(message(e));
     } finally {
       setLoading(false);
     }
-  }, [props.bridge]);
+  }, [props.bridge, props.setAdded]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -235,9 +236,9 @@ function AddGamesRoute(props: {
     if (!props.bridge.getLaunchOption || !props.bridge.setLaunchOption) {
       try {
         const result = await call<InstallWrapData>(props.bridge, "install-wrap", { "app-ids": appIds });
-        const changedIds = result.changed.map((row) => row.app_id).filter((id) => appIds.includes(id));
-        props.setAdded((previous) => ({ ...previous, ...Object.fromEntries(changedIds.map((id) => [id, true])) }));
-        succeeded = changedIds.length;
+        const changedIds = new Set(result.changed.map((row) => row.app_id).filter((id) => appIds.includes(id)));
+        props.setAdded((previous) => ({ ...previous, ...Object.fromEntries(Array.from(changedIds, (id) => [id, true])) }));
+        succeeded = changedIds.size;
         if (succeeded !== appIds.length) {
           failures.push(...result.skipped
             .filter((row) => appIds.includes(row.app_id))

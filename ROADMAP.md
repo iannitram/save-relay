@@ -21,7 +21,7 @@ Each step is one issue. An automated run takes the **agent** steps whose "Waits 
 | 2 | agent | #208 (F73) | The Steam Cloud answer cache | step 1 | its tests pass against a fake transport |
 | 3 | agent | #209 (F74) | `save-relay steam-games` | step 2 | the fixture Steam folder lists yes, no, unknown |
 | 4 | agent | #210 (F75) | `install-wrap --no-steam-cloud` | step 3 | only the no-cloud game is wrapped; unknown is skipped |
-| 5 | agent | #211 (F76) | `save-relay launch-option`; the panel API runs the M16 commands | step 3 | the three routes answer |
+| 5 | agent | #211 (F76) | `save-relay launch-option`; the panel API runs the M16 commands | steps 3, 4 | the three routes answer |
 | 6 | agent, check on a SteamOS handheld | #212 (F77) | The panel's Add games view | steps 3, 4, 5 | vitest and the contract fixtures pass; the Game Mode add is tried on a handheld |
 | 7 | agent | #213 (F78) | M16 integration test and docs | steps 4, 6 | the flow test and the doc test pass |
 | 8 | owner | #36 (F47) | Register the app with Google and Dropbox; set the five values as this repo's Actions variables and secrets (a tagged release refuses to build without them) and put them in `src/clients.rs` | nothing, any time | `gh variable list` and `gh secret list` show the five names; the values are on `main` |
