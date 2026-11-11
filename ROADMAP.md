@@ -2,17 +2,21 @@
 
 From `SPEC.md` (re-approved 2026-11-01) to 1.0: Uncharted on the AMD handheld, the Strix Halo tablet and the RTX 3090 Ti desktop sharing saves through Play alone, through the service chosen at setup: Nextcloud, Google Drive or Dropbox (`docs/adr/0002-storage-backends.md`); a game still open on another machine said before I play; any Steam game synced with one launch option; and each save shown as a card in a Game Mode panel (`docs/adr/0003-baton-wrap-cards-panel.md`). How the code is laid out: `docs/code-map.md`. Each feature below is one GitHub issue (number in brackets), sized by the pipeline's rubric; Easy ones carry a Qwen brief and locked tests.
 
-## Where it stands (2026-11-10)
+## Where it stands (2026-11-11)
 
-Stages 1-7 are built and merged: F01-F25, F27-F45, F48-F66 and F69 are closed, CI is green on Linux, Windows and macOS, and the design pass's 20 findings (#164-#179, #197, #198, #201, #202) are fixed. No pull request is open. No release exists yet (`Cargo.toml` says `0.0.0`). What is left: M16 (added 2026-11-10: Steam games without Steam Cloud, `docs/adr/0004-steam-games-without-steam-cloud.md`), the Game Mode re-check, the app registrations, one release candidate, and the owner's device checks.
+**You are here: Dev Loop, starting M16 at step 1 ([#207](https://github.com/iannitram/save-relay/issues/207)).** Stages 1–7 are merged (F01–F25, F27–F45, F48–F66 and F69). The sync engine, Steam wrapper, browser panel and Decky shell are in the tree. M16 starts with the Steam Cloud parser, then adds the cache, CLI, Add games view and integration coverage.
+
+- **Verified on main:** the [check run for `a8e07ff`](https://github.com/iannitram/save-relay/actions/runs/42939286063) passed Rust and WebDAV integration on Linux, Windows and macOS, plus the frontend build and tests. Dropbox and Drive have automated fake-service coverage. Live sign-in and round trips remain in #47.
+- **Stage 8 remains open:** the 20 design findings (#164–#179, #197, #198, #201, #202) are fixed. #73 tracks the controller-only Game Mode re-check once the Add games view is ready.
+- **Release and acceptance:** Cargo is at `0.0.0` and GitHub has no release. The owner can register Google and Dropbox in #36 while M16 proceeds. The release candidate (#205) waits for both. The device and Uncharted acceptance steps below remain open.
 
 ### Run order to 1.0
 
-Each step is one issue. An automated run takes the **agent** steps whose "Waits on" is done, in this order, and stops at an **owner** step. Steps 1-7 and step 8 do not wait on each other.
+Each step is one issue. An automated run takes the **agent** steps whose "Waits on" is done, in this order, and stops at an **owner** step. The owner can do step 8 independently of steps 1–7.
 
 | Step | Who | Issue | What | Waits on | Done when |
 |---|---|---|---|---|---|
-| 1 | agent | #207 (F72) | Steam store answer parser; a game's name from its appmanifest | nothing | its tests pass |
+| 1 | agent | #207 (F72) | Steam store answer parser; a game's name from its appmanifest | nothing (**current step**) | its tests pass |
 | 2 | agent | #208 (F73) | The Steam Cloud answer cache | step 1 | its tests pass against a fake transport |
 | 3 | agent | #209 (F74) | `save-relay steam-games` | step 2 | the fixture Steam folder lists yes, no, unknown |
 | 4 | agent | #210 (F75) | `install-wrap --no-steam-cloud` | step 3 | only the no-cloud game is wrapped; unknown is skipped |
