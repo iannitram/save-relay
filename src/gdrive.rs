@@ -481,6 +481,7 @@ impl Drive {
 
     fn guarded_put(
         &self,
+        path: &str,
         file: &DriveFile,
         parent: &str,
         bytes: &[u8],
@@ -526,7 +527,21 @@ impl Drive {
                         None,
                     )
                     .map_err(|error| match error {
-                        Error::NotFound(_) => Error::Changed,
+                        Error::NotFound(_) => match self.metadata(&file.id, path) {
+                            Ok(current)
+                                if current.version == expected
+                                    && current.claim.as_deref() == Some(&claim_id) =>
+                            {
+                                Error::MissingDriveClaim {
+                                    path: path.to_string(),
+                                    file_id: file.id.clone(),
+                                    version: expected,
+                                    claim: claim_id.clone(),
+                                }
+                            }
+                            Ok(_) | Err(Error::NotFound(_)) => Error::Changed,
+                            Err(other) => other,
+                        },
                         other => other,
                     })?;
                 let value: Value = serde_json::from_slice(&taken.body)
@@ -688,6 +703,88 @@ fn oldest(files: Vec<DriveFile>) -> Vec<DriveFile> {
 }
 
 impl Remote for Drive {
+    fn repair_missing_state_claim(
+        &self,
+        path: &str,
+        evidence: Option<&crate::local::DriveClaimEvidence>,
+        apply: bool,
+    ) -> Result<Option<String>> {
+        let Some(evidence) = evidence else {
+            return Ok(None);
+        };
+        let state = self.resolve(path)?;
+        if state.is_dir || evidence.state_path != path || evidence.file_id != state.id {
+            return Ok(Some(
+                "saved Drive claim evidence does not match this state file".into(),
+            ));
+        }
+        let (bytes, etag) = self.get(path)?;
+        let (version, claim) = guard::parse_etag(&etag).ok_or(Error::Changed)?;
+        if version != evidence.version || claim != evidence.claim {
+            return Ok(Some(
+                "saved Drive claim evidence is stale; state metadata has changed".into(),
+            ));
+        }
+        if claim.is_empty() {
+            return Ok(Some(
+                "saved Drive claim evidence has no claim id; cannot repair automatically".into(),
+            ));
+        }
+        match self.metadata(&claim, path) {
+            Ok(_) => {
+                return Ok(Some(
+                    "saved Drive claim evidence is stale; the named claim now exists".into(),
+                ));
+            }
+            Err(Error::NotFound(_)) => {}
+            Err(error) => return Err(error),
+        }
+        if !apply {
+            return Ok(Some(format!(
+                "missing Drive claim {claim} was confirmed by a guarded 409/404; recovery is available. Stop sync on every other device before applying"
+            )));
+        }
+
+        // Drive v3 exposes no conditional metadata update here. Require a single writer,
+        // revalidate immediately before PATCH, and prove the state bytes did not change after.
+        let (before_bytes, before_etag) = self.get(path)?;
+        if before_etag != etag || before_bytes != bytes {
+            return Err(Error::Changed);
+        }
+        let before = self.metadata(&state.id, path)?;
+        if before.version != version || before.claim.as_deref() != Some(&claim) {
+            return Err(Error::Changed);
+        }
+        match self.metadata(&claim, path) {
+            Ok(_) => return Err(Error::Changed),
+            Err(Error::NotFound(_)) => {}
+            Err(error) => return Err(error),
+        }
+        let fresh = self.generate_id()?;
+        self.json(
+            "PATCH",
+            &format!(
+                "{API}/files/{}?fields={FILE_FIELDS}",
+                encode_segment(&state.id)
+            ),
+            &json!({"appProperties": {guard::CLAIM_PROPERTY: fresh}}),
+            path,
+        )?;
+        let after = self.metadata(&state.id, path)?;
+        if after.version <= version || after.claim.as_deref() != Some(&fresh) {
+            return Err(Error::Changed);
+        }
+        let (after_bytes, after_etag) = self.get(path)?;
+        if after_bytes != bytes
+            || guard::parse_etag(&after_etag).map(|(v, _)| v) != Some(after.version)
+        {
+            return Err(Error::Changed);
+        }
+        Ok(Some(format!(
+            "rotated missing Drive claim {claim} to {fresh}; state bytes were preserved"
+        )))
+    }
+
     fn list(&self, dir: &str) -> Result<Vec<RemoteEntry>> {
         let folder = self.folder(dir)?;
         Ok(oldest(self.children(&folder.id, None)?)
@@ -732,7 +829,7 @@ impl Remote for Drive {
             Precondition::Absent if existing.is_some() => return Err(Error::Changed),
             Precondition::Match(etag) => {
                 let file = existing.filter(|file| !file.is_dir).ok_or(Error::Changed)?;
-                return self.guarded_put(&file, &parent.id, bytes, etag);
+                return self.guarded_put(path, &file, &parent.id, bytes, etag);
             }
             _ => {}
         }

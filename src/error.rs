@@ -25,6 +25,14 @@ pub enum Error {
     Changed,
     /// A refused write is associated with a stranded Nextcloud revision claim.
     ChangedRepair(String),
+    /// Drive refused creation of the state-named claim (409), then confirmed it was absent (404).
+    /// This is evidence for an explicit, local-only recovery flow; it is still a failed CAS.
+    MissingDriveClaim {
+        path: String,
+        file_id: String,
+        version: u64,
+        claim: String,
+    },
     /// `restore` named a history entry that does not exist.
     NoSuchEntry(String),
     /// A remote path does not exist.
@@ -66,7 +74,9 @@ impl Error {
             Error::Unreachable(_) => "server_unreachable",
             Error::Server(_) => "server_error",
             Error::StateInvalid(_) => "state_invalid",
-            Error::Changed | Error::ChangedRepair(_) => "changed_on_server",
+            Error::Changed | Error::ChangedRepair(_) | Error::MissingDriveClaim { .. } => {
+                "changed_on_server"
+            }
             Error::NoSuchEntry(_) => "no_such_entry",
             Error::NotFound(_) => "not_found",
             Error::Credentials(_) => "credentials",
@@ -96,6 +106,10 @@ impl fmt::Display for Error {
             Error::Server(m) => write!(f, "server error: {m}"),
             Error::StateInvalid(m) => write!(f, "state file: {m}"),
             Error::ChangedRepair(message) => write!(f, "{message}"),
+            Error::MissingDriveClaim { path, .. } => write!(
+                f,
+                "Google Drive refused a state write because its named claim is missing ({path}); no state was written. Stop sync on every other device, then inspect with `save-relay repair`."
+            ),
             Error::Changed => write!(
                 f,
                 "another machine changed the saves on the server meanwhile"

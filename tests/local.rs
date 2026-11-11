@@ -1,4 +1,4 @@
-use save_relay::local::{Config, GameRecord, LocalStore, FORMAT};
+use save_relay::local::{Config, DriveClaimEvidence, GameRecord, LocalStore, FORMAT};
 use save_relay::manifest::Manifest;
 use save_relay::platform::{AppDirs, Platform};
 use save_relay::scan::FileEntry;
@@ -41,6 +41,27 @@ fn last() -> LastSynced {
         time: "2026-10-31T19:51:00Z".into(),
         files,
     }
+}
+
+#[test]
+fn drive_claim_evidence_is_local_scoped_and_removable() {
+    let store = LocalStore::new(dirs("drive-claim-evidence"));
+    let evidence = DriveClaimEvidence {
+        format: FORMAT,
+        state_path: "save-relay/game/state.json".into(),
+        file_id: "drive-file-id".into(),
+        version: 7,
+        claim: "claim-id".into(),
+    };
+    assert_eq!(store.load_drive_claim_evidence("game").unwrap(), None);
+    store.save_drive_claim_evidence("game", &evidence).unwrap();
+    assert_eq!(
+        store.load_drive_claim_evidence("game").unwrap(),
+        Some(evidence)
+    );
+    assert_eq!(store.load_drive_claim_evidence("other-game").unwrap(), None);
+    store.clear_drive_claim_evidence("game").unwrap();
+    assert_eq!(store.load_drive_claim_evidence("game").unwrap(), None);
 }
 
 fn record() -> GameRecord {

@@ -150,6 +150,9 @@ pub struct RepairData {
     pub game: String,
     pub revision: u64,
     pub markers: Vec<RepairMarker>,
+    /// Drive state-claim recovery result, when supported by the backend.
+    #[serde(default)]
+    pub claim_recovery: Option<String>,
     pub message: String,
 }
 
@@ -449,6 +452,7 @@ pub fn exit_code(error: &Error) -> i32 {
         | Error::StateInvalid(_)
         | Error::Changed
         | Error::ChangedRepair(_)
+        | Error::MissingDriveClaim { .. }
         | Error::NotFound(_) => 5,
         Error::Io(_) => 1,
     }

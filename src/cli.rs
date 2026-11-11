@@ -1647,21 +1647,31 @@ fn repair_command(
     let result = (|| -> Result<Outcome> {
         let config = load_config(cx)?;
         let preview = with_remote(&config, cx, |remote| {
-            sync::repair(&session(&config, remote, cx)?, game, false)
+            sync::repair_with_store(&session(&config, remote, cx)?, game, false, cx.store)
         })?;
         let eligible = preview
             .markers
             .iter()
-            .any(|m| m.status == "releasable" || m.status == "releasable_set_aside");
+            .any(|m| m.status == "releasable" || m.status == "releasable_set_aside")
+            || preview
+                .claim_recovery
+                .as_deref()
+                .is_some_and(|message| message.starts_with("missing Drive claim "));
         let approved = if yes {
             true
         } else if json || !eligible {
             false
         } else {
-            eprint!(
-                "{} Release eligible revision claim(s)? A complete entry is moved to set-aside/ first, never deleted. [y/N] ",
-                preview.message
-            );
+            let prompt = if preview
+                .claim_recovery
+                .as_deref()
+                .is_some_and(|message| message.starts_with("missing Drive claim "))
+            {
+                "Apply eligible repair? Drive claim recovery requires sync stopped on every other device; it changes claim metadata only and preserves state bytes. [y/N] "
+            } else {
+                "Release eligible revision claim(s)? A complete entry is moved to set-aside/ first, never deleted. [y/N] "
+            };
+            eprint!("{} {}", preview.message, prompt);
             let mut answer = String::new();
             let mut byte = [0u8; 1];
             while stdin.read(&mut byte)? == 1 && byte[0] != b'\n' {
@@ -1673,7 +1683,7 @@ fn repair_command(
         };
         let data = if approved && eligible {
             with_remote(&config, cx, |remote| {
-                sync::repair(&session(&config, remote, cx)?, game, true)
+                sync::repair_with_store(&session(&config, remote, cx)?, game, true, cx.store)
             })?
         } else {
             preview
