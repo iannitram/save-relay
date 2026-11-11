@@ -27,8 +27,8 @@
 //! ```
 
 use crate::api::{
-    self, Action, AnswerData, HistoryData, SetupData, Side, SignInPrompt, SyncReport, WhereData,
-    WhichData, WhichSource,
+    self, Action, AnswerData, HistoryData, SetupData, Side, SignInPrompt, SteamCloud, SteamGame,
+    SteamGamesData, SteamSaves, SyncReport, WhereData, WhichData, WhichSource,
 };
 use crate::clients::{self, Client, ClientSet};
 use crate::creds::{self, CredentialStore, Secret};
@@ -51,8 +51,9 @@ use crate::webdav;
 use crate::webdav::WebDav;
 use crate::wrap;
 use serde::Serialize;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// The default server folder that holds every game.
@@ -186,6 +187,11 @@ pub enum Command {
     /// M13: `which <appid>`.
     Which {
         app_id: u32,
+    },
+    /// M16 F74: list installed Steam games and their Steam Cloud and saves status.
+    SteamGames {
+        no_steam_cloud: bool,
+        refresh: bool,
     },
     /// M12: `install-wrap <appid>...` or `--all-known` (every app id in the ludusavi data that
     /// is installed); not both, and one of them.
@@ -505,6 +511,14 @@ pub fn parse(args: &[String]) -> Result<Args> {
             let app_id = parse_app_id(flags.positionals[0])?;
             Command::Which { app_id }
         }
+        "steam-games" => {
+            let flags = split(&args[1..], &[], &["--no-steam-cloud", "--refresh"])?;
+            require(&flags.positionals, 0, &[])?;
+            Command::SteamGames {
+                no_steam_cloud: flags.has("--no-steam-cloud"),
+                refresh: flags.has("--refresh"),
+            }
+        }
         "install-wrap" => {
             let flags = split(&args[1..], &[], &["--all-known", "--remove", "--dry-run"])?;
             let all_known = flags.has("--all-known");
@@ -756,7 +770,7 @@ pub fn connect_before(
 
 /// The command's name as it appears in the envelope: "pull" (`Pull` and `PullAnyway`), "push",
 /// "status", "history", "restore", "setup" (both setup forms), "wrap", "which",
-/// "install-wrap", "answer", "where", "picture", "panel", "help", "version".
+/// "steam-games", "install-wrap", "answer", "where", "picture", "panel", "help", "version".
 pub fn command_name(command: &Command) -> &'static str {
     match command {
         Command::Pull { .. } | Command::PullAnyway { .. } => "pull",
@@ -768,6 +782,7 @@ pub fn command_name(command: &Command) -> &'static str {
         Command::Setup { .. } | Command::SetupService { .. } => "setup",
         Command::Wrap { .. } => "wrap",
         Command::Which { .. } => "which",
+        Command::SteamGames { .. } => "steam-games",
         Command::InstallWrap { .. } => "install-wrap",
         Command::Answer { .. } => "answer",
         Command::Where => "where",
@@ -792,6 +807,7 @@ Commands:
   pull    <game> --anyway [...]
   wrap    [--game <id>] [--manifest <file>] [--saves-dir <dir>] -- <command>...
   which   <appid>
+  steam-games [--no-steam-cloud] [--refresh]
   install-wrap (<appid>... | --all-known) [--remove] [--dry-run]
   answer  <game> keep-server|keep-local|play-anyway|wait
   where
@@ -1097,7 +1113,7 @@ fn wrap_child(args: &[String]) -> Option<&[String]> {
 /// The command word for an envelope when the arguments did not parse: the first argument that
 /// is a command, else "unknown".
 fn guess_command(args: &[String]) -> String {
-    const NAMES: [&str; 16] = [
+    const NAMES: [&str; 17] = [
         "pull",
         "push",
         "status",
@@ -1107,6 +1123,7 @@ fn guess_command(args: &[String]) -> String {
         "setup",
         "wrap",
         "which",
+        "steam-games",
         "install-wrap",
         "answer",
         "where",
@@ -1166,6 +1183,10 @@ fn execute(command: Command, stdin: &mut dyn Read, cx: &Context) -> Result<Outco
         // `wrap` is started by `run_with_net` before it gets here; the rest are plain commands.
         Command::Wrap { .. } => unreachable!("run_with_net starts wrap itself"),
         Command::Which { app_id } => which(app_id, cx),
+        Command::SteamGames {
+            no_steam_cloud,
+            refresh,
+        } => steam_games(no_steam_cloud, refresh, cx),
         Command::InstallWrap {
             app_ids,
             all_known,
@@ -1990,6 +2011,147 @@ fn which(app_id: u32, cx: &Context) -> Result<Outcome> {
         message: message.clone(),
     };
     Ok(which_outcome(&data, message))
+}
+
+/// `steam-games`: refresh store and ludusavi data, then list installed games from Steam's
+/// library manifests. A failed network connection keeps using cached data; it never blocks the
+/// read-only listing. This shared data builder also supplies the selection used by F75.
+fn steam_games(no_steam_cloud: bool, force: bool, cx: &Context) -> Result<Outcome> {
+    let env = |name: &str| std::env::var(name).ok();
+    let root = steam::find_root(cx.platform, cx.vars, &env)?;
+    let mut data = steam_games_data(&root, force, cx)?;
+    if no_steam_cloud {
+        data.games.retain(|game| game.steam_cloud == SteamCloud::No);
+        data.unknown = 0;
+    }
+    let text = data
+        .games
+        .iter()
+        .map(|game| {
+            format!(
+                "{} ({})  Steam Cloud: {}  saves: {}  wrapped: {}",
+                game.name,
+                game.app_id,
+                match game.steam_cloud {
+                    SteamCloud::Yes => "yes",
+                    SteamCloud::No => "no",
+                    SteamCloud::Unknown => "unknown",
+                },
+                match game.saves {
+                    SteamSaves::Manifest => "manifest",
+                    SteamSaves::Ludusavi => "ludusavi",
+                    SteamSaves::None => "none",
+                },
+                if game.wrapped { "yes" } else { "no" },
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    Ok(outcome("steam-games", &data, text, 0))
+}
+
+/// Shared F74 game-data builder for `steam-games` and F75's wrap selection.
+fn steam_games_data(root: &Path, force: bool, cx: &Context) -> Result<SteamGamesData> {
+    let dirs = AppDirs::from_vars(cx.vars);
+    let library_text = std::fs::read_to_string(root.join("steamapps/libraryfolders.vdf"))?;
+    let libraries = steam::parse_libraries(&library_text)?;
+    let mut installed = BTreeMap::new();
+    for library in &libraries {
+        for app_id in &library.apps {
+            if installed.contains_key(app_id) {
+                continue;
+            }
+            let manifest_path = library
+                .path
+                .join("steamapps")
+                .join(format!("appmanifest_{app_id}.acf"));
+            let manifest_text = match std::fs::read_to_string(manifest_path) {
+                Ok(text) => text,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error.into()),
+            };
+            let Some(name) = steam::parse_app_name(&manifest_text) else {
+                continue;
+            };
+            installed.insert(*app_id, name);
+        }
+    }
+    let app_ids: Vec<u32> = installed.keys().copied().collect();
+
+    let mut cloud = steam::cloud::Cache::open(&dirs)?;
+    cloud.refresh(&*cx.net.transport, &app_ids, cx.now, force)?;
+
+    let ludusavi_cache = ludusavi::Cache::new(&dirs);
+    if let Err(error) = ludusavi_cache.refresh(&*cx.net.transport, cx.now, false) {
+        if !matches!(error, Error::Unreachable(_)) {
+            return Err(error);
+        }
+    }
+    let index = ludusavi_cache
+        .index()?
+        .map(|index| index.apps)
+        .unwrap_or_default();
+    let users = steam::user_ids(&root)?;
+    let mut wrapped = BTreeSet::new();
+    for user in users {
+        let path = root
+            .join("userdata")
+            .join(user)
+            .join("config/localconfig.vdf");
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        };
+        let config = steam::vdf::parse(&text)?;
+        for app_id in &app_ids {
+            if steam::launch::launch_options(&config, *app_id)
+                .as_deref()
+                .is_some_and(steam::launch::is_wrapped)
+            {
+                wrapped.insert(*app_id);
+            }
+        }
+    }
+
+    let mut games = Vec::new();
+    for (app_id, name) in installed {
+        let cloud_state = match cloud.state(app_id) {
+            steam::cloud::CloudState::Yes => SteamCloud::Yes,
+            steam::cloud::CloudState::No => SteamCloud::No,
+            steam::cloud::CloudState::Unknown => SteamCloud::Unknown,
+            steam::cloud::CloudState::NotAGame => continue,
+        };
+        if cloud_state == SteamCloud::Unknown && !index.contains_key(&app_id) {
+            continue;
+        }
+        let saves = if cx.store.load_game(&steam::game_id(app_id))?.is_some() {
+            SteamSaves::Manifest
+        } else if index.contains_key(&app_id) {
+            SteamSaves::Ludusavi
+        } else {
+            SteamSaves::None
+        };
+        games.push(SteamGame {
+            app_id,
+            name,
+            steam_cloud: cloud_state,
+            saves,
+            wrapped: wrapped.contains(&app_id),
+        });
+    }
+    games.sort_by(|left, right| {
+        left.name
+            .cmp(&right.name)
+            .then(left.app_id.cmp(&right.app_id))
+    });
+    Ok(SteamGamesData {
+        unknown: games
+            .iter()
+            .filter(|game| game.steam_cloud == SteamCloud::Unknown)
+            .count(),
+        games,
+    })
 }
 
 /// The text form names the folder and lists the files that count as saves under it.
