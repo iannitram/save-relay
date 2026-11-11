@@ -33,6 +33,19 @@ save-relay install-wrap --remove 1234560
 save-relay which 1234560
 ```
 
+## Games without Steam Cloud
+
+`steam-games` lists installed Steam games, whether the public store says they use Steam Cloud, whether save-relay knows their saves folder, and whether they are already wrapped. Steam receives only the app ids needed for the store lookup. `unknown` means the store did not give a yes-or-no game answer; it is never treated as `no`.
+
+`--no-steam-cloud` shows only games with a known `no` answer. `install-wrap --no-steam-cloud` wraps only those games whose saves folder is known. Unknown games and games without a known saves folder are reported as skipped. The command needs Steam closed, as described above, and does not wrap anything when the store answer is unknown.
+
+```text
+save-relay steam-games
+save-relay steam-games --no-steam-cloud
+save-relay install-wrap --no-steam-cloud --dry-run
+save-relay install-wrap --no-steam-cloud
+```
+
 ## Your own manifest
 
 A manifest you wrote (`--manifest`) always wins over the ludusavi data. `--manifest` is remembered for that game id. `--saves-dir` only applies to ludusavi-found games or to a game without a manifest.

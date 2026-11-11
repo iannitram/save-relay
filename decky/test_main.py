@@ -51,6 +51,10 @@ class BackendTests(unittest.IsolatedAsyncioTestCase):
             ("push", {"game": "g", "resolve": "keep-local"}, ["g", "--resolve", "keep-local"]),
             ("answer", {"game": "g", "answer": "play-anyway"}, ["g", "play-anyway"]),
             ("which", {"appid": 42}, ["42"]),
+            ("steam-games", {"no-steam-cloud": True, "refresh": True}, ["--no-steam-cloud", "--refresh"]),
+            ("install-wrap", {"app-ids": [42, 43], "dry-run": True}, ["42", "43", "--dry-run"]),
+            ("launch-option", {"appid": 42, "remove": True, "current": "-novid %command%"},
+             ["42", "--remove", "--current=-novid %command%"]),
             ("setup", {"service": "gdrive", "no-browser": True, "finish": False},
              ["--service", "gdrive", "--no-browser"]),
             ("setup", {"service": "dropbox", "finish": True, "device": "d", "root": "r"},
@@ -116,6 +120,17 @@ class BackendTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(command=command, args=args):
                 self.assert_error(await self.plugin.run(command, args), "usage")
         self.spawn.assert_not_awaited()
+
+    async def test_launch_option_preserves_empty_current_and_app_ids_are_numeric(self):
+        for command, args, expected in [
+            ("launch-option", {"appid": 42, "current": ""}, ["42", "--current="]),
+            ("install-wrap", {"app-ids": [42]}, ["42"]),
+        ]:
+            self.process.communicate.return_value = (json.dumps({"ok": True, "command": command, "data": {}}).encode(), None)
+            await self.plugin._run(command, args, "owned-output")
+            self.assertEqual(self.spawn.call_args.args[1:], (command, *expected, "--json"))
+        for args in [{"appid": 42, "current": "two\nlines"}, {"app-ids": ["42"]}]:
+            self.assert_error(await self.plugin.run("launch-option" if "appid" in args else "install-wrap", args), "usage")
 
     async def test_picture_data_url_owned_output_and_cleanup(self):
         paths = []

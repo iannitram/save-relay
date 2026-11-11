@@ -1,12 +1,23 @@
 // The panel: loads data over the Bridge and routes between the views (views.tsx). The Decky
 // plugin renders this same component inside Game Mode.
 
-import { useCallback, useEffect, useState } from "react";
-import type { HistoryData, PendingChoice, StatusData, WhereData, SignInPrompt, Answer } from "./api.ts";
-import { call, choose, restore, signIn } from "./actions.ts";
+import { useCallback, useEffect, useState, type Dispatch, type SetStateAction } from "react";
+import type {
+  Answer,
+  HistoryData,
+  InstallWrapData,
+  LaunchOptionData,
+  PendingChoice,
+  SignInPrompt,
+  StatusData,
+  SteamGamesData,
+  WhereData,
+} from "./api.ts";
+import { call, choose, PanelError, restore, signIn } from "./actions.ts";
 import type { Bridge } from "./bridge.ts";
 import {
   ConflictView,
+  AddGamesView,
   GamesView,
   HeldView,
   LoadingView,
@@ -26,6 +37,7 @@ export interface AppProps {
 
 type Route =
   | { view: "games"; initial?: string }
+  | { view: "add-games" }
   | { view: "pending" }
   | { view: "timeline"; game: string }
   | { view: "choice"; choice: PendingChoice; from: "games" | "pending" }
@@ -38,6 +50,7 @@ export function App({ bridge, pictureUrl, token }: AppProps) {
   const [rows, setRows] = useState<GameRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [addedOverrides, setAddedOverrides] = useState<Record<number, boolean>>({});
 
   const load = useCallback(async () => {
     try {
@@ -79,6 +92,16 @@ export function App({ bridge, pictureUrl, token }: AppProps) {
           onOpen={(game) => go({ view: "timeline", game })}
           onPending={() => go({ view: "pending" })}
           onSignIn={() => go({ view: "signin" })}
+          onAddGames={() => go({ view: "add-games" })}
+        />
+      );
+    case "add-games":
+      return (
+        <AddGamesRoute
+          bridge={bridge}
+          added={addedOverrides}
+          setAdded={setAddedOverrides}
+          onBack={() => home("add-games")}
         />
       );
     case "pending":
@@ -126,6 +149,143 @@ export function App({ bridge, pictureUrl, token }: AppProps) {
     case "signin":
       return <SignIn bridge={bridge} onBack={() => home("signin")} />;
   }
+}
+
+function steamRunningMessage(error: unknown) {
+  return error instanceof PanelError && error.code === "steam_running"
+    ? "Close Steam, then press Add again."
+    : message(error);
+}
+
+function AddGamesRoute(props: {
+  bridge: Bridge;
+  added: Readonly<Record<number, boolean>>;
+  setAdded: Dispatch<SetStateAction<Record<number, boolean>>>;
+  onBack: () => void;
+}) {
+  const [games, setGames] = useState<SteamGamesData["games"] | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [busyAppId, setBusyAppId] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const load = useCallback(async (refresh = false) => {
+    setLoading(true);
+    try {
+      const data = await call<SteamGamesData>(props.bridge, "steam-games", refresh ? { refresh: true } : {});
+      setGames(data.games);
+      if (!props.bridge.setLaunchOption) props.setAdded({});
+      setError(null);
+    } catch (e) {
+      setError(message(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [props.bridge, props.setAdded]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const change = useCallback(async (appId: number, remove: boolean) => {
+    if (props.bridge.getLaunchOption && props.bridge.setLaunchOption) {
+      const current = await props.bridge.getLaunchOption(appId);
+      const data = await call<LaunchOptionData>(props.bridge, "launch-option", {
+        appid: appId,
+        ...(remove ? { remove: true } : {}),
+        current,
+      });
+      await props.bridge.setLaunchOption(appId, data.after ?? "");
+    } else {
+      const result = await call<InstallWrapData>(props.bridge, "install-wrap", {
+        "app-ids": [appId],
+        ...(remove ? { remove: true } : {}),
+      });
+      if (!result.changed.some((row) => row.app_id === appId)) {
+        const skipped = result.skipped.find((row) => row.app_id === appId);
+        throw new Error(skipped ? `${skipped.name}: ${skipped.reason}` : "Steam did not report a launch option change.");
+      }
+    }
+    props.setAdded((previous) => ({ ...previous, [appId]: !remove }));
+  }, [props.bridge, props.setAdded]);
+
+  const act = useCallback(async (appId: number, remove: boolean) => {
+    const gameName = games?.find((game) => game.app_id === appId)?.name ?? String(appId);
+    setBusy(true);
+    setBusyAppId(appId);
+    setError(null);
+    setNotice(null);
+    try {
+      await change(appId, remove);
+      setNotice(`${remove ? "Removed" : "Added"} ${gameName}.`);
+    } catch (e) {
+      setError(steamRunningMessage(e));
+    } finally {
+      setBusy(false);
+      setBusyAppId(null);
+    }
+  }, [change, games]);
+
+  const addMany = useCallback(async (appIds: number[]) => {
+    if (appIds.length === 0) return;
+    setBusy(true);
+    setBusyAppId(null);
+    setError(null);
+    setNotice(null);
+    let succeeded = 0;
+    const failures: string[] = [];
+    if (!props.bridge.getLaunchOption || !props.bridge.setLaunchOption) {
+      try {
+        const result = await call<InstallWrapData>(props.bridge, "install-wrap", { "app-ids": appIds });
+        const changedIds = new Set(result.changed.map((row) => row.app_id).filter((id) => appIds.includes(id)));
+        props.setAdded((previous) => ({ ...previous, ...Object.fromEntries(Array.from(changedIds, (id) => [id, true])) }));
+        succeeded = changedIds.size;
+        if (succeeded !== appIds.length) {
+          failures.push(...result.skipped
+            .filter((row) => appIds.includes(row.app_id))
+            .map((row) => `${row.name}: ${row.reason}`));
+          if (failures.length === 0) failures.push("Steam did not report a launch option change for every selected game.");
+        }
+      } catch (e) {
+        failures.push(steamRunningMessage(e));
+      }
+    } else {
+      for (const appId of appIds) {
+        setBusyAppId(appId);
+        const name = games?.find((game) => game.app_id === appId)?.name ?? String(appId);
+        try {
+          await change(appId, false);
+          succeeded++;
+        } catch (e) {
+          failures.push(`${name}: ${steamRunningMessage(e)}`);
+          if (e instanceof PanelError && e.code === "steam_running") break;
+        }
+      }
+    }
+    setBusy(false);
+    setBusyAppId(null);
+    if (failures.length) {
+      setError(`${succeeded} of ${appIds.length} added. ${failures.join(" ")}`);
+    } else {
+      setNotice(`Added ${succeeded} game${succeeded === 1 ? "" : "s"} without Steam Cloud.`);
+    }
+  }, [change, games, props.bridge, props.setAdded]);
+
+  return (
+    <AddGamesView
+      games={games}
+      added={props.added}
+      loading={loading}
+      busy={busy}
+      busyAppId={busyAppId}
+      error={error}
+      notice={notice}
+      onRefresh={() => void load(true)}
+      onAdd={(appId) => void act(appId, false)}
+      onRemove={(appId) => void act(appId, true)}
+      onAddMany={(appIds) => void addMany(appIds)}
+      onBack={props.onBack}
+    />
+  );
 }
 
 /**
