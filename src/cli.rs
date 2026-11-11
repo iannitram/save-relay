@@ -2195,6 +2195,12 @@ fn steam_games_data(root: &Path, force: bool, cx: &Context) -> Result<SteamGames
             installed.insert(*app_id, name);
         }
     }
+    if installed.is_empty() {
+        return Ok(SteamGamesData {
+            unknown: 0,
+            games: Vec::new(),
+        });
+    }
     let app_ids: Vec<u32> = installed.keys().copied().collect();
 
     let mut cloud = steam::cloud::Cache::open(&dirs)?;
@@ -2348,6 +2354,14 @@ fn install_wrap(
             message: "no installed game without Steam Cloud and with known saves".into(),
         };
         return Ok(install_wrap_outcome(&data));
+    }
+    // Resolving either bulk selector can contact the network. Steam may have started
+    // while the lookup was running.
+    if !dry_run
+        && (all_known || no_steam_cloud)
+        && steam::launch::steam_running(cx.platform, &cx.vars.home)?
+    {
+        return Err(Error::SteamRunning);
     }
     let binary = std::env::current_exe()?;
     let mut data = steam::launch::install(
