@@ -43,6 +43,8 @@ pub const REFRESH_SECS: u64 = 7 * 24 * 60 * 60;
 const CACHE_FORMAT: u32 = 1;
 /// The data as downloaded.
 const DATA_FILE: &str = "manifest.yaml";
+/// Maximum downloaded ludusavi manifest body; entries are external, community-maintained data.
+pub const MAX_MANIFEST_BYTES: usize = 64 * 1024 * 1024;
 /// The index (`SteamIndex`).
 const INDEX_FILE: &str = "steam-index.json";
 /// The ETag and check time of the copy (`Meta`); written last, so it never claims a copy that
@@ -166,6 +168,8 @@ pub struct Facts {
     pub platform: Platform,
     pub vars: PathVars,
     pub app_id: u32,
+    /// The Steam installation root, which may differ from this game's library.
+    pub steam_root: PathBuf,
     /// The Steam library that holds the app (`<root>`).
     pub library: PathBuf,
     /// `<library>/steamapps/common/<installdir>` (`<base>`), when known.
@@ -308,6 +312,14 @@ pub fn translate(
     }
     let tried = folders.keys().cloned().collect::<Vec<_>>().join(", ");
     folders.retain(|folder, _| exists(Path::new(folder)));
+    if let Some(folder) = folders
+        .keys()
+        .find(|folder| unsafe_save_folder(folder, facts))
+    {
+        return Err(Error::SaveLocationUnclear(format!(
+            "{name} resolves to an overly broad saves folder {folder:?}"
+        )));
+    }
     if folders.len() != 1 {
         let reason = if folders.is_empty() {
             format!("no existing save folder for {name}; folders tried: {tried}")
@@ -346,6 +358,72 @@ pub fn translate(
         saves_dir: PathBuf::from(&folder),
         manifest,
     })
+}
+
+/// Refuse folders that could expose a whole filesystem, user profile, platform directory, or
+/// game install. A candidate that is an ancestor of one of these roots is unsafe too (for
+/// example, `C:/Users` when the home folder is `C:/Users/player`).
+fn unsafe_save_folder(folder: &str, facts: &Facts) -> bool {
+    let path = Path::new(folder);
+    let components = path.components().collect::<Vec<_>>();
+    if (path.has_root()
+        || components
+            .iter()
+            .any(|component| matches!(component, std::path::Component::Prefix(_))))
+        && !path
+            .components()
+            .any(|component| matches!(component, std::path::Component::Normal(_)))
+    {
+        return true;
+    }
+
+    let proton_home = facts.proton.then(|| {
+        crate::steam::proton_prefix(&facts.library, facts.app_id).join("drive_c/users/steamuser")
+    });
+    let protected = [
+        Some(&facts.vars.home),
+        Some(&facts.vars.data),
+        Some(&facts.vars.config),
+        facts.vars.documents.as_ref(),
+        Some(&facts.steam_root),
+        Some(&facts.library),
+        facts.install_dir.as_ref(),
+        proton_home.as_ref(),
+    ];
+    for root in protected.into_iter().flatten() {
+        if same_or_parent_folder(folder, root, facts.platform == Platform::Windows) {
+            return true;
+        }
+    }
+    false
+}
+
+fn same_or_parent_folder(folder: &str, protected: &Path, windows: bool) -> bool {
+    let normalize = |path: &str| {
+        let mut normalized = PathBuf::new();
+        for component in Path::new(path).components() {
+            match component {
+                std::path::Component::CurDir => {}
+                std::path::Component::ParentDir => {
+                    normalized.pop();
+                }
+                other => normalized.push(other.as_os_str()),
+            }
+        }
+        let path = normalized.to_string_lossy().replace('\\', "/");
+        let path = path.trim_end_matches('/');
+        if windows {
+            path.to_lowercase()
+        } else {
+            path.to_owned()
+        }
+    };
+    let folder = normalize(folder);
+    let protected = normalize(&protected.to_string_lossy());
+    folder == protected
+        || protected
+            .strip_prefix(&folder)
+            .is_some_and(|remaining| remaining.starts_with('/'))
 }
 
 /// A file or folder name Windows cannot create, with or without an extension (`con`, `nul`,
@@ -414,7 +492,7 @@ impl Cache {
             .as_ref()
             .filter(|_| copy)
             .and_then(|meta| meta.etag.clone());
-        let mut request = Request::new("GET", MANIFEST_URL);
+        let mut request = Request::new("GET", MANIFEST_URL).max_response_bytes(MAX_MANIFEST_BYTES);
         if let Some(etag) = &etag {
             request = request.header("If-None-Match", etag);
         }
@@ -426,6 +504,12 @@ impl Cache {
         };
         match response.status {
             200 => {
+                if response.body.len() > MAX_MANIFEST_BYTES {
+                    return Err(Error::Server(format!(
+                        "the ludusavi data exceeds the {}-byte size limit",
+                        MAX_MANIFEST_BYTES
+                    )));
+                }
                 let text = std::str::from_utf8(&response.body)
                     .map_err(|_| Error::Server("the ludusavi data is not UTF-8".into()))?;
                 // Checked before anything is replaced: a bad download never becomes the copy.

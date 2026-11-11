@@ -2491,6 +2491,7 @@ fn steam_facts(app_id: u32, cx: &Context) -> Result<Facts> {
         platform: cx.platform,
         vars: cx.vars.clone(),
         app_id,
+        steam_root: root.clone(),
         library,
         install_dir,
         user_id,
