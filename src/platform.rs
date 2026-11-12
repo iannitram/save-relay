@@ -64,7 +64,8 @@ impl PathVars {
     /// - Mac: home `$HOME`; data and config `<home>/Library/Application Support`;
     ///   documents `<home>/Documents`.
     /// - Windows: home `%USERPROFILE%`; data `%LOCALAPPDATA%`; config `%APPDATA%`;
-    ///   documents `<home>\Documents`.
+    ///   documents `%OneDrive%\Documents` (or `%OneDriveConsumer%`) when that folder exists,
+    ///   else `<home>\Documents`.
     /// - Android, iOS: `Error::Usage` (the host app supplies its folders there).
     ///
     /// A required variable that is unset is `Error::Io("<NAME> is not set")`.
@@ -106,8 +107,14 @@ impl PathVars {
                 let home = required("USERPROFILE")?;
                 let data = required("LOCALAPPDATA")?;
                 let config = required("APPDATA")?;
+                // OneDrive can redirect Documents into its folder (`%OneDrive%\Documents`).
+                let redirected = ["OneDrive", "OneDriveConsumer"]
+                    .iter()
+                    .filter_map(|name| set(name))
+                    .map(|folder| PathBuf::from(folder).join("Documents"))
+                    .find(|folder| folder.is_dir());
                 Ok(PathVars {
-                    documents: Some(home.join("Documents")),
+                    documents: Some(redirected.unwrap_or_else(|| home.join("Documents"))),
                     home,
                     data,
                     config,
