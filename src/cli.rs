@@ -386,6 +386,9 @@ pub fn parse(args: &[String]) -> Result<Args> {
         "history" => {
             let flags = split(&args[1..], &["--slot"], &[])?;
             require(&flags.positionals, 1, &["<game>"])?;
+            if !is_game_id(flags.positionals[0]) {
+                return Err(Error::Usage("invalid <game> id".into()));
+            }
             Command::History {
                 game: selected_game(flags.positionals[0], &flags)?,
             }
@@ -633,6 +636,9 @@ pub fn parse(args: &[String]) -> Result<Args> {
         "picture" => {
             let flags = split(&args[1..], &["--out", "--slot"], &[])?;
             require(&flags.positionals, 2, &["<game>", "<entry>"])?;
+            if !is_game_id(flags.positionals[0]) {
+                return Err(Error::Usage("invalid <game> id".into()));
+            }
             let out = match flags.flag("--out") {
                 Some(value) => PathBuf::from(value),
                 None => return missing("--out"),

@@ -54,14 +54,14 @@ fn checked(path: &str) -> Result<()> {
 }
 
 /// `value` as compact JSON safe for an HTTP header (`Dropbox-API-Arg`): every character
-/// above U+007F written as `\uXXXX` (lowercase hex; two escapes, a UTF-16 pair, above U+FFFF),
+/// from U+007F up written as `\uXXXX` (lowercase hex; two escapes, a UTF-16 pair, above U+FFFF),
 /// so the header is ASCII and parses back to the same value.
 pub fn header_json(value: &serde_json::Value) -> String {
     let text = value.to_string();
     let mut out = String::with_capacity(text.len());
     let mut units = [0u16; 2];
     for ch in text.chars() {
-        if ch.is_ascii() {
+        if ch.is_ascii() && ch != '\u{7f}' {
             out.push(ch);
         } else {
             for unit in ch.encode_utf16(&mut units) {
