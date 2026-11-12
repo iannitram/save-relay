@@ -163,7 +163,7 @@ Every Must has an issue: M1 (F07, F11, F19, F20, F23, F43), M2 (F02, F03, F20, F
 | rclone/rclone (again) | MIT | **Learn** its Drive and Dropbox backends: Drive's repeated names and folder resolution, Dropbox's `Dropbox-API-Arg` escaping and rate-limit retries. Not used as a program (ADR 0002, ruled out). |
 | open-source-cooperative/keyring-rs | MIT / Apache-2.0 | The credential store behind `keyring`. |
 | RustCrypto `sha2`, `serde`, `serde_json` | MIT / Apache-2.0 | Already in the skeleton. `quick-xml` (MIT) for F16. |
-| libretro/RetroArch | GPL-3.0 | **Ideas only** (license): its WebDAV cloud sync on PC, Android and iOS is the precedent for the 2.0 mobile builds. |
+| libretro/RetroArch | GPL-3.0 | **Ideas only** (license): its WebDAV cloud sync on PC, Android and iOS is the precedent for the Android and iOS bindings. |
 | zdyloves/game-save-sync-webdav, sparksquidremain/game-save-cloud-sync | MIT | **Learn**: the simple version of the same job; checked weekly in the peer review. |
 
 ## Development stages
@@ -196,4 +196,4 @@ Stages 1-7 are done (2026-11-06); the "free now" and "after" notes below are the
 
 #49 (F70: Android and iOS library builds with a C interface, for game ports that embed save-relay; TotK) is after-1.0.
 
-the panel's views following the Android and iOS sign-in through the platform's browser session (the bindings themselves are in 1.0, #254; my ruling of 2026-11-12: "Bindings into 1.0 too"); signed macOS release; moving saves from one service to another (a Won't for 1.0: switching starts fresh); more services (OneDrive, S3) behind the same `Remote`; upload only changed files (server-side COPY of unchanged ones from the previous entry); Nextcloud chunked upload for large save sets; a `save-relay forget <game>`; pruning old conflict backups separately from pushes; saves kept in the Windows registry for wrapped games (ludusavi's registry entries); wrapping games from launchers other than Steam.
+The panel's views on Android and iOS, after the bindings' sign-in through the platform's browser session (the bindings themselves are a Should for 1.0, #254; my ruling of 2026-11-12: "Bindings into 1.0 too"); signed macOS release; moving saves from one service to another (a Won't for 1.0: switching starts fresh); more services (OneDrive, S3) behind the same `Remote`; upload only changed files (server-side COPY of unchanged ones from the previous entry); Nextcloud chunked upload for large save sets; a `save-relay forget <game>`; pruning old conflict backups separately from pushes; saves kept in the Windows registry for wrapped games (ludusavi's registry entries); wrapping games from launchers other than Steam.
