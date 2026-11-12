@@ -1,7 +1,7 @@
 // The panel: loads data over the Bridge and routes between the views (views.tsx). The Decky
 // plugin renders this same component inside Game Mode.
 
-import { useCallback, useEffect, useState, type Dispatch, type SetStateAction } from "react";
+import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import type {
   Answer,
   HistoryData,
@@ -52,15 +52,23 @@ export function App({ bridge, pictureUrl, token }: AppProps) {
   const [notice, setNotice] = useState<string | null>(null);
   const [addedOverrides, setAddedOverrides] = useState<Record<number, boolean>>({});
 
+  // The last rows shown: a `status` that fails keeps that game's pending choice from them.
+  const shown = useRef<GameRow[]>([]);
+
   const load = useCallback(async () => {
     try {
       const { games } = await call<WhereData>(bridge, "where", {});
       const loaded = await Promise.all(
         games.map(async (g): Promise<GameRow> => {
-          const status = await call<StatusData>(bridge, "status", { game: g.game }).catch(() => null);
-          return { ...g, pending: status?.pending ?? null };
+          const status = await call<StatusData>(bridge, "status", { game: g.game }).catch(() => undefined);
+          if (!status) {
+            const before = shown.current.find((row) => row.game === g.game);
+            return { ...g, pending: before?.pending ?? null };
+          }
+          return { ...g, pending: status.pending ?? null };
         }),
       );
+      shown.current = loaded;
       setRows(loaded);
       setError(null);
     } catch (e) {

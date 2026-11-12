@@ -30,3 +30,21 @@ describe("httpBridge", () => {
     expect(envelope).toEqual({ ok: true, command: "status", data: { game: "celeste" } });
   });
 });
+
+describe("httpBridge with a reply that is not JSON", () => {
+  it("returns an error envelope that names the status, not 'Unexpected token'", async () => {
+    const bridge = httpBridge("http://127.0.0.1:4000", "t", async () => ({
+      status: 403,
+      json: async () => {
+        throw new SyntaxError("Unexpected token 'f', \"forbidden\" is not valid JSON");
+      },
+      text: async () => "forbidden",
+    }));
+    const envelope = await bridge.call("status", { game: "g" });
+    expect(envelope.ok).toBe(false);
+    if (envelope.ok) return;
+    expect(envelope.command).toBe("status");
+    expect(envelope.error.message).toContain("403");
+    expect(envelope.error.message).not.toContain("Unexpected token");
+  });
+});

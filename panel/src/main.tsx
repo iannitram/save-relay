@@ -1,6 +1,7 @@
 // The desktop entry: `save-relay panel` opens `/?token=...`; the token comes with every call.
 // With no token (`pnpm --dir panel dev`) or `?fixtures`, the views run on the fixtures.
 
+/// <reference types="vite/client" />
 import "./tokens.css";
 import "./app.css";
 import { createRoot } from "react-dom/client";
@@ -23,10 +24,12 @@ if (typeof colorScheme?.addEventListener === "function") {
 
 const params = new URLSearchParams(window.location.search);
 const token = params.get("token");
-const fixtures = !token || params.has("fixtures");
+// The fixtures are for `pnpm dev` only: `import.meta.env.DEV` is false in the release build, so
+// the bundler leaves the fixture bridge out and a token-less page just fails its calls.
+const fixtures = import.meta.env.DEV && (!token || params.has("fixtures"));
 const bridge = fixtures
   ? fixtureBridge()
-  : httpBridge(window.location.origin, token, (url, init) => fetch(url, init));
+  : httpBridge(window.location.origin, token ?? "", (url, init) => fetch(url, init));
 const root = document.getElementById("root");
 if (root) {
   createRoot(root).render(
