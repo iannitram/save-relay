@@ -108,7 +108,7 @@ fn sync(
     let id = &game.manifest.id;
     // Only a launch reads the mark: a push decides without it.
     let hold = match intent {
-        Intent::Launch => presence::check(read_mark(s, id)?.as_ref(), &s.device),
+        Intent::Launch => launch_hold(s, id)?,
         Intent::Exit => Hold::Free,
     };
     let (state, pre, reachable) = read_server(s, id)?;
@@ -486,14 +486,22 @@ fn synced(action: Action) -> bool {
     )
 }
 
-/// This game's mark (M11). No file, a file that is not a valid `Mark` (a broken mark is no mark)
-/// and an unreachable server are all `None`.
+/// This game's mark (M11). No file, and a file that is not a valid `Mark` (a broken mark is no
+/// mark), are `None`. An unreachable server is an error: it is not "no mark".
 fn read_mark(s: &Session, game: &str) -> Result<Option<Mark>> {
-    match s.remote.get(&s.layout.playing_path(game)) {
-        Ok((bytes, _)) => Ok(std::str::from_utf8(&bytes)
-            .ok()
-            .and_then(|text| Mark::from_json(text).ok())),
-        Err(Error::NotFound(_) | Error::Unreachable(_)) => Ok(None),
+    fetch_mark(s, game)
+}
+
+/// The hold a launch (or `status`) sees. An unreachable mark read is "no mark" only when the
+/// server is unreachable as a whole (the launch then goes offline); if `state.json` answers, a
+/// failed mark read was a blip and the other machine's mark may be there, so it is an error.
+fn launch_hold(s: &Session, game: &str) -> Result<Hold> {
+    match read_mark(s, game) {
+        Ok(mark) => Ok(presence::check(mark.as_ref(), &s.device)),
+        Err(error @ Error::Unreachable(_)) => match read_server(s, game)? {
+            (_, _, false) => Ok(Hold::Free),
+            _ => Err(error),
+        },
         Err(error) => Err(error),
     }
 }
@@ -520,7 +528,10 @@ fn write_mark(s: &Session, game: &str, revision_read: Option<u64>) -> Result<()>
 /// Removes `playing.json` only when it names this device (M11): read, `presence::check` is `Mine`,
 /// then delete. Another machine's mark, and a broken one, stay. A file already gone is fine.
 fn clear_mark(s: &Session, game: &str) -> Result<()> {
-    let mark = read_mark(s, game)?;
+    let mark = match read_mark(s, game) {
+        Err(Error::Unreachable(_)) => return Ok(()),
+        other => other?,
+    };
     if presence::check(mark.as_ref(), &s.device) != Hold::Mine {
         return Ok(());
     }
@@ -856,7 +867,7 @@ fn canonical_saves_folder(folder: &Path) -> String {
 /// `held` is another machine's mark; `pending` is this machine's pending choice, if any.
 pub fn status(s: &Session, game: &Game, store: &LocalStore) -> Result<StatusData> {
     let id = &game.manifest.id;
-    let hold = presence::check(read_mark(s, id)?.as_ref(), &s.device);
+    let hold = launch_hold(s, id)?;
     let (state, _, reachable) = read_server(s, id)?;
     let local = scan(
         &game.saves_dir,
@@ -1304,7 +1315,7 @@ pub fn where_open(s: &Session, games: &[String]) -> Result<WhereData> {
 }
 
 /// This game's mark for `where`: no file, or one that is not a valid `Mark`, is `None`. Unlike
-/// `read_mark`, an unreachable server is an error, not "no mark".
+/// `read_mark`, it does not turn an unreachable mark read into "no mark" for an offline launch.
 fn fetch_mark(s: &Session, game: &str) -> Result<Option<Mark>> {
     match s.remote.get(&s.layout.playing_path(game)) {
         Ok((bytes, _)) => Ok(std::str::from_utf8(&bytes)
