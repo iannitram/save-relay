@@ -207,10 +207,78 @@ fn two_existing_folders_are_unclear_and_both_named() {
 
 #[test]
 fn no_existing_folder_is_unclear_and_names_attempts() {
-    let message = unclear(locate(&hades(), &facts(Platform::Windows), &[], &[]));
+    let entry = entry(json!({
+        "<home>/first/*.sav": {"tags": ["save"]},
+        "<home>/second/*.sav": {"tags": ["save"]}
+    }));
+    let message = unclear(locate(&entry, &facts(Platform::Mac), &[], &[]));
     assert!(message.contains("no existing"));
-    assert!(message.contains("fixture/documents/Saved Games"));
+    assert!(message.contains("fixture/home/first"));
+    assert!(message.contains("fixture/home/second"));
     unclear(locate(&Entry::default(), &facts(Platform::Linux), &[], &[]));
+}
+
+#[test]
+fn one_named_folder_need_not_exist_yet() {
+    let folder = "fixture/documents/Saved Games/Hades";
+    let located = locate(&hades(), &facts(Platform::Windows), &[], &[folder]).unwrap();
+    assert_eq!(located.saves_dir, Path::new(folder));
+}
+
+// A candidate that cannot be resolved here counts toward "exactly one", so the folder that does
+// resolve is not the clear answer.
+fn lone_folder_beside_unresolved(files: Value, facts: &Facts) -> String {
+    let mut files = files;
+    files["<home>/saves"] = json!({"tags": ["save"]});
+    unclear(locate(&entry(files), facts, &["fixture/home/saves"], &[]))
+}
+
+#[test]
+fn unknown_placeholder_candidate_counts_toward_exactly_one() {
+    let message = lone_folder_beside_unresolved(
+        json!({"<home>/<unknown>/saves": {"tags": ["save"]}}),
+        &facts(Platform::Mac),
+    );
+    assert!(message.contains("could not be resolved"), "{message}");
+}
+
+#[test]
+fn two_steam_users_candidate_counts_toward_exactly_one() {
+    let mut facts = facts(Platform::Mac);
+    facts.user_id = None;
+    let message = lone_folder_beside_unresolved(
+        json!({"<root>/userdata/<storeUserId>/saves": {"tags": ["save"]}}),
+        &facts,
+    );
+    assert!(message.contains("could not be resolved"), "{message}");
+}
+
+#[test]
+fn missing_appmanifest_candidate_counts_toward_exactly_one() {
+    let mut facts = facts(Platform::Mac);
+    facts.install_dir = None;
+    let message =
+        lone_folder_beside_unresolved(json!({"<base>/saves": {"tags": ["save"]}}), &facts);
+    assert!(message.contains("could not be resolved"), "{message}");
+}
+
+#[test]
+fn a_native_folder_beats_a_leftover_proton_prefix() {
+    let entry = entry(json!({
+        "<winDocuments>/Saved Games/Hades/*.sav": {"tags": ["save"], "when": [{"os": "windows"}]},
+        "<xdgData>/Hades/*.sav": {"tags": ["save"], "when": [{"os": "linux", "store": "steam"}]}
+    }));
+    let mut proton = facts(Platform::Linux);
+    proton.proton = true;
+    let prefix = "fixture/library/steamapps/compatdata/1145360/pfx/drive_c/users/steamuser/Documents/Saved Games/Hades";
+    let native = "fixture/data/Hades";
+    // The prefix outlived a move to a native build: the folder the game now uses wins.
+    let located = locate(&entry, &proton, &[prefix, native], &[]).unwrap();
+    assert_eq!(located.saves_dir, Path::new(native));
+    assert_eq!(located.manifest.saves[&Platform::Linux], native);
+    // With no native folder yet, the prefix is still the place.
+    let located = locate(&entry, &proton, &[prefix], &[]).unwrap();
+    assert_eq!(located.saves_dir, Path::new(prefix));
 }
 
 #[test]
@@ -380,7 +448,8 @@ fn parent_segments_and_windows_reserved_names_never_reach_the_manifest() {
         &["fixture/escape"],
         &[],
     ));
-    assert!(message.contains("no existing save folder"));
+    // The `..` candidate counts toward "exactly one" like any unresolvable one.
+    assert!(message.contains("could not be resolved"), "{message}");
     let reserved = entry(json!({
         "<home>/saves/CON.sav": {"tags": ["save"]}
     }));

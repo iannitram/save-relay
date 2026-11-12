@@ -70,4 +70,10 @@ save-relay answer steam-1234560 play-anyway
 
 ## When the saves folder is unclear
 
-`which <appid>` exits 2 with `save_location_unclear` when there is no single existing folder. `wrap` in that case prints the error and starts the game without sync (the game still starts; nothing is pushed). To fix it, write your own manifest for the game (see manifest.md) and pass it once: `wrap --manifest <file> -- %command%`. save-relay remembers it for that game.
+`which <appid>` exits 2 with `save_location_unclear` when there is no single folder to use. `wrap` in that case prints the error and starts the game without sync (the game still starts; nothing is pushed). To fix it, write your own manifest for the game (see manifest.md) and pass it once: `wrap --manifest <file> -- %command%`. save-relay remembers it for that game.
+
+A save path that cannot be resolved on this machine counts toward "exactly one" too: an unknown placeholder, a `<storeUserId>` with more than one Steam user, or a `<base>` with no appmanifest. With one resolvable folder and such a path beside it, the location is unclear, not that folder.
+
+## A machine that has never run the game
+
+The ludusavi data names the game's saves folder even where the game has never run. When that is the only folder named, save-relay uses it without requiring it to exist. The first `wrap` (or `pull`) on that machine downloads the server's saves into the folder, creating it, and that first launch is not a conflict. When the Proton prefix for a Windows game is still on disk but the game now runs natively and its native saves folder exists, the native folder is used, not the prefix's.
