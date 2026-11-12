@@ -50,6 +50,35 @@ fn pull_and_push_with_every_flag_in_any_order() {
 }
 
 #[test]
+fn slot_ids_are_independent_and_default_id_is_unchanged() {
+    assert_eq!(
+        p("pull uncharted-2 --slot 3 --saves-dir slot3"),
+        ok(
+            pull(game("uncharted-2-slot-3", None, Some("slot3")), None),
+            false
+        )
+    );
+    assert_eq!(
+        p("pull uncharted-2 --saves-dir saves"),
+        ok(pull(game("uncharted-2", None, Some("saves")), None), false)
+    );
+    usage_err("pull uncharted-2 --slot 11", "1-10");
+    assert_eq!(
+        p("wrap --game uncharted-2 --slot 2 -- /bin/true"),
+        ok(
+            Command::Wrap {
+                game: Some("uncharted-2-slot-2".into()),
+                manifest: None,
+                saves_dir: None,
+                command: vec!["/bin/true".into()],
+            },
+            false,
+        )
+    );
+    usage_err("wrap --slot 2 -- /bin/true", "requires --game");
+}
+
+#[test]
 fn launch_option_accepts_numeric_ids_and_preserves_empty_or_dash_prefixed_current() {
     let parse_args = |items: &[&str]| {
         let owned = items

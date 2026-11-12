@@ -57,6 +57,14 @@ A launcher that lets the player move the saves folder passes `--saves-dir <folde
 It wins over the template.
 A `saves_from` game requires it.
 
+### Ports with save slots
+
+Pass the selected slot's folder as `--saves-dir <slot-folder>` and pass `--slot <n>` (1 through 10)
+on every save-relay command for that game. Each slot then has an independent server id such as
+`<game>-slot-3`, with its own current save and history. The slot folder is also recorded with the
+local last-sync state; if the launcher changes folders under one id, save-relay treats the old
+record as absent and uses the first-sync rules rather than comparing saves across folders.
+
 ## Sidecar
 
 The sidecar file is `.save-relay-meta.json`, in the saves folder. It is read at the start of each sync. If it is missing, nothing happens.

@@ -31,6 +31,7 @@ fn last(revision: u64, hash: char) -> Option<LastSynced> {
         game,
         revision,
         time,
+        saves_folder: None,
         files,
     })
 }

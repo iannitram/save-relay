@@ -112,6 +112,24 @@ pub fn decide(
     }
 }
 
+/// Decide with the local folder identity. A record from a different known folder is treated as
+/// absent, so its file list can never make this folder look like a local-only change.
+pub fn decide_for_folder(
+    intent: Intent,
+    local: &SaveSet,
+    last: Option<&LastSynced>,
+    folder: &str,
+    server: &ServerView,
+) -> Decision {
+    let matching = last.filter(|record| {
+        record
+            .saves_folder
+            .as_deref()
+            .is_none_or(|saved| saved == folder)
+    });
+    decide(intent, local, matching, server)
+}
+
 /// `decide` with the open-elsewhere mark (M11), one row added after `Unreachable`:
 ///
 /// | server | hold | anyway | Launch | Exit |
@@ -136,5 +154,24 @@ pub fn decide_with_mark(
         Decision::Held
     } else {
         decide(intent, local, last, server)
+    }
+}
+
+/// `decide_with_mark` with folder-aware last-sync matching.
+pub fn decide_with_mark_for_folder(
+    intent: Intent,
+    hold: &Hold,
+    anyway: bool,
+    local: &SaveSet,
+    last: Option<&LastSynced>,
+    folder: &str,
+    server: &ServerView,
+) -> Decision {
+    if *server == ServerView::Unreachable {
+        Decision::Offline
+    } else if intent == Intent::Launch && !anyway && matches!(hold, Hold::Elsewhere { .. }) {
+        Decision::Held
+    } else {
+        decide_for_folder(intent, local, last, folder, server)
     }
 }
