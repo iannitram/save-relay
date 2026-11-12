@@ -10,7 +10,6 @@ export const API_COMMANDS = [
   "history",
   "restore",
   "pull",
-  "push",
   "answer",
   "where",
   "which",

@@ -271,8 +271,40 @@ fn api_posts_run_the_known_commands_with_the_token() {
             "{command}"
         );
     }
+}
+
+#[test]
+fn a_post_with_the_token_only_in_the_query_is_forbidden() {
     let by_query = parsed("POST", &format!("/api/status?token={TOKEN}"), &[], "{}");
-    assert_eq!(route(&by_query, TOKEN), Route::Api("status".to_string()));
+    assert_eq!(route(&by_query, TOKEN), Route::Forbidden);
+}
+
+#[test]
+fn the_browser_is_opened_with_a_one_use_code_and_never_the_token() {
+    let url = panel::browser_url(4321, "CODE");
+    assert_eq!(url, "http://127.0.0.1:4321/?open=CODE");
+    assert!(!url.contains("token"));
+    let open = parsed("GET", "/?open=CODE", &[], "");
+    assert!(panel::is_open_request(&open, "CODE"));
+    assert!(!panel::is_open_request(&open, "OTHER"));
+    let post = parsed("POST", "/?open=CODE", &[], "");
+    assert!(!panel::is_open_request(&post, "CODE"));
+}
+
+#[test]
+fn the_served_page_names_the_token_for_the_script() {
+    let html = b"<html><head><title>x</title></head><body></body></html>";
+    let served = String::from_utf8(panel::served_page(TOKEN, html)).expect("text");
+    assert!(served.contains(&format!(
+        r#"<meta name="save-relay-token" content="{TOKEN}"></head>"#
+    )));
+}
+
+#[test]
+fn routes_the_views_never_use_are_not_in_the_api() {
+    assert!(!API_COMMANDS.contains(&"push"));
+    let request = parsed("POST", "/api/push", &[token_line()], "{}");
+    assert_eq!(route(&request, TOKEN), Route::NotFound);
 }
 
 #[test]
@@ -332,21 +364,7 @@ fn refused(command: &str, body: &str) {
 
 #[test]
 fn each_command_becomes_its_command_line_with_json_last() {
-    assert_eq!(
-        args(
-            "status",
-            r#"{"game":"g","manifest":"m.json","saves-dir":"d"}"#
-        ),
-        [
-            "status",
-            "g",
-            "--manifest",
-            "m.json",
-            "--saves-dir",
-            "d",
-            "--json"
-        ]
-    );
+    assert_eq!(args("status", r#"{"game":"g"}"#), ["status", "g", "--json"]);
     assert_eq!(
         args("history", r#"{"game":"g"}"#),
         ["history", "g", "--json"]
@@ -356,19 +374,12 @@ fn each_command_becomes_its_command_line_with_json_last() {
         ["restore", "g", "e", "--json"]
     );
     assert_eq!(
-        args(
-            "pull",
-            r#"{"game":"g","resolve":"keep-local","anyway":true}"#
-        ),
-        ["pull", "g", "--resolve", "keep-local", "--anyway", "--json"]
+        args("pull", r#"{"game":"g","anyway":true}"#),
+        ["pull", "g", "--anyway", "--json"]
     );
     assert_eq!(
         args("pull", r#"{"game":"g","anyway":false}"#),
         ["pull", "g", "--json"]
-    );
-    assert_eq!(
-        args("push", r#"{"game":"g","resolve":"keep-server"}"#),
-        ["push", "g", "--resolve", "keep-server", "--json"]
     );
     assert_eq!(
         args("answer", r#"{"game":"g","answer":"wait"}"#),
@@ -494,7 +505,16 @@ fn values_must_be_strings_that_do_not_look_like_flags() {
     refused("status", r#"{"game":"-json"}"#);
     refused("status", "{\"game\":\"g\\u0000x\"}");
     refused("pull", r#"{"game":"g","anyway":"yes"}"#);
-    refused("pull", r#"{"game":"g","resolve":true}"#);
+    refused("pull", r#"{"game":"g","resolve":"keep-local"}"#);
+    refused("status", r#"{"game":"g","manifest":"m.json"}"#);
+    refused("status", r#"{"game":"g","saves-dir":"d"}"#);
+    refused("restore", r#"{"game":"g","entry":"e","saves-dir":"d"}"#);
+    refused("push", r#"{"game":"g"}"#);
+    refused(
+        "setup",
+        r#"{"service":"gdrive","no-browser":true,"root":"r"}"#,
+    );
+    refused("setup", r#"{"service":"gdrive","finish":true}"#);
     refused("launch-option", r#"{"appid":42,"current":"two\nlines"}"#);
     refused("launch-option", r#"{"appid":42,"current":"bad\u0000text"}"#);
     refused("install-wrap", r#"{"app-ids":["42"]}"#);

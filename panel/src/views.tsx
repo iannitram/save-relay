@@ -406,6 +406,8 @@ export function TimelineView(props: {
   pictureUrl: (game: string, entry: string, file: string) => string | null;
   /** The entry waiting for its confirm, if any. */
   confirm: string | null;
+  /** A restore is running: the Restore buttons are disabled until it ends. */
+  busy?: boolean;
   error: string | null;
   notice: string | null;
   initial?: string;
@@ -464,6 +466,7 @@ export function TimelineView(props: {
                       data-focus={confirm ? undefined : `restore:${e.entry}`}
                       tabIndex={confirm ? -1 : undefined}
                       className="btn"
+                      disabled={props.busy}
                       onClick={() => props.onAsk(e.entry)}
                     >
                       Restore
@@ -490,7 +493,7 @@ export function TimelineView(props: {
               <button data-focus="cancel" className="btn" onClick={props.onCancel}>
                 Cancel
               </button>
-              <button data-focus="confirm" className="btn btn-primary" onClick={props.onConfirm}>
+              <button data-focus="confirm" className="btn btn-primary" disabled={props.busy} onClick={props.onConfirm}>
                 Restore
               </button>
             </div>

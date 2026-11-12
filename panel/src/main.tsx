@@ -1,4 +1,4 @@
-// The desktop entry: `save-relay panel` opens `/?token=...`; the token comes with every call.
+// The desktop entry: `save-relay panel` opens `/?open=<one-use code>`; the page carries the token in a <meta> tag and sends it with every call.
 // With no token (`pnpm --dir panel dev`) or `?fixtures`, the views run on the fixtures.
 
 import "./tokens.css";
@@ -22,7 +22,16 @@ if (typeof colorScheme?.addEventListener === "function") {
 }
 
 const params = new URLSearchParams(window.location.search);
-const token = params.get("token");
+// The server names the token in a <meta> tag; the browser is opened with a one-use `?open=` code,
+// and the announced URL has `?token=`. Either way the address bar is cleaned (#249 S14).
+const token = document.querySelector<HTMLMetaElement>('meta[name="save-relay-token"]')?.content
+  || params.get("token");
+if ((params.has("token") || params.has("open")) && window.history?.replaceState) {
+  params.delete("token");
+  params.delete("open");
+  const rest = params.toString();
+  window.history.replaceState(null, "", window.location.pathname + (rest ? `?${rest}` : "") + window.location.hash);
+}
 const fixtures = !token || params.has("fixtures");
 const bridge = fixtures
   ? fixtureBridge()

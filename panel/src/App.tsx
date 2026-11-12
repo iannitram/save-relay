@@ -312,6 +312,7 @@ function Timeline(props: {
   const [opener, setOpener] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [restoring, setRestoring] = useState(false);
   const { bridge, game } = props;
 
   const load = useCallback(
@@ -331,10 +332,12 @@ function Timeline(props: {
       history={history}
       pictureUrl={props.pictureUrl}
       confirm={confirm}
+      busy={restoring}
       error={error}
       notice={notice}
       initial={opener ? `restore:${opener}` : undefined}
       onAsk={(entry) => {
+        if (restoring) return;
         setError(null);
         setConfirm(entry);
         setOpener(entry);
@@ -343,15 +346,21 @@ function Timeline(props: {
       onConfirm={() => {
         const entry = confirm;
         setConfirm(null);
-        if (entry)
-          restore(bridge, game, entry).then(
-            (r) => {
-              setError(null);
-              setNotice(r.message);
-              return load();
-            },
-            (e) => setError(message(e)),
-          );
+        if (entry && !restoring) {
+          // One restore at a time; the result of this one replaces the banner of the last.
+          setRestoring(true);
+          setError(null);
+          setNotice(null);
+          restore(bridge, game, entry)
+            .then(
+              (r) => {
+                setNotice(r.message);
+                return load();
+              },
+              (e) => setError(message(e)),
+            )
+            .finally(() => setRestoring(false));
+        }
       }}
       onBack={props.onBack}
     />

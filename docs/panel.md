@@ -4,7 +4,7 @@ See your games, their save history and any pending choices, in a browser or in G
 
 ## Open the panel in a browser
 
-`save-relay panel` starts a local server on 127.0.0.1 only (no other computer can reach it) and opens the page in the default browser. `--port` picks the port (1 to 65535; without it any free port is used). `--no-open` prints the address and does not open a browser. The address has a token in it (`?token=`) that changes every run; every request needs it. Close the window or press Ctrl+C to stop.
+`save-relay panel` starts a local server on 127.0.0.1 only (no other computer can reach it) and opens the page in the default browser. `--port` picks the port (1 to 65535; without it any free port is used). `--no-open` prints the address and does not open a browser. The address has a token in it (`?token=`) that changes every run; every request needs it. The browser itself is opened with a one-use code instead, and the page removes the token from the address bar. Close the window or press Ctrl+C to stop.
 
 ```text
 save-relay panel
