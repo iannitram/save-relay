@@ -2,7 +2,7 @@
 import { callable, definePlugin } from "@decky/api";
 import { Focusable, GamepadButton, PanelSection, staticClasses } from "@decky/ui";
 import type { GamepadEvent } from "@decky/ui";
-import { useMemo, useRef } from "react";
+import { useMemo, useRef, useState } from "react";
 import { App } from "panel/App";
 import type { Envelope, HistoryData } from "panel/api";
 import type { ApiArgs, ApiCommand, Bridge } from "panel/bridge";
@@ -67,6 +67,8 @@ function DeckyPanel({ run, picture }: {
   picture: (game: string, entry: string) => Promise<string | null>;
 }) {
   const root = useRef<HTMLDivElement>(null);
+  // Bumped when a picture arrives, so the timeline draws it then (it does not wait for them).
+  const [, setArrived] = useState(0);
   const { bridge, pictures } = useMemo(() => {
     const cli = deckyBridge(run);
     const pictures = new Map<string, string>();
@@ -75,12 +77,14 @@ function DeckyPanel({ run, picture }: {
         const envelope = await cli.call<T>(command, args);
         if (command === "history" && envelope.ok) {
           const history = envelope.data as HistoryData;
-          await Promise.all(history.entries.filter((e) => e.card?.picture).map(async (e) => {
+          for (const e of history.entries.filter((e) => e.card?.picture)) {
             const key = JSON.stringify([history.game, e.entry]);
-            const url = await picture(history.game, e.entry).catch(() => null);
-            if (url) pictures.set(key, url);
-            else pictures.delete(key);
-          }));
+            void picture(history.game, e.entry).catch(() => null).then((url) => {
+              if (url) pictures.set(key, url);
+              else pictures.delete(key);
+              setArrived((n) => n + 1);
+            });
+          }
         }
         return envelope;
       },
