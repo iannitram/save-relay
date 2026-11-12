@@ -29,9 +29,12 @@ Each Must is something a person can do and see. Each one gets its own issue, and
 | M15 | IN STEAM'S GAME MODE, A SAVE RELAY PANEL in the quick access menu SHALL show each game's cards as a timeline, restore one with one press, show the conflict and open-elsewhere choices, and show a QR code for the Google Drive and Dropbox sign-in. On the desktop, `save-relay panel` SHALL open the same views in the browser. The look follows the design system all my apps share. | On a handheld in Game Mode I restore yesterday's save without a keyboard. | front end tests; on a handheld; the design pass |
 | M16 | SAVE-RELAY SHALL list the Steam games installed on this machine and say for each whether it has Steam Cloud, asking Steam's public store once per game (only the app id is sent) and keeping the answer a week. I SHALL be able to add the wrap to the games without Steam Cloud, one by one or all at once, from the command line and from the panel. A game whose answer is unknown SHALL be shown as unknown and never added in bulk. | `save-relay steam-games` shows a game without Steam Cloud as "no"; the panel's Add games view adds it with one press, and its saves reach my other PC. | integration test with a fixture Steam folder and a fake store; on a handheld in Game Mode (`needs-owner-device`) |
 
+## Shoulds
+
+- Android and iOS bindings in 1.0: the full bindings for the game ports' apps, on this same core (the C-interface library builds of #49 and the bindings on top of them, #254), with sign-in through the platform's browser session. Moved here from the Won'ts by my ruling of 2026-11-12: "Bindings into 1.0 too".
+
 ## Won'ts
 
-- Android and iOS bindings: they come with the game ports' 2.0 (Android, iOS with controller support, Mac), on this same core.
 - macOS builds in 1.0 (the code stays portable; Mac comes with 2.0).
 - Syncing while the game runs; only pull at launch and push at exit (the open-elsewhere mark of M11 is written at launch and cleared at exit, nothing in between).
 - Capturing the screen myself: a card's picture comes from the port or from Steam's own screenshots, or there is none.
