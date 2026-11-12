@@ -24,9 +24,9 @@ use crate::plan::{self, Decision, Intent, ServerView};
 use crate::platform::{PathVars, Platform};
 use crate::presence::{self, Hold, Mark};
 use crate::remote::{ensure_dir, Precondition, Remote, RemoteEntry};
-use crate::scan::{scan, SaveSet};
+use crate::scan::{hash_bytes, scan, SaveSet};
 use crate::state::{LastSynced, ServerState, FORMAT};
-use crate::{retention, stamp, transfer};
+use crate::{glob, retention, stamp, transfer};
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -121,6 +121,11 @@ fn sync(
     let view = server_view(state.as_ref(), reachable);
     // The sidecar's place and picture for the cards, and a note for each part left out.
     let mut found = found_in(&game.saves_dir);
+    // S12: what the current revision holds that this manifest leaves out is kept, not dropped.
+    let (local, left_out) = match state.as_ref() {
+        Some(state) => carry_left_out(local, &transfer::without_reserved(&state.save_set()), game),
+        None => (local, Vec::new()),
+    };
     let has_local = !local.is_empty();
     let mut data = SyncData {
         game: id.clone(),
@@ -170,6 +175,12 @@ fn sync(
             }
             None => {}
         }
+    }
+    if decision == Decision::Push && !left_out.is_empty() {
+        return Err(Error::Io(format!(
+            "not pushed: this machine's manifest leaves out {} and it is not on this machine; pull it, or make the manifests agree (docs/manifest.md)",
+            left_out.join(", ")
+        )));
     }
     match decision {
         Decision::Noop => {}
@@ -558,6 +569,34 @@ fn read_server(s: &Session, id: &str) -> Result<(Option<ServerState>, Preconditi
     }
 }
 
+/// S12: the files the current revision holds that this machine's manifest leaves out, because
+/// another machine's include and exclude patterns are wider. A file still on disk with the
+/// revision's hash is carried into the local set, so a push keeps it and a launch does not read
+/// it as a change. The others come back by path (`left_out`): a push refuses to go ahead
+/// without them.
+fn carry_left_out(mut local: SaveSet, server: &SaveSet, game: &Game) -> (SaveSet, Vec<String>) {
+    let mut left_out = Vec::new();
+    for file in &server.files {
+        let manifest = &game.manifest;
+        if local.files.iter().any(|l| l.path == file.path)
+            || glob::selected(&manifest.include, &manifest.exclude, &file.path)
+        {
+            continue;
+        }
+        let on_disk = fs::read(transfer::local_path(&game.saves_dir, &file.path))
+            .is_ok_and(|bytes| hash_bytes(&bytes) == file.sha256);
+        if on_disk {
+            local.files.push(file.clone());
+        } else {
+            left_out.push(file.path.clone());
+        }
+    }
+    local
+        .files
+        .sort_by(|a, b| a.path.as_bytes().cmp(b.path.as_bytes()));
+    (local, left_out)
+}
+
 /// What `plan::decide_with_mark` gets as the server's side (reserved names left out).
 fn server_view(state: Option<&ServerState>, reachable: bool) -> ServerView {
     match state {
@@ -821,6 +860,10 @@ pub fn status(s: &Session, game: &Game, store: &LocalStore) -> Result<StatusData
         &game.manifest.include,
         &game.manifest.exclude,
     )?;
+    let (local, _) = match state.as_ref() {
+        Some(state) => carry_left_out(local, &transfer::without_reserved(&state.save_set()), game),
+        None => (local, Vec::new()),
+    };
     let last = store.load_last(id)?;
     let view = server_view(state.as_ref(), reachable);
     let folder = canonical_saves_folder(&game.saves_dir);
