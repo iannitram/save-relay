@@ -237,9 +237,5 @@ fn is_valid_date(year: u32, month: u32, day: u32) -> bool {
         _ => return false,
     };
 
-    if day < 1 || day > max_day {
-        return false;
-    }
-
-    true
+    (1..=max_day).contains(&day)
 }

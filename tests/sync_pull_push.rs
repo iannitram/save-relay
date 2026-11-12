@@ -103,6 +103,7 @@ impl Fixture {
                 game: GAME.into(),
                 revision,
                 time: stamp::rfc3339(NOW - 200),
+                saves_folder: None,
                 files,
             })
             .unwrap();

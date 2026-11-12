@@ -2,6 +2,7 @@
 
 Newest first. One line per change of stage, release or decision that the next session needs.
 
+- 2026-11-12 #240 (owner decision: options 1 + 3): `--slot 1..10` scopes each selected save slot to its own `<game>-slot-<n>` server id; last-sync state records the canonical saves folder and folder changes use first-sync decisions, preventing automatic cross-slot pushes and pulls. Port guidance is in `docs/manifest.md`.
 - 2026-11-12 Roadmap brought in line with `main` at `79ff440` (after #236, rc.1 packaging): the M16 integration (F72-F78, #207-#213) and the six audit blockers B1-B6 (#223-#228, commits `ccc4613`, `f523bf7`, `fe8500a`, `29cf845`, `729e43d`, `58c6bbb` and `daec880`) are merged and closed; the audit's should-fix items S1-S17 and Minor list filed as F79-F87 (#242-#250, new milestone `1.0`); #238 is F88. Rulings of 2026-11-12 since: #49 is in 1.0, the Android and iOS bindings (#254) and macOS (#238) are Shoulds for 1.0. Open for me: the #240 option.
 - 2026-11-12 macOS release binary: CI signs and notarizes it when the Apple secrets are set (#239, `97db787`). macOS is a Should for 1.0 by my ruling of 2026-11-12, and `SPEC.md` and the README now say so.
 - 2026-11-11 Prepared v1.0.0-rc.1 packaging: the binary and Decky/panel packages share the RC version, and tag releases from hyphenated refs are marked pre-release. This is preparation only; no tag or release was created. Still gated on app registrations (#36), SteamOS handheld acceptance (#212), and the Game Mode follow-up (#73).

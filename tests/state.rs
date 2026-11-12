@@ -141,6 +141,14 @@ fn last_synced_parses_with_any_revision_and_round_trips() {
 }
 
 #[test]
+fn old_last_synced_without_folder_still_loads() {
+    let mut value = last();
+    value.as_object_mut().unwrap().remove("saves_folder");
+    let parsed = LastSynced::from_json(&value.to_string()).unwrap();
+    assert_eq!(parsed.saves_folder, None);
+}
+
+#[test]
 fn last_synced_has_the_same_checks() {
     let bad = [
         with(last(), "format", json!(2)),

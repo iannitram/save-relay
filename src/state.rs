@@ -76,6 +76,9 @@ pub struct LastSynced {
     pub revision: u64,
     /// When, `stamp::rfc3339` form.
     pub time: String,
+    /// Canonical local saves folder this record describes. Missing in older records.
+    #[serde(default)]
+    pub saves_folder: Option<String>,
     /// The local files as of that sync.
     pub files: Vec<FileEntry>,
 }

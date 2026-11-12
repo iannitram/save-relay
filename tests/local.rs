@@ -39,6 +39,7 @@ fn last() -> LastSynced {
         game: "uncharted-1".into(),
         revision: 7,
         time: "2026-10-31T19:51:00Z".into(),
+        saves_folder: None,
         files,
     }
 }

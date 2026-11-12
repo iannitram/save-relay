@@ -2,20 +2,20 @@
 //! one envelope line (`api`) for launchers.
 //!
 //! ```text
-//! save-relay pull    <game> [--manifest <file>] [--saves-dir <dir>] [--resolve keep-server|keep-local] [--json]
-//! save-relay push    <game> [--manifest <file>] [--saves-dir <dir>] [--resolve keep-server|keep-local] [--json]
-//! save-relay status  <game> [--manifest <file>] [--saves-dir <dir>] [--json]
-//! save-relay history <game> [--json]
-//! save-relay restore <game> <entry> [--manifest <file>] [--saves-dir <dir>] [--json]
+//! save-relay pull    <game> [--manifest <file>] [--saves-dir <dir>] [--slot <n>] [--resolve keep-server|keep-local] [--json]
+//! save-relay push    <game> [--manifest <file>] [--saves-dir <dir>] [--slot <n>] [--resolve keep-server|keep-local] [--json]
+//! save-relay status  <game> [--manifest <file>] [--saves-dir <dir>] [--slot <n>] [--slot <n>] [--json]
+//! save-relay history <game> [--slot <n>] [--json]
+//! save-relay restore <game> <entry> [--manifest <file>] [--saves-dir <dir>] [--slot <n>] [--slot <n>] [--json]
 //! save-relay pull    <game> --anyway [...]       (play past another machine's open-elsewhere mark)
-//! save-relay wrap    [--game <id>] [--manifest <file>] [--saves-dir <dir>] -- <command>...
+//! save-relay wrap    [--game <id>] [--manifest <file>] [--saves-dir <dir>] [--slot <n>] -- <command>...
 //!                    (Steam launch option `save-relay wrap -- %command%`: pull, run, push)
 //! save-relay which   <appid> [--json]
 //! save-relay install-wrap (<appid>... | --all-known) [--remove] [--dry-run] [--json]
 //! save-relay install-wrap --no-steam-cloud [--dry-run] [--json]
-//! save-relay answer  <game> keep-server|keep-local|play-anyway|wait [--json]
+//! save-relay answer  <game> keep-server|keep-local|play-anyway|wait [--slot <n>] [--json]
 //! save-relay where   [--json]
-//! save-relay picture <game> <entry> --out <file> [--json]
+//! save-relay picture <game> <entry> --out <file> [--slot <n>] [--slot <n>] [--json]
 //! save-relay panel   [--port <n>] [--no-open] [--json]
 //! save-relay setup   [--service nextcloud] --server <url> --user <name> [--device <name>] [--root <folder>] [--json]
 //!                    (reads the app password from the first line of standard input)
@@ -85,14 +85,20 @@ impl GameArg {
                 self.id
             )));
         }
+        let base_id = self
+            .id
+            .rsplit_once("-slot-")
+            .filter(|(_, slot)| (1..=10).any(|n| *slot == n.to_string()))
+            .map(|(base, _)| base)
+            .unwrap_or(&self.id);
         let record = store.load_game(&self.id)?;
-        let manifest = match &self.manifest {
+        let mut manifest = match &self.manifest {
             Some(path) => {
                 let text = std::fs::read_to_string(path).map_err(|error| {
                     Error::Io(format!("cannot read manifest {}: {error}", path.display()))
                 })?;
                 let manifest = Manifest::from_json(&text)?;
-                if manifest.id != self.id {
+                if manifest.id != base_id {
                     return Err(Error::Usage(format!(
                         "--manifest is for '{}', not '{}'",
                         manifest.id, self.id
@@ -105,6 +111,7 @@ impl GameArg {
                 None => return Err(Error::GameUnknown(self.id.clone())),
             },
         };
+        manifest.id = self.id.clone();
         let saves_dir = match &self.saves_dir {
             Some(folder) => folder.clone(),
             None if manifest.saves_from.is_some() => {
@@ -177,7 +184,7 @@ pub enum Command {
         root: String,
         step: SignInStep,
     },
-    /// M12: `wrap [--game <id>] [--manifest <file>] [--saves-dir <dir>] -- <command>...`.
+    /// M12: `wrap [--game <id>] [--manifest <file>] [--saves-dir <dir>] [--slot <n>] -- <command>...`.
     /// No `--game` is `steam-<appid>` from the environment (`wrap::game_id`); `command` is
     /// everything after `--` and may not be empty.
     Wrap {
@@ -217,7 +224,7 @@ pub enum Command {
     },
     /// M11: `where`.
     Where,
-    /// M14: `picture <game> <entry> --out <file>`.
+    /// M14: `picture <game> <entry> --out <file> [--slot <n>]`.
     Picture {
         game: String,
         entry: String,
@@ -296,9 +303,19 @@ pub fn parse(args: &[String]) -> Result<Args> {
             .filter(|arg| arg.as_str() != "--json")
             .map(String::as_str)
             .collect();
-        let flags = split(&before[1..], &["--game", "--manifest", "--saves-dir"], &[])?;
+        let flags = split(
+            &before[1..],
+            &["--game", "--manifest", "--saves-dir", "--slot"],
+            &[],
+        )?;
         require(&flags.positionals, 0, &[])?;
-        let game = flags.flag("--game").map(String::from);
+        if flags.flag("--slot").is_some() && flags.flag("--game").is_none() {
+            return Err(Error::Usage("wrap --slot requires --game".into()));
+        }
+        let game = flags
+            .flag("--game")
+            .map(|id| selected_game(id, &flags))
+            .transpose()?;
         let manifest = flags.flag("--manifest").map(PathBuf::from);
         let saves_dir = flags.flag("--saves-dir").map(PathBuf::from);
         return Ok(Args {
@@ -335,11 +352,11 @@ pub fn parse(args: &[String]) -> Result<Args> {
         "pull" => {
             let flags = split(
                 &args[1..],
-                &["--manifest", "--saves-dir", "--resolve"],
+                &["--manifest", "--saves-dir", "--resolve", "--slot"],
                 &["--anyway"],
             )?;
             require(&flags.positionals, 1, &["<game>"])?;
-            let game = game_arg(flags.positionals[0], &flags);
+            let game = game_arg(flags.positionals[0], &flags)?;
             let resolve = resolve(&flags)?;
             if flags.has("--anyway") {
                 Command::PullAnyway { game, resolve }
@@ -348,43 +365,47 @@ pub fn parse(args: &[String]) -> Result<Args> {
             }
         }
         "push" => {
-            let flags = split(&args[1..], &["--manifest", "--saves-dir", "--resolve"], &[])?;
+            let flags = split(
+                &args[1..],
+                &["--manifest", "--saves-dir", "--resolve", "--slot"],
+                &[],
+            )?;
             require(&flags.positionals, 1, &["<game>"])?;
             Command::Push {
-                game: game_arg(flags.positionals[0], &flags),
+                game: game_arg(flags.positionals[0], &flags)?,
                 resolve: resolve(&flags)?,
             }
         }
         "status" => {
-            let flags = split(&args[1..], &["--manifest", "--saves-dir"], &[])?;
+            let flags = split(&args[1..], &["--manifest", "--saves-dir", "--slot"], &[])?;
             require(&flags.positionals, 1, &["<game>"])?;
             Command::Status {
-                game: game_arg(flags.positionals[0], &flags),
+                game: game_arg(flags.positionals[0], &flags)?,
             }
         }
         "history" => {
-            let flags = split(&args[1..], &[], &[])?;
+            let flags = split(&args[1..], &["--slot"], &[])?;
             require(&flags.positionals, 1, &["<game>"])?;
             Command::History {
-                game: flags.positionals[0].to_string(),
+                game: selected_game(flags.positionals[0], &flags)?,
             }
         }
         "repair" => {
-            let flags = split(&args[1..], &[], &["--yes"])?;
+            let flags = split(&args[1..], &["--slot"], &["--yes"])?;
             require(&flags.positionals, 1, &["<game>"])?;
             if !is_game_id(flags.positionals[0]) {
                 return Err(Error::Usage("invalid <game> id".into()));
             }
             Command::Repair {
-                game: flags.positionals[0].to_string(),
+                game: selected_game(flags.positionals[0], &flags)?,
                 yes: flags.has("--yes"),
             }
         }
         "restore" => {
-            let flags = split(&args[1..], &["--manifest", "--saves-dir"], &[])?;
+            let flags = split(&args[1..], &["--manifest", "--saves-dir", "--slot"], &[])?;
             require(&flags.positionals, 2, &["<game>", "<entry>"])?;
             Command::Restore {
-                game: game_arg(flags.positionals[0], &flags),
+                game: game_arg(flags.positionals[0], &flags)?,
                 entry: flags.positionals[1].to_string(),
             }
         }
@@ -581,7 +602,7 @@ pub fn parse(args: &[String]) -> Result<Args> {
             }
         }
         "answer" => {
-            let flags = split(&args[1..], &[], &[])?;
+            let flags = split(&args[1..], &["--slot"], &[])?;
             require(&flags.positionals, 2, &["<game>", "<answer>"])?;
             // Checked before any path is built from `<game>` (pending/<game>.json).
             if !is_game_id(flags.positionals[0]) {
@@ -600,7 +621,7 @@ pub fn parse(args: &[String]) -> Result<Args> {
                 }
             };
             Command::Answer {
-                game: flags.positionals[0].to_string(),
+                game: selected_game(flags.positionals[0], &flags)?,
                 answer,
             }
         }
@@ -610,14 +631,14 @@ pub fn parse(args: &[String]) -> Result<Args> {
             Command::Where
         }
         "picture" => {
-            let flags = split(&args[1..], &["--out"], &[])?;
+            let flags = split(&args[1..], &["--out", "--slot"], &[])?;
             require(&flags.positionals, 2, &["<game>", "<entry>"])?;
             let out = match flags.flag("--out") {
                 Some(value) => PathBuf::from(value),
                 None => return missing("--out"),
             };
             Command::Picture {
-                game: flags.positionals[0].to_string(),
+                game: selected_game(flags.positionals[0], &flags)?,
                 entry: flags.positionals[1].to_string(),
                 out,
             }
@@ -784,12 +805,27 @@ fn missing_value<T>(what: &str) -> Result<T> {
     Err(Error::Usage(format!("missing {what}")))
 }
 
-fn game_arg(id: &str, flags: &Flags<'_>) -> GameArg {
-    GameArg {
-        id: id.to_string(),
+fn selected_game(id: &str, flags: &Flags<'_>) -> Result<String> {
+    match flags.flag("--slot") {
+        None => Ok(id.to_string()),
+        Some(value) => {
+            let slot: u8 = value
+                .parse()
+                .map_err(|_| Error::Usage("--slot must be 1-10".into()))?;
+            if !(1..=10).contains(&slot) {
+                return Err(Error::Usage("--slot must be 1-10".into()));
+            }
+            Ok(format!("{id}-slot-{slot}"))
+        }
+    }
+}
+
+fn game_arg(id: &str, flags: &Flags<'_>) -> Result<GameArg> {
+    Ok(GameArg {
+        id: selected_game(id, flags)?,
         manifest: flags.flag("--manifest").map(PathBuf::from),
         saves_dir: flags.flag("--saves-dir").map(PathBuf::from),
-    }
+    })
 }
 
 fn resolve(flags: &Flags<'_>) -> Result<Option<Resolve>> {
@@ -880,22 +916,22 @@ pub fn usage() -> &'static str {
     "save-relay <command> [--json]
 
 Commands:
-  pull    <game> [--manifest <file>] [--saves-dir <dir>] [--resolve keep-server|keep-local]
-  push    <game> [--manifest <file>] [--saves-dir <dir>] [--resolve keep-server|keep-local]
-  status  <game> [--manifest <file>] [--saves-dir <dir>]
-  history <game>
-  repair  <game> [--yes]
-  restore <game> <entry> [--manifest <file>] [--saves-dir <dir>]
+  pull    <game> [--manifest <file>] [--saves-dir <dir>] [--slot <n>] [--resolve keep-server|keep-local]
+  push    <game> [--manifest <file>] [--saves-dir <dir>] [--slot <n>] [--resolve keep-server|keep-local]
+  status  <game> [--manifest <file>] [--saves-dir <dir>] [--slot <n>]
+  history <game> [--slot <n>]
+  repair  <game> [--slot <n>] [--yes]
+  restore <game> <entry> [--manifest <file>] [--saves-dir <dir>] [--slot <n>]
   pull    <game> --anyway [...]
-  wrap    [--game <id>] [--manifest <file>] [--saves-dir <dir>] -- <command>...
+  wrap    [--game <id>] [--manifest <file>] [--saves-dir <dir>] [--slot <n>] -- <command>...
   which   <appid>
   steam-games [--no-steam-cloud] [--refresh]
   install-wrap (<appid>... | --all-known) [--remove] [--dry-run]
   install-wrap --no-steam-cloud [--dry-run]
   launch-option <appid> [--remove] [--current=<text>]
-  answer  <game> keep-server|keep-local|play-anyway|wait
+  answer  <game> keep-server|keep-local|play-anyway|wait [--slot <n>]
   where
-  picture <game> <entry> --out <file>
+  picture <game> <entry> --out <file> [--slot <n>]
   panel   [--port <n>] [--no-open]
   setup   --server <url> --user <name> [--device <name>] [--root <folder>]
           (reads the app password from the first line of standard input)

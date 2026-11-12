@@ -34,6 +34,7 @@ fn last(revision: u64, files: SaveSet) -> LastSynced {
         game: "g".into(),
         revision,
         time: "2026-10-31T19:51:00Z".into(),
+        saves_folder: None,
         files: files.files,
     }
 }
@@ -100,6 +101,34 @@ fn never_synced_with_no_local_saves_is_pull() {
 #[test]
 fn never_synced_with_different_saves_is_conflict() {
     assert_eq!(both(&v2(), None, &at(5, v1())), (Conflict, Conflict));
+}
+
+#[test]
+fn changed_saves_folder_uses_first_sync_decisions() {
+    let mut previous = last(5, v1());
+    previous.saves_folder = Some("/slot-a".into());
+    let server = at(5, v1());
+    // Empty newly selected slot pulls its matching server state, never the other folder's baseline.
+    assert_eq!(
+        save_relay::plan::decide_for_folder(
+            Launch,
+            &SaveSet::default(),
+            Some(&previous),
+            "/slot-b",
+            &server
+        ),
+        Pull
+    );
+    // A different populated slot conflicts instead of being uploaded over this id.
+    assert_eq!(
+        save_relay::plan::decide_for_folder(Exit, &v2(), Some(&previous), "/slot-b", &server),
+        Conflict
+    );
+    // An unchanged folder keeps the ordinary no-op result.
+    assert_eq!(
+        save_relay::plan::decide_for_folder(Launch, &v1(), Some(&previous), "/slot-a", &server),
+        Noop
+    );
 }
 
 #[test]

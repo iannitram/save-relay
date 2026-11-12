@@ -135,7 +135,16 @@ fn sync(
     let mut held = None;
     // The entry `state.json` names once this command is done; `None` without a server state.
     let mut server_entry = state.as_ref().map(|state| state.entry.clone());
-    let mut decision = plan::decide_with_mark(intent, &hold, anyway, &local, last.as_ref(), &view);
+    let folder = canonical_saves_folder(&game.saves_dir);
+    let mut decision = plan::decide_with_mark_for_folder(
+        intent,
+        &hold,
+        anyway,
+        &local,
+        last.as_ref(),
+        &folder,
+        &view,
+    );
     if decision == Decision::Conflict {
         match resolve {
             Some(Resolve::KeepServer) => {
@@ -187,7 +196,7 @@ fn sync(
                 data.action = Action::Adopted;
                 local
             };
-            record_sync(s, store, id, state.revision, &files)?;
+            record_sync(s, store, id, state.revision, &files, &game.saves_dir)?;
             data.revision = Some(state.revision);
             let verb = if decision == Decision::Pull {
                 "Pulled"
@@ -239,7 +248,7 @@ fn sync(
                 return Err(error);
             }
             server_entry = Some(entry.clone());
-            record_sync(s, store, id, revision, &local)?;
+            record_sync(s, store, id, revision, &local, &game.saves_dir)?;
             prune_after_publish(s, id, data.backup.as_deref(), &entry, revision);
             data.action = Action::Pushed;
             data.revision = Some(revision);
@@ -748,14 +757,57 @@ fn record_sync(
     game: &str,
     revision: u64,
     files: &SaveSet,
+    saves_dir: &Path,
 ) -> Result<()> {
     store.save_last(&LastSynced {
         format: FORMAT,
         game: game.into(),
         revision,
         time: stamp::rfc3339(s.now),
+        saves_folder: Some(canonical_saves_folder(saves_dir)),
         files: files.files.clone(),
     })
+}
+
+/// Stable folder identity for a last-sync record, including when the folder is not mounted yet.
+fn canonical_saves_folder(folder: &Path) -> String {
+    if let Ok(path) = fs::canonicalize(folder) {
+        return path.to_string_lossy().into_owned();
+    }
+    let absolute = if folder.is_absolute() {
+        folder.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(folder)
+    };
+    let mut normalized = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    let mut ancestor = normalized.as_path();
+    let mut missing = Vec::new();
+    while !ancestor.exists() {
+        let Some(name) = ancestor.file_name() else {
+            break;
+        };
+        missing.push(name.to_os_string());
+        let Some(parent) = ancestor.parent() else {
+            break;
+        };
+        ancestor = parent;
+    }
+    let mut canonical = fs::canonicalize(ancestor).unwrap_or_else(|_| ancestor.to_path_buf());
+    for component in missing.into_iter().rev() {
+        canonical.push(component);
+    }
+    canonical.to_string_lossy().into_owned()
 }
 
 /// What `pull` would do, changing nothing. Unreachable is `reachable: false`, not an error.
@@ -771,7 +823,16 @@ pub fn status(s: &Session, game: &Game, store: &LocalStore) -> Result<StatusData
     )?;
     let last = store.load_last(id)?;
     let view = server_view(state.as_ref(), reachable);
-    let would = plan::decide_with_mark(Intent::Launch, &hold, false, &local, last.as_ref(), &view);
+    let folder = canonical_saves_folder(&game.saves_dir);
+    let would = plan::decide_with_mark_for_folder(
+        Intent::Launch,
+        &hold,
+        false,
+        &local,
+        last.as_ref(),
+        &folder,
+        &view,
+    );
     let held = match hold {
         Hold::Elsewhere { device, since } if would == Decision::Held => {
             Some(Held { device, since })
@@ -1155,7 +1216,7 @@ pub fn restore(s: &Session, game: &Game, store: &LocalStore, entry: &str) -> Res
     )?;
     counts.downloaded = downloaded.downloaded;
     counts.deleted = downloaded.deleted;
-    record_sync(s, store, id, revision, &wanted)?;
+    record_sync(s, store, id, revision, &wanted, &game.saves_dir)?;
     prune_after_publish(s, id, backup.as_deref(), &new_entry, revision);
     let mut message = format!("Restored {entry} as revision {revision}.");
     for note in &notes {

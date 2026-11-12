@@ -120,9 +120,9 @@ In a saves folder, every name starting `.save-relay-` is reserved and never part
 | `src/glob.rs` | present | `matches(pattern, path)` with `*`, `?`, `**`; `selected(include, exclude, path)` | used by `scan` | M7 |
 | `src/scan.rs` | present | `FileEntry` (path, size, mtime, sha256), `SaveSet`, `hash_bytes`, `scan(dir, include, exclude)`; a reserved name (`.save-relay-*`, `card::is_reserved`) is never kept, cards present (M14) | `glob`, `card`; used by `plan`, `transfer`, `sync` | M1, M2, M3, M14 |
 | `src/stamp.rs` | present | UTC text: RFC 3339 (`2026-10-31T19:51:00Z`) and entry stamps (`20261031T195100Z`), both ways | used by `layout`, `state`, `sync` | M2, M4 |
-| `src/state.rs` | present | `ServerState` (`state.json`) and `LastSynced` JSON with checks | `scan`; used by `plan`, `local`, `sync` | M1-M3 |
+| `src/state.rs` | present | `ServerState` (`state.json`) and `LastSynced` JSON with checks; last-sync records optional canonical saves folder for folder-aware planning | `scan`; used by `plan`, `local`, `sync` | M1-M3, #240 |
 | `src/layout.rs` | present | `Layout`: every server path (`playing_path` and the `rev/` claims, `rev_dir` and `rev_path`, too, #149); `entry_name`, `parse_entry_name`, `device_slug` | `stamp`; used by `retention`, `transfer`, `sync` | M2, M4 |
-| `src/plan.rs` | present | **pure** `decide(intent, local, last, server) -> Decision` (the table in the file; an empty local set with non-empty server saves pulls at launch and exit); `decide_with_mark` adds the `Held` row (M11) | `scan`, `state`, `presence`; used by `sync` | M1, M2, M3, M5, M11 |
+| `src/plan.rs` | present | **pure** `decide(intent, local, last, server) -> Decision` and `decide_for_folder`; a known different saves folder treats last as absent. An empty local set with non-empty server saves pulls at launch and exit; `decide_with_mark` adds the `Held` row (M11) | `scan`, `state`, `presence`; used by `sync` | M1, M2, M3, M5, M11, #240 |
 | `src/retention.rs` | present | **pure** `to_drop(entries, keep, current)`, `markers_to_drop(names, keep, current)` (the revision claims, newest by number; current and later claims protected, #149); `KEEP = 10` | `layout`; used by `sync` | M4 |
 | `src/remote.rs` | present | the `Remote` trait (list, get, put with `Precondition`, mkcol, copy, move_to, delete): **the storage interface**; etags are opaque per backend; `needs_rev_marker` (true for WebDAV: the engine claims each revision first, #149), `ensure_dir`, `MemoryRemote` (the test server, with an offline switch) | implemented by `webdav`, `dropbox`, `gdrive`; used by `transfer`, `sync` | M1-M5, M9 |
 | `src/http.rs` | present | `Request` (its `Debug` hides `Authorization`, optional bounded response body), `Response`, the `Transport` trait; `UreqTransport` behind feature `http` (ureq + rustls, timeouts 5 s / 60 s) | used by `webdav`, `dropbox`, `gdrive`, `oauth`; implemented by `fake` | M1-M6, M9 |
@@ -178,12 +178,12 @@ The contract launchers code against (`src/api.rs`). Add fields freely; never ren
 ### Invocation
 
 ```text
-save-relay pull    <game> [--manifest <file>] [--saves-dir <dir>] [--resolve keep-server|keep-local] [--json]
-save-relay push    <game> [--manifest <file>] [--saves-dir <dir>] [--resolve keep-server|keep-local] [--json]
-save-relay status  <game> [--manifest <file>] [--saves-dir <dir>] [--json]
-save-relay history <game> [--json]
-save-relay repair  <game> [--yes] [--json]
-save-relay restore <game> <entry> [--manifest <file>] [--saves-dir <dir>] [--json]
+save-relay pull    <game> [--manifest <file>] [--saves-dir <dir>] [--slot <n>] [--resolve keep-server|keep-local] [--json]
+save-relay push    <game> [--manifest <file>] [--saves-dir <dir>] [--slot <n>] [--resolve keep-server|keep-local] [--json]
+save-relay status  <game> [--manifest <file>] [--saves-dir <dir>] [--slot <n>] [--json]
+save-relay history <game> [--slot <n>] [--json]
+save-relay repair  <game> [--slot <n>] [--yes] [--json]
+save-relay restore <game> <entry> [--manifest <file>] [--saves-dir <dir>] [--slot <n>] [--json]
 save-relay setup   [--service nextcloud] --server <url> --user <name> [--device <name>] [--root <folder>] [--json]   (password: first line of stdin)
 save-relay setup   --service gdrive|dropbox [--no-browser | --finish] [--device <name>] [--root <folder>] [--json]
 save-relay setup   [--device <name>] [--root <folder>]                     (asks which service on stdin; not with --json)
@@ -195,12 +195,12 @@ save-relay install-wrap (<appid>... | --all-known) [--remove] [--dry-run] [--jso
 save-relay steam-games [--no-steam-cloud] [--refresh] [--json]             (installed Steam games and their Steam Cloud state, F74)
 save-relay install-wrap --no-steam-cloud [--dry-run] [--json]              (wrap installed games with cloud=no and known saves; reports skips, M16)
 save-relay launch-option <appid> [--remove] [--current <text>] [--json]    (Game Mode: calculate text from current app details, F76)
-save-relay answer  <game> keep-server|keep-local|play-anyway|wait [--json] (a pending choice, M12)
-save-relay picture <game> <entry> --out <file> [--json]                    (a card's picture, M14)
+save-relay answer  <game> keep-server|keep-local|play-anyway|wait [--slot <n>] [--json] (a pending choice, M12)
+save-relay picture <game> <entry> --out <file> [--slot <n>] [--json]                    (a card's picture, M14)
 save-relay panel   [--port <n>] [--no-open] [--json]                       (the panel in the browser, M15)
 ```
 
-`<game>` is the manifest id. A launcher always passes `--manifest` (the file it ships) and `--saves-dir` (its saves folder setting); the CLI remembers both per game, so a person can later type `save-relay history uncharted-1`. Setup is once per machine, not per game (M6), and every machine uses the one service the owner chose. Nextcloud: the app password is read from standard input so it never appears in a process list, and `--password` is refused. Google Drive and Dropbox: setup opens the system browser and waits for the sign-in (PKCE, loopback redirect on `127.0.0.1`); with `--no-browser` (the default in Steam's Game Mode) it prints a `SignInPrompt` instead and `--finish` completes it (Dropbox: the code it showed, on the first line of stdin; Google: polls until the person typed the code on google.com/device). The refresh token goes to the credential store only.
+`<game>` is the manifest id; `--slot <n>` (1-10) scopes commands to `<game>-slot-<n>`. A port with slots passes the selected slot folder as `--saves-dir` and the selected number as `--slot`. A launcher always passes `--manifest` (the file it ships) and `--saves-dir` (its saves folder setting); the CLI remembers both per game, so a person can later type `save-relay history uncharted-1`. Setup is once per machine, not per game (M6), and every machine uses the one service the owner chose. Nextcloud: the app password is read from standard input so it never appears in a process list, and `--password` is refused. Google Drive and Dropbox: setup opens the system browser and waits for the sign-in (PKCE, loopback redirect on `127.0.0.1`); with `--no-browser` (the default in Steam's Game Mode) it prints a `SignInPrompt` instead and `--finish` completes it (Dropbox: the code it showed, on the first line of stdin; Google: polls until the person typed the code on google.com/device). The refresh token goes to the credential store only.
 
 `wrap` is not called by a launcher but set as a Steam launch option (`install-wrap` writes it). Its game id is `--game`, else `steam-<appid>` from `SteamAppId`, `SteamGameId` or `STEAM_COMPAT_APP_ID`; its saves folder is a manifest of my own when there is one, else the ludusavi data's. It prints nothing of its own on stdout (the game's output passes through) and exits with the game's exit code. `panel` with `--json` prints `PanelData` once it listens, then serves until stopped.
 
