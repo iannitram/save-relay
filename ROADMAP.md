@@ -4,12 +4,12 @@ From `SPEC.md` (re-approved 2026-11-01) to 1.0: Uncharted on the AMD handheld, t
 
 ## Where it stands (2026-11-12)
 
-**Audited checkpoint:** main at `77e6c2c` has Stages 1–7 merged (F01–F25, F27–F45, F48–F66 and F69), the M16 integration (F72–F78: #207–#211 and #213 closed 2026-11-11) and the six audit blockers B1–B6 (#223–#228 closed). **You are here: Dev Loop, release-candidate packaging.** The rc.1 packaging pull request (#236) is open and waits on its checks; #212 (F77) is built and merged, and waits only on the SteamOS handheld check.
+**Audited checkpoint:** main at `79ff440` has Stages 1–7 merged (F01–F25, F27–F45, F48–F66 and F69), the M16 integration (F72–F78: #207–#211 and #213 closed 2026-11-11) and the six audit blockers B1–B6 (#223–#228 closed). **You are here: Dev Loop, release-candidate packaging.** The rc.1 packaging pull request (#236) is merged (2026-11-12); #212 (F77) is built and merged, and waits only on the SteamOS handheld check.
 
-- **Verified on main:** the [check run for `77e6c2c`](https://github.com/iannitram/save-relay/actions/runs/43155552302) passed Rust and WebDAV integration on Linux, Windows and macOS, plus the frontend build and tests. Dropbox and Drive have automated fake-service coverage; live sign-in and round trips remain in #47.
+- **Verified on main:** the [check run for `77e6c2c`](https://github.com/iannitram/save-relay/actions/runs/43155552302) passed Rust and WebDAV integration on Linux, Windows and macOS, plus the frontend build and tests (the run for `79ff440`, which adds #236, had not finished when I wrote this). Dropbox and Drive have automated fake-service coverage; live sign-in and round trips remain in #47.
 - **Stage 8 remains open:** the 20 design findings (#164–#179, #197, #198, #201, #202) are fixed. #73 tracks the controller-only Game Mode re-check after handheld acceptance for #212.
 - **Audit blockers:** B1–B6 are done on main (rows below). The audit's should-fix items S1–S17 and its Minor list are now issues F79–F87 (#242–#250), milestone `1.0`.
-- **Release and acceptance:** Cargo is at `0.0.0` on main and GitHub has no release; #236 sets `1.0.0-rc.1`. The owner can register Google and Dropbox in #36. The release candidate (#205) waits on #36 and the merge of #236.
+- **Release and acceptance:** Cargo, `decky/package.json` and `panel/package.json` are at `1.0.0-rc.1` on main (#236) and GitHub has no release. The owner can register Google and Dropbox in #36. The release candidate (#205) waits on #36 (#236 is merged).
 - **Open questions for me:** which save-slot option for #240; whether #49 (Android and iOS) is inside 1.0; and the macOS wording (CI now signs and notarizes a Mac binary, #239, while SPEC and README still say no Mac in 1.0). No Must or Won't changes until I answer.
 
 ### Run order to 1.0
@@ -33,7 +33,7 @@ Each step is one issue. An automated run takes the **agent** steps whose "Waits 
 | B4 | agent | #225 | Wire the Steam screenshot into a wrapped game's card (`src/steam.rs`, `src/sync.rs`) | nothing | Done (29cf845, #233; #225 closed). the audit's "Expected" for B4 holds, with tests |
 | B5 | agent | #228 | Refuse a ludusavi saves folder that is a root, the home folder or a bare platform folder; cap the download size (`src/ludusavi.rs`, `src/manifest.rs`, `src/http.rs`) | nothing | Done (729e43d, #234; #228 closed). the audit's "Expected" for B5 holds, with tests |
 | B6 | agent | #227 | Google Drive: `clean_claims` never deletes the claim `state.json` names; `repair` recovers a game already stuck (`src/gdrive.rs`) | nothing | Done (58c6bbb and daec880, #237; #227 closed). the audit's "Expected" for B6 holds, with tests |
-| 10 | agent | #205 (F71) | Cut `v1.0.0-rc.1`: version bump, release dry run, tag, checksum check | step 8 (#36) and the merge of #236 (steps 7 and B1-B6 are done) | the GitHub release holds the three binaries, `SHA256SUMS`, the Decky zip and the panel zip |
+| 10 | agent | #205 (F71) | Cut `v1.0.0-rc.1`: version bump, release dry run, tag, checksum check | step 8 (#36) (steps 7 and B1-B6 are done, and #236 is merged) | the GitHub release holds the three binaries, `SHA256SUMS`, the Decky zip and the panel zip |
 | 11 | owner, an agent may drive with the owner signing in | #47 (F46) | Real round trips on Dropbox and Google Drive; Game Mode sign-in | step 10 | `cargo test --test live_services -- --ignored` passes on Windows and a handheld; written up on #47 |
 | 12 | owner | #72 (F67) | Device checks: suspend hand-off, wrap and install-wrap, the panel in Game Mode, adding a game without Steam Cloud | steps 9, 10 | written up on #72 |
 | 13 | agent | Uncharted-Universal #163 | The launcher calls the released binary around Play. Its own note (2026-11-06) holds it until the integration contract is ready: the `--json` API shape in `docs/code-map.md` at the `rc.1` tag is that contract | step 10 | merged there, bundling a save-relay release |
