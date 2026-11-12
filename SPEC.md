@@ -2,7 +2,7 @@
 
 **1.0 means:** I finish a chapter of Uncharted on my AMD handheld, then start Uncharted on my Strix Halo tablet or my RTX 3090 Ti desktop, and the game loads that save, with no file copying by hand. The saves travel through the service I picked at setup: my Nextcloud, Google Drive or Dropbox. If I suspend the handheld mid-chapter instead of quitting, the desktop tells me the game is still open there before I play. Any other Steam game with a known save folder does the same with one launch option, and in Game Mode the Save Relay panel shows each game's saves as cards (picture, playtime, where I was) that I can restore with one press.
 
-**Approved by me:** 2026-11-10, in a session's question tool: "List + add, CLI and panel (Recommended)", "Show as unknown, not auto-added (Recommended)", "In 1.0 (Recommended)", "Steam store, cached (Recommended)" (M16 added: Steam games without Steam Cloud). Before that: 2026-11-01, in the Project Manager session's question tool: "Approve (Recommended)". Changed 2026-11-01 (question tool: "2: The Baton (Recommended)", "1: Any game via wrap", "3: Save cards + Decky UI"; "All three in 1.0 (Recommended)"): 1.0 sentence rewritten, M11-M15 added, Won'ts edited. Previous approval: 2026-10-31, re-approved in the Project Manager session's question tool: "Approve (Recommended)" (choice of save service: M6 rewritten, M9 and M10 added). Rulings behind it, question tool, 2026-10-31: Google Drive and Dropbox "In 1.0"; "One service per person, set at setup (Recommended)"; Drive "App's own folder (Recommended)". First approval 2026-10-31: "Approve (Recommended)", recorded in `CHANGELOG.md`.
+**Approved by me:** 2026-11-10, in a session's question tool: "List + add, CLI and panel (Recommended)", "Show as unknown, not auto-added (Recommended)", "In 1.0 (Recommended)", "Steam store, cached (Recommended)" (M16 added: Steam games without Steam Cloud). Before that: 2026-11-01, in the Project Manager session's question tool: "Approve (Recommended)". Changed 2026-11-01 (question tool: "2: The Baton (Recommended)", "1: Any game via wrap", "3: Save cards + Decky UI"; "All three in 1.0 (Recommended)"): 1.0 sentence rewritten, M11-M15 added, Won'ts edited. Previous approval: 2026-10-31, re-approved in the Project Manager session's question tool: "Approve (Recommended)" (choice of save service: M6 rewritten, M9 and M10 added). Rulings behind it, question tool, 2026-10-31: Google Drive and Dropbox "In 1.0"; "One service per person, set at setup (Recommended)"; Drive "App's own folder (Recommended)". First approval 2026-10-31: "Approve (Recommended)", recorded in `CHANGELOG.md`. Changed 2026-11-12 by my own ruling, in the Project Manager session's question tool: "Make macOS a Should" (macOS builds in 1.0 moved from the Won'ts to a new Shoulds list). I made this change myself, so the approval above stands.
 
 A project is Spec'd only when the line above has a date and a link. Change a Must or a Won't after approval and the approval line goes back to "not yet" until I approve again.
 
@@ -29,10 +29,13 @@ Each Must is something a person can do and see. Each one gets its own issue, and
 | M15 | IN STEAM'S GAME MODE, A SAVE RELAY PANEL in the quick access menu SHALL show each game's cards as a timeline, restore one with one press, show the conflict and open-elsewhere choices, and show a QR code for the Google Drive and Dropbox sign-in. On the desktop, `save-relay panel` SHALL open the same views in the browser. The look follows the design system all my apps share. | On a handheld in Game Mode I restore yesterday's save without a keyboard. | front end tests; on a handheld; the design pass |
 | M16 | SAVE-RELAY SHALL list the Steam games installed on this machine and say for each whether it has Steam Cloud, asking Steam's public store once per game (only the app id is sent) and keeping the answer a week. I SHALL be able to add the wrap to the games without Steam Cloud, one by one or all at once, from the command line and from the panel. A game whose answer is unknown SHALL be shown as unknown and never added in bulk. | `save-relay steam-games` shows a game without Steam Cloud as "no"; the panel's Add games view adds it with one press, and its saves reach my other PC. | integration test with a fixture Steam folder and a fake store; on a handheld in Game Mode (`needs-owner-device`) |
 
+## Shoulds
+
+- macOS builds in 1.0: a supported, signed and notarized Mac build of the CLI and the library, with a real pull and push round trip on a Mac. Moved here from the Won'ts by my ruling of 2026-11-12 (see the approval line above). Tracked in #238.
+- Android and iOS bindings in 1.0: the full bindings for the game ports' apps, on this same core (the C-interface library builds of #49 and the bindings on top of them, #254), with sign-in through the platform's browser session. Moved here from the Won'ts by my ruling of 2026-11-12: "Bindings into 1.0 too".
+
 ## Won'ts
 
-- Android and iOS bindings: they come with the game ports' 2.0 (Android, iOS with controller support, Mac), on this same core.
-- macOS builds in 1.0 (the code stays portable; Mac comes with 2.0).
 - Syncing while the game runs; only pull at launch and push at exit (the open-elsewhere mark of M11 is written at launch and cleared at exit, nothing in between).
 - Capturing the screen myself: a card's picture comes from the port or from Steam's own screenshots, or there is none.
 - A guessed saves folder: a wrapped game with no clear entry is refused (M13).
@@ -58,7 +61,7 @@ My game ports keep saves in a folder on each machine. Moving from the handheld t
 
 ## Solution
 
-One small library and command-line tool that every port's launcher calls: pull before Play, push after the game quits, through my own Nextcloud, with a conflict prompt, history and offline play. A game joins with a manifest. Android and iOS builds embed the same core later.
+One small library and command-line tool that every port's launcher calls: pull before Play, push after the game quits, through my own Nextcloud, with a conflict prompt, history and offline play. A game joins with a manifest. Android and iOS builds embed the same core (a Should for 1.0).
 
 ## User stories
 
@@ -74,7 +77,7 @@ One small library and command-line tool that every port's launcher calls: pull b
 
 - Rulings 2026-10-31 (question tool): Nextcloud over WebDAV with a per-device app password; pull at launch, push at exit; ask and keep both on conflict; shared library + CLI; 1.0 = Uncharted on the three PCs; last 10 versions per game; play local and push later when offline; new public repo; own small Rust core, with Ludusavi as the main peer to learn from.
 - Storage is one interface with three backends: WebDAV (a create-once `rev/<n+1>` claim guards servers whose etag can repeat before push or restore writes state with If-Match; #149; a crash can strand it and `repair` releases it, moving a complete entry it names to `<game>/set-aside/`), Dropbox (uploads tied to the file revision) and Google Drive (a narrow-scope folder; its weaker overwrite check gets a guard so M9 holds). Google Drive and Dropbox sign in with OAuth in the browser (PKCE, loopback redirect); the app registrations on each service are made under my own accounts.
-- Core in Rust: a library crate and a `save-relay` binary. It must build for Linux, Windows and macOS now, and Android and iOS later (no platform-only dependencies in the core).
+- Core in Rust: a library crate and a `save-relay` binary. It must build for Linux, Windows and macOS now, and, as a Should for 1.0, Android and iOS (no platform-only dependencies in the core).
 - Server layout under one Nextcloud folder: per game, the current saves, a small state file (revision, device, time, file list with hashes), and a history folder of dated copies. Each machine records the revision it last synced; a conflict is "server revision changed and local files changed since that revision".
 - Pushes upload to a temporary name and rename, so a broken upload never replaces the current saves.
 - The game manifest is a small data file shipped by each port.

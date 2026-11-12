@@ -10,7 +10,7 @@ From `SPEC.md` (re-approved 2026-11-01) to 1.0: Uncharted on the AMD handheld, t
 - **Stage 8 remains open:** the 20 design findings (#164–#179, #197, #198, #201, #202) are fixed. #73 tracks the controller-only Game Mode re-check after handheld acceptance for #212.
 - **Audit blockers:** B1–B6 are done on main (rows below). The audit's should-fix items S1–S17 and its Minor list are now issues F79–F87 (#242–#250), milestone `1.0`.
 - **Release and acceptance:** Cargo, `decky/package.json` and `panel/package.json` are at `1.0.0-rc.1` on main (#236) and GitHub has no release. The owner can register Google and Dropbox in #36. The release candidate (#205) waits on #36 (#236 is merged).
-- **Open questions for me:** which save-slot option for #240; whether #49 (Android and iOS) is inside 1.0; and the macOS wording (CI now signs and notarizes a Mac binary, #239, while SPEC and README still say no Mac in 1.0). No Must or Won't changes until I answer.
+- **Open question for me:** which save-slot option for #240. Answered 2026-11-12: #49 (Android and iOS) is in 1.0 and the bindings (#254) are a Should; macOS is a Should for 1.0 (a supported, signed Mac build is #238; CI already signs and notarizes one, #239).
 
 ### Run order to 1.0
 
@@ -139,7 +139,7 @@ Every Must has an issue: M1 (F07, F11, F19, F20, F23, F43), M2 (F02, F03, F20, F
 
 ## Mac, PC and Linux (R04)
 
-- **Linux** (SteamOS on the two handhelds) and **Windows** (the desktop) are the 1.0 platforms; **macOS** is a Won't for 1.0, but CI builds and tests it on every push because it is free on a public repo, so the core stays ready for the 2.0 Mac port. All three run the same `cargo fmt`, `clippy` (default and no features), `build` and `test`.
+- **Linux** (SteamOS on the two handhelds) and **Windows** (the desktop) are the 1.0 platforms; **macOS** is a Should for 1.0 (my ruling of 2026-11-12; a supported, signed Mac build is #238), and CI builds and tests it on every push because it is free on a public repo. All three run the same `cargo fmt`, `clippy` (default and no features), `build` and `test`.
 - What differs per OS is kept in three places: `platform` (folders), `creds::KeyringStore` (Secret Service, Credential Manager, Keychain), and the file system edge of `scan` and `transfer` (paths in a save set are always `/`; Windows file names that cannot exist are an `io` error, not a silent skip).
 - **Linux risk:** a launcher started from Steam's Game Mode may find no unlocked Secret Service. F18 finds out on the handhelds first; if the store is missing there, it stops and asks, because a fallback store would change M6. The same store holds the Google Drive and Dropbox refresh tokens, so the answer covers every service.
 - **Game Mode sign-in risk (Linux):** a browser started from a Game Mode launcher may never show on screen, so Drive and Dropbox setup there defaults to the code flows (`--no-browser`, then `--finish`; Google: a short code typed on a phone; Dropbox: a code typed back, or Steam's own browser). Recommended: set up once in Desktop Mode. F42 builds it, F46 checks it on a handheld.
@@ -147,7 +147,7 @@ Every Must has an issue: M1 (F07, F11, F19, F20, F23, F43), M2 (F02, F03, F20, F
 - **The M11-M15 parts:** the mark, the cards and the ludusavi translation are pure and the same on all three. `wrap` is checked on Linux (native games and Proton, Steam native and Flatpak) and Windows; macOS builds and tests it (Steam for Mac's folder is known) but is no 1.0 device check. `install-wrap` is checked on Linux and Windows; the macOS path is handled but untried on a device. The Decky plugin is Linux Game Mode only; `save-relay panel` runs on all three and opens the browser the same way sign-in does.
 - **Proton risk (Linux):** a Windows game's saves live inside its Proton prefix, whose user folder is always `steamuser`; F55 maps there, and F67 checks one Proton game on a handheld. A game that keeps saves in the prefix's registry is not covered (ludusavi's registry entries are not read).
 - **Steam file risk:** `install-wrap` edits `localconfig.vdf`, which Steam rewrites when it runs; so it refuses while Steam runs (`steam_running`) and keeps a dated backup.
-- **Android and iOS** (2.0): no platform-only dependency in the core; the network and the credential store are traits (`http::Transport`, `CredentialStore`) with their real implementations behind the `http` and `keyring` features, and the three backends are plain Rust over `Transport`, so a mobile app links the library and brings its own transport, store and browser session.
+- **Android and iOS** (a Should for 1.0, my ruling of 2026-11-12: "Bindings into 1.0 too"; #49 and #254): no platform-only dependency in the core; the network and the credential store are traits (`http::Transport`, `CredentialStore`) with their real implementations behind the `http` and `keyring` features, and the three backends are plain Rust over `Transport`, so a mobile app links the library and brings its own transport, store and browser session.
 
 ## Open-source pieces
 
@@ -173,7 +173,7 @@ Every Must has an issue: M1 (F07, F11, F19, F20, F23, F43), M2 (F02, F03, F20, F
 | rclone/rclone (again) | MIT | **Learn** its Drive and Dropbox backends: Drive's repeated names and folder resolution, Dropbox's `Dropbox-API-Arg` escaping and rate-limit retries. Not used as a program (ADR 0002, ruled out). |
 | open-source-cooperative/keyring-rs | MIT / Apache-2.0 | The credential store behind `keyring`. |
 | RustCrypto `sha2`, `serde`, `serde_json` | MIT / Apache-2.0 | Already in the skeleton. `quick-xml` (MIT) for F16. |
-| libretro/RetroArch | GPL-3.0 | **Ideas only** (license): its WebDAV cloud sync on PC, Android and iOS is the precedent for the 2.0 mobile builds. |
+| libretro/RetroArch | GPL-3.0 | **Ideas only** (license): its WebDAV cloud sync on PC, Android and iOS is the precedent for the Android and iOS bindings. |
 | zdyloves/game-save-sync-webdav, sparksquidremain/game-save-cloud-sync | MIT | **Learn**: the simple version of the same job; checked weekly in the peer review. |
 
 ## Development stages
@@ -204,10 +204,10 @@ Stages 1-7 are done (2026-11-06); the "free now" and "after" notes below are the
 
 ## After 1.0
 
-#49 (F70: Android and iOS library builds with a C interface, for game ports that embed save-relay; TotK) is after-1.0.
+#49 (F70: Android and iOS library builds with a C interface, for game ports that embed save-relay; TotK) is in 1.0 (my ruling of 2026-11-12: "Before 1.0").
 
-#238 (F88: a supported, signed macOS build of the CLI and the library, for the Mac game ports; platform: macOS) is after-1.0. CI already builds the macOS arm64 binary and signs and notarizes it when the Apple secrets are set (#239, `97db787`); what #238 adds is the supported claim, the README platform table and a real Mac round trip. Whether the Won't "macOS builds in 1.0" in `SPEC.md` still stands is my call and is not changed here.
+#238 (F88: a supported, signed macOS build of the CLI and the library, for the Mac game ports; platform: macOS) is a Should for 1.0 (my ruling of 2026-11-12). CI already builds the macOS arm64 binary and signs and notarizes it when the Apple secrets are set (#239, `97db787`); what #238 adds is the supported claim, the README platform table and a real Mac round trip.
 
 #240 (save slots: a changed saves folder under one game id must not push or pull across slots; M7) gets its row when I pick one of its three options.
 
-Android and iOS bindings (with the game ports' 2.0), with sign-in through the platform's browser session (the panel's views can follow them there); signed macOS release; moving saves from one service to another (a Won't for 1.0: switching starts fresh); more services (OneDrive, S3) behind the same `Remote`; upload only changed files (server-side COPY of unchanged ones from the previous entry); Nextcloud chunked upload for large save sets; a `save-relay forget <game>`; pruning old conflict backups separately from pushes; saves kept in the Windows registry for wrapped games (ludusavi's registry entries); wrapping games from launchers other than Steam.
+The panel's views on Android and iOS, after the bindings' sign-in through the platform's browser session (the bindings themselves are a Should for 1.0, #254; my ruling of 2026-11-12: "Bindings into 1.0 too"); moving saves from one service to another (a Won't for 1.0: switching starts fresh); more services (OneDrive, S3) behind the same `Remote`; upload only changed files (server-side COPY of unchanged ones from the previous entry); Nextcloud chunked upload for large save sets; a `save-relay forget <game>`; pruning old conflict backups separately from pushes; saves kept in the Windows registry for wrapped games (ludusavi's registry entries); wrapping games from launchers other than Steam.

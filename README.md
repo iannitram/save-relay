@@ -8,7 +8,9 @@ For Steam games without Steam Cloud, `save-relay steam-games` shows the store st
 
 ## Install
 
-Download the binary for your system and `SHA256SUMS` from the [releases](https://github.com/iannitram/save-relay/releases) page, and check the file before use. On Linux, run `sha256sum -c --ignore-missing SHA256SUMS` in the folder that holds the download and `SHA256SUMS`. Then run `chmod +x save-relay-<version>-x86_64-unknown-linux-musl` before you run it. On Windows, run `Get-FileHash <file> -Algorithm SHA256` and compare the hash with the matching line in `SHA256SUMS`. The Linux binary is x86_64 and static, so it needs no system libraries; the Windows binary is x86_64. The macOS build is unsigned and not supported for 1.0.
+Download the binary for your system and `SHA256SUMS` from the [releases](https://github.com/iannitram/save-relay/releases) page, and check the file before use. On Linux, run `sha256sum -c --ignore-missing SHA256SUMS` in the folder that holds the download and `SHA256SUMS`. Then run `chmod +x save-relay-<version>-x86_64-unknown-linux-musl` before you run it. On Windows, run `Get-FileHash <file> -Algorithm SHA256` and compare the hash with the matching line in `SHA256SUMS`. The Linux binary is x86_64 and static, so it needs no system libraries; the Windows binary is x86_64. macOS is a Should for 1.0 (my ruling of 2026-11-12): the release workflow builds a Mac binary and signs and notarizes it when the Apple secrets are set, but the Mac build is not yet supported. Progress is in #238.
+
+Android and iOS bindings are a Should for 1.0 (my ruling of 2026-11-12: "Bindings into 1.0 too"): the C-interface library builds are #49 and the bindings on top of them are #254.
 
 ## Start here
 

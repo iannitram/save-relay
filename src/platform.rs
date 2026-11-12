@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// A platform a manifest can name a saves folder for. 1.0 builds Linux and Windows
-/// (macOS is built in CI too); Android and iOS come with the game ports' 2.0.
+/// (macOS is built in CI too); Android and iOS bindings are a Should for 1.0.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Platform {
