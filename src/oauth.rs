@@ -613,6 +613,20 @@ pub fn sign_in_browser_timeout(
             continue;
         }
 
+        // A request that carries no sign-in parameters at all (a port scan, a stray tab) is
+        // answered and ignored: it is not the provider's answer, so it must not end the sign-in.
+        let query = target.split_once('?').map_or("", |(_, query)| query);
+        let has_answer = query.split('&').any(|pair| {
+            let key = pair.split('=').next().unwrap_or("");
+            matches!(key, "code" | "state" | "error")
+        });
+        if !has_answer {
+            let resp = b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            let _ = stream.write_all(resp);
+            let _ = stream.flush();
+            continue;
+        }
+
         // Check the redirect before answering, so the page never claims a sign-in that failed.
         let code = match parse_redirect(target, &state) {
             Ok(code) => code,
