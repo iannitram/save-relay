@@ -2,7 +2,7 @@
 
 **1.0 means:** I finish a chapter of Uncharted on my AMD handheld, then start Uncharted on my Strix Halo tablet or my RTX 3090 Ti desktop, and the game loads that save, with no file copying by hand. The saves travel through the service I picked at setup: my Nextcloud, Google Drive or Dropbox. If I suspend the handheld mid-chapter instead of quitting, the desktop tells me the game is still open there before I play. Any other Steam game with a known save folder does the same with one launch option, and in Game Mode the Save Relay panel shows each game's saves as cards (picture, playtime, where I was) that I can restore with one press.
 
-**Approved by me:** 2026-11-10, in a session's question tool: "List + add, CLI and panel (Recommended)", "Show as unknown, not auto-added (Recommended)", "In 1.0 (Recommended)", "Steam store, cached (Recommended)" (M16 added: Steam games without Steam Cloud). Before that: 2026-11-01, in the Project Manager session's question tool: "Approve (Recommended)". Changed 2026-11-01 (question tool: "2: The Baton (Recommended)", "1: Any game via wrap", "3: Save cards + Decky UI"; "All three in 1.0 (Recommended)"): 1.0 sentence rewritten, M11-M15 added, Won'ts edited. Previous approval: 2026-10-31, re-approved in the Project Manager session's question tool: "Approve (Recommended)" (choice of save service: M6 rewritten, M9 and M10 added). Rulings behind it, question tool, 2026-10-31: Google Drive and Dropbox "In 1.0"; "One service per person, set at setup (Recommended)"; Drive "App's own folder (Recommended)". First approval 2026-10-31: "Approve (Recommended)", recorded in `CHANGELOG.md`.
+**Approved by me:** 2026-11-10, in a session's question tool: "List + add, CLI and panel (Recommended)", "Show as unknown, not auto-added (Recommended)", "In 1.0 (Recommended)", "Steam store, cached (Recommended)" (M16 added: Steam games without Steam Cloud). Before that: 2026-11-01, in the Project Manager session's question tool: "Approve (Recommended)". Changed 2026-11-01 (question tool: "2: The Baton (Recommended)", "1: Any game via wrap", "3: Save cards + Decky UI"; "All three in 1.0 (Recommended)"): 1.0 sentence rewritten, M11-M15 added, Won'ts edited. Previous approval: 2026-10-31, re-approved in the Project Manager session's question tool: "Approve (Recommended)" (choice of save service: M6 rewritten, M9 and M10 added). Rulings behind it, question tool, 2026-10-31: Google Drive and Dropbox "In 1.0"; "One service per person, set at setup (Recommended)"; Drive "App's own folder (Recommended)". First approval 2026-10-31: "Approve (Recommended)", recorded in `CHANGELOG.md`. Changed 2026-11-12 by my own ruling, in the Project Manager session's question tool: "Make macOS a Should" (macOS builds in 1.0 moved from the Won'ts to a new Shoulds list). I made this change myself, so the approval above stands.
 
 A project is Spec'd only when the line above has a date and a link. Change a Must or a Won't after approval and the approval line goes back to "not yet" until I approve again.
 
@@ -31,11 +31,11 @@ Each Must is something a person can do and see. Each one gets its own issue, and
 
 ## Shoulds
 
+- macOS builds in 1.0: a supported, signed and notarized Mac build of the CLI and the library, with a real pull and push round trip on a Mac. Moved here from the Won'ts by my ruling of 2026-11-12 (see the approval line above). Tracked in #238.
 - Android and iOS bindings in 1.0: the full bindings for the game ports' apps, on this same core (the C-interface library builds of #49 and the bindings on top of them, #254), with sign-in through the platform's browser session. Moved here from the Won'ts by my ruling of 2026-11-12: "Bindings into 1.0 too".
 
 ## Won'ts
 
-- macOS builds in 1.0 (the code stays portable; Mac comes with 2.0).
 - Syncing while the game runs; only pull at launch and push at exit (the open-elsewhere mark of M11 is written at launch and cleared at exit, nothing in between).
 - Capturing the screen myself: a card's picture comes from the port or from Steam's own screenshots, or there is none.
 - A guessed saves folder: a wrapped game with no clear entry is refused (M13).
