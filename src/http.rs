@@ -137,9 +137,19 @@ pub trait Transport {
     fn send(&self, request: &Request) -> Result<Response>;
 }
 
-/// The real transport: ureq with rustls (pure Rust TLS), connect timeout 5 s and whole request
-/// 60 s, so a launcher with no network falls back to offline quickly (M5). No retries here:
-/// each backend decides what to retry. Added by its issue (docs/code-map.md).
+/// The most request body bytes a transport sends. A body is held in memory whole, so this is
+/// the bound on that memory: a larger one is refused before any connection is made.
+pub const MAX_REQUEST_BODY: usize = 256 * 1024 * 1024;
+
+/// The default idle timeout: each read or write step may wait this long.
+#[cfg(feature = "http")]
+const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// The real transport: ureq with rustls (pure Rust TLS). The connect timeout is 5 s; reads and
+/// writes each time out after 60 s of no progress, so a slow upload of a large save finishes
+/// while a stalled connection still ends (M5) as `Unreachable`. There is no total deadline for
+/// a whole request. No retries here: each backend decides what to retry. Added by its issue
+/// (docs/code-map.md).
 #[cfg(feature = "http")]
 #[derive(Debug)]
 pub struct UreqTransport {
@@ -149,10 +159,16 @@ pub struct UreqTransport {
 #[cfg(feature = "http")]
 impl UreqTransport {
     pub fn new() -> UreqTransport {
+        UreqTransport::with_idle_timeout(IDLE_TIMEOUT)
+    }
+
+    /// A transport whose reads and writes each time out after `idle` without progress.
+    pub fn with_idle_timeout(idle: Duration) -> UreqTransport {
         UreqTransport {
             agent: ureq::AgentBuilder::new()
                 .timeout_connect(Duration::from_secs(5))
-                .timeout(Duration::from_secs(60))
+                .timeout_read(idle)
+                .timeout_write(idle)
                 .redirects(0)
                 .build(),
         }
@@ -169,6 +185,11 @@ impl Default for UreqTransport {
 #[cfg(feature = "http")]
 impl Transport for UreqTransport {
     fn send(&self, request: &Request) -> Result<Response> {
+        if request.body.len() > MAX_REQUEST_BODY {
+            return Err(crate::error::Error::Server(format!(
+                "request body exceeds the {MAX_REQUEST_BODY}-byte limit"
+            )));
+        }
         let host = host_of(&request.url);
         let mut outgoing = self.agent.request(&request.method, &request.url);
         for (name, value) in &request.headers {
