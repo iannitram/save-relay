@@ -21,7 +21,7 @@ use crate::pending::{self, Answer, ChoiceKind, PendingChoice, ANSWER_WAIT_SECS, 
 use crate::stamp::{self, Clock};
 use crate::steam;
 use crate::sync::Resolve;
-use std::process::{Command, ExitStatus, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 
 /// The game id: `explicit` when given, else `steam-<app id>` from the environment; neither is
 /// `Error::Usage("wrap: no --game and no Steam app id in the environment")`.
@@ -100,17 +100,123 @@ pub fn resolve_for(kind: ChoiceKind, answer: Answer) -> (Option<Resolve>, bool) 
 /// Its exit code; killed by a signal is 128 + the signal on Unix, 1 elsewhere. A program that
 /// cannot start is `Error::Io` naming it.
 pub fn run_child(command: &[String]) -> Result<i32> {
+    let mut child = spawn_child(command)?;
+    let status = child
+        .wait()
+        .map_err(|error| Error::Io(format!("cannot wait for the game: {error}")))?;
+    Ok(exit_code(status))
+}
+
+/// `command` started with inherited standard streams; the same errors as `run_child`.
+fn spawn_child(command: &[String]) -> Result<Child> {
     let Some((program, arguments)) = command.split_first() else {
         return Err(Error::Usage("wrap: no command after --".into()));
     };
-    let status = Command::new(program)
+    Command::new(program)
         .args(arguments)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
-        .status()
-        .map_err(|error| Error::Io(format!("cannot start {program}: {error}")))?;
-    Ok(exit_code(status))
+        .spawn()
+        .map_err(|error| Error::Io(format!("cannot start {program}: {error}")))
+}
+
+/// How the game ended: on its own, or stopped because `wrap` received a termination signal.
+#[derive(Debug, PartialEq, Eq)]
+enum Played {
+    Exited(i32),
+    /// Only Unix forwards a signal; elsewhere this is never built.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    Signalled(i32),
+}
+
+/// Start the game and wait for it, or for a termination signal (F80, audit S3). On a signal the
+/// signal is forwarded to the game and the wait ends there: the game is not waited for, so the
+/// exit push can run at once. Unix only; elsewhere the game is waited for.
+fn play(command: &[String]) -> Result<Played> {
+    // Before the game starts: a signal sent once the game runs must find the handlers in place.
+    #[cfg(unix)]
+    signals::install();
+    let mut child = spawn_child(command)?;
+    #[cfg(unix)]
+    {
+        loop {
+            if let Some(status) = child
+                .try_wait()
+                .map_err(|error| Error::Io(format!("cannot wait for the game: {error}")))?
+            {
+                return Ok(Played::Exited(exit_code(status)));
+            }
+            if let Some(signal) = signals::received() {
+                signals::forward(child.id(), signal);
+                return Ok(Played::Signalled(signal));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let status = child
+            .wait()
+            .map_err(|error| Error::Io(format!("cannot wait for the game: {error}")))?;
+        Ok(Played::Exited(exit_code(status)))
+    }
+}
+
+/// Unix termination signals: SIGHUP and SIGTERM (Steam's force exit, a logout, a shutdown). The
+/// first is recorded for the wait loop in `play`; any later one ends `wrap` at once with
+/// `_exit`, which leaves `playing.json` for the next launch to handle.
+#[cfg(unix)]
+mod signals {
+    use std::sync::atomic::{AtomicI32, Ordering};
+
+    const SIGHUP: i32 = 1;
+    const SIGTERM: i32 = 15;
+    /// The first signal received; 0 while none has come.
+    static FIRST: AtomicI32 = AtomicI32::new(0);
+
+    extern "C" {
+        fn signal(sig: i32, handler: usize) -> usize;
+        fn kill(pid: i32, sig: i32) -> i32;
+        fn _exit(status: i32) -> !;
+    }
+
+    extern "C" fn on_signal(sig: i32) {
+        if FIRST
+            .compare_exchange(0, sig, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            // SAFETY: `_exit` is async-signal-safe and never returns.
+            unsafe { _exit(128 + sig) }
+        }
+    }
+
+    /// Route SIGHUP and SIGTERM to `on_signal`.
+    pub fn install() {
+        let handler = on_signal as extern "C" fn(i32) as usize;
+        for sig in [SIGHUP, SIGTERM] {
+            // SAFETY: `handler` is an `extern "C" fn(i32)` that only touches an atomic and `_exit`.
+            unsafe {
+                signal(sig, handler);
+            }
+        }
+    }
+
+    /// The first signal received, if any.
+    pub fn received() -> Option<i32> {
+        match FIRST.load(Ordering::SeqCst) {
+            0 => None,
+            sig => Some(sig),
+        }
+    }
+
+    /// Send `sig` to the game `pid`. A game that has already gone is not an error here.
+    pub fn forward(pid: u32, sig: i32) {
+        // SAFETY: `kill` takes a pid and a signal number; no memory is shared.
+        unsafe {
+            kill(pid as i32, sig);
+        }
+    }
 }
 
 fn exit_code(status: ExitStatus) -> i32 {
@@ -129,8 +235,9 @@ fn exit_code(status: ExitStatus) -> i32 {
 
 /// The whole wrap: `pull`; on a choice, write it (`store.save_pending`) and
 /// `pending::wait_for_answer`, then act on the answer or, with none, play the local saves;
-/// `run_child`; `push` (a choice there is written and left pending, not waited for); remove a
-/// pending choice that was settled. Errors from the engine are notes on standard error, never
+/// `play` (a termination signal ends the wait and is forwarded to the game, F80); `push` (a
+/// choice there is written and left pending, not waited for); remove a pending choice that was
+/// settled. Errors from the engine are notes on standard error, never
 /// the exit code. Returns the child's exit code (`run_child`), or 1 when it could not start.
 pub fn run(
     engine: &dyn Engine,
@@ -141,8 +248,14 @@ pub fn run(
 ) -> i32 {
     let game = engine.game().to_string();
     before_play(engine, store, &game, now, sleep);
-    let code = match run_child(command) {
-        Ok(code) => code,
+    let code = match play(command) {
+        Ok(Played::Exited(code)) => code,
+        Ok(Played::Signalled(signal)) => {
+            note(format!(
+                "signal {signal}: the game was stopped; pushing what there is"
+            ));
+            128 + signal
+        }
         Err(error) => {
             note(error);
             1
