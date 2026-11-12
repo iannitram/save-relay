@@ -221,8 +221,33 @@ fn no_existing_folder_is_unclear_and_names_attempts() {
 #[test]
 fn one_named_folder_need_not_exist_yet() {
     let folder = "fixture/documents/Saved Games/Hades";
-    let located = locate(&hades(), &facts(Platform::Windows), &[], &[folder]).unwrap();
+    let located = locate(&hades(), &facts(Platform::Windows), &[], &[]).unwrap();
     assert_eq!(located.saves_dir, Path::new(folder));
+    assert_eq!(located.manifest.include, ["**"]);
+}
+
+// A glob-less entry that is not on disk yet is the saves folder itself, never its parent.
+#[test]
+fn fresh_machine_glob_less_folder_is_the_folder_not_its_parent() {
+    let located = locate(&hades(), &facts(Platform::Windows), &[], &[]).unwrap();
+    assert_eq!(
+        located.saves_dir,
+        Path::new("fixture/documents/Saved Games/Hades")
+    );
+    assert_eq!(located.manifest.include, ["**"]);
+    assert_eq!(
+        located.manifest.saves[&Platform::Windows],
+        "fixture/documents/Saved Games/Hades"
+    );
+}
+
+// A missing path whose last segment has an extension is a file: its parent is the folder.
+#[test]
+fn fresh_machine_glob_less_file_keeps_its_parent_folder() {
+    let entry = entry(json!({"<home>/Hades/profile.sav": {"tags": ["save"]}}));
+    let located = locate(&entry, &facts(Platform::Mac), &[], &[]).unwrap();
+    assert_eq!(located.saves_dir, Path::new("fixture/home/Hades"));
+    assert_eq!(located.manifest.include, ["profile.sav"]);
 }
 
 // A candidate that cannot be resolved here counts toward "exactly one", so the folder that does

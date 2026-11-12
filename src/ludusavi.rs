@@ -310,7 +310,7 @@ pub fn translate(
         facts
     };
     let (candidates, dropped) = named_candidates(entry, facts, Some(name));
-    let mut folders = folder_map(&candidates, is_dir);
+    let mut folders = folder_map(&candidates, exists, is_dir);
     let tried = folders.keys().cloned().collect::<Vec<_>>().join(", ");
     // A lone folder need not exist yet: `pull` makes it when the server has saves. Otherwise
     // only the folders that exist count.
@@ -387,17 +387,37 @@ fn native_folder_wins(
     if !facts.proton {
         return false;
     }
-    let proton_folders = folder_map(&named_candidates(entry, facts, Some(name)).0, is_dir);
-    folder_map(&named_candidates(entry, native, Some(name)).0, is_dir)
-        .keys()
-        .any(|folder| !proton_folders.contains_key(folder) && exists(Path::new(folder)))
+    let proton_folders = folder_map(
+        &named_candidates(entry, facts, Some(name)).0,
+        exists,
+        is_dir,
+    );
+    folder_map(
+        &named_candidates(entry, native, Some(name)).0,
+        exists,
+        is_dir,
+    )
+    .keys()
+    .any(|folder| !proton_folders.contains_key(folder) && exists(Path::new(folder)))
+}
+
+/// A glob-less path that is not on disk (a fresh machine) cannot be told apart by `is_dir`, so its
+/// shape decides: a last segment without an extension names the saves folder itself.
+fn is_folder_shaped(candidate: &str, exists: &dyn Fn(&Path) -> bool) -> bool {
+    !exists(Path::new(candidate))
+        && candidate
+            .rsplit('/')
+            .find(|segment| !segment.is_empty())
+            .is_some_and(|segment| !segment.contains('.'))
 }
 
 /// The candidates grouped by the folder each names, with the include pattern under it: a path
 /// with a glob splits at its first glob-free segment's end, a path that `is_dir` is a folder
-/// (`**`), and any other path's parent is the folder and its last segment the pattern.
+/// (`**`), a path missing from disk is a folder unless its last segment has an extension, and
+/// any other path's parent is the folder and its last segment the pattern.
 fn folder_map(
     candidates: &[String],
+    exists: &dyn Fn(&Path) -> bool,
     is_dir: &dyn Fn(&Path) -> bool,
 ) -> BTreeMap<String, Vec<String>> {
     let mut folders: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -405,7 +425,7 @@ fn folder_map(
         let (folder, pattern) = if let Some(glob) = candidate.find(['*', '?']) {
             let split = candidate[..glob].rfind('/').map_or(0, |index| index + 1);
             (&candidate[..split], candidate[split..].to_owned())
-        } else if is_dir(Path::new(candidate)) {
+        } else if is_dir(Path::new(candidate)) || is_folder_shaped(candidate, exists) {
             (candidate.as_str(), "**".to_owned())
         } else {
             let split = candidate.rfind('/').map_or(0, |index| index + 1);
