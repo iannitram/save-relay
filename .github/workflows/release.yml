@@ -140,6 +140,21 @@ jobs:
               *) echo "::error::the Linux binary is not static: $info"; exit 1 ;;
             esac
           fi
+      - name: Sign and notarize (macOS)
+        # #239 (part of #238): signed with the hardened runtime and notarized when the signing
+        # secrets are set; without them (a dry run, or until the Developer ID certificate is in
+        # the repo) the binary stays unsigned and a tag warns. After the smoke test and the strip
+        # (CARGO_PROFILE_RELEASE_STRIP above), because changing the file breaks the signature.
+        if: matrix.target == 'aarch64-apple-darwin'
+        shell: bash
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: bash scripts/macos-sign.sh "target/$TARGET/release/save-relay"
       - name: Name the binary
         id: name
         shell: bash
