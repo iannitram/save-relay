@@ -35,7 +35,7 @@ Each Must is something a person can do and see. Each one gets its own issue, and
 
 ## Won'ts
 
-- Android and iOS bindings: they come with the game ports' 2.0 (Android, iOS with controller support, Mac), on this same core.
+- Android and iOS bindings: they come with the game ports' 2.0 (Android, iOS with controller support), on this same core.
 - Syncing while the game runs; only pull at launch and push at exit (the open-elsewhere mark of M11 is written at launch and cleared at exit, nothing in between).
 - Capturing the screen myself: a card's picture comes from the port or from Steam's own screenshots, or there is none.
 - A guessed saves folder: a wrapped game with no clear entry is refused (M13).
