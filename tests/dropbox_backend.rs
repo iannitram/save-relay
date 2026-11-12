@@ -416,3 +416,44 @@ fn unsafe_paths_are_refused_before_any_request() {
     assert_eq!(r.fake.requests().len(), before);
     assert_eq!(r.read("g/a.txt").unwrap(), b"A");
 }
+
+/// Forwards to the fake, but the first upload after `arm` commits and then answers 503: a write
+/// that landed whose answer was lost.
+struct CommitThen503 {
+    fake: Arc<FakeDropbox>,
+    armed: Mutex<bool>,
+}
+impl Transport for CommitThen503 {
+    fn send(&self, request: &Request) -> save_relay::Result<Response> {
+        let answer = Transport::send(&*self.fake, request)?;
+        let mut armed = self.armed.lock().unwrap();
+        if request.url.contains("/2/files/upload") && *armed {
+            *armed = false;
+            return Ok(Response::new(503, String::new()));
+        }
+        Ok(answer)
+    }
+}
+
+#[test]
+fn a_retried_conditional_write_that_committed_is_its_own_write() {
+    let fake = Arc::new(FakeDropbox::new());
+    let wire = Arc::new(CommitThen503 {
+        fake: fake.clone(),
+        armed: Mutex::new(false),
+    });
+    let backend = Dropbox::with_sleep(tokens(fake.clone()), wire.clone(), |_| {});
+    backend.mkcol("g").unwrap();
+    backend.mkcol("g/entry").unwrap();
+    backend.put("g/entry/a.sav", b"saves", ANY).unwrap();
+    backend.put("g/state.json", b"one", ANY).unwrap();
+    let (_, rev) = backend.get("g/state.json").unwrap();
+    *wire.armed.lock().unwrap() = true;
+    let written = backend.put("g/state.json", b"two", &Precondition::Match(rev));
+    assert!(
+        written.is_ok(),
+        "a committed write must not read as Changed: {written:?}"
+    );
+    assert_eq!(backend.get("g/state.json").unwrap().0, b"two");
+    assert_eq!(backend.get("g/entry/a.sav").unwrap().0, b"saves");
+}

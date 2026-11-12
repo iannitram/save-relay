@@ -546,16 +546,22 @@ impl Drive {
                     })?;
                 let value: Value = serde_json::from_slice(&taken.body)
                     .map_err(|_| Error::Server("drive: bad claim answer".into()))?;
-                let created = value["createdTime"].as_str().and_then(created_secs);
-                let age_secs = server_secs(&taken)
-                    .zip(created)
-                    .map(|(now, created)| now.saturating_sub(created))
-                    .ok_or_else(|| Error::Server("drive: missing claim time".into()))?;
-                guard::Claim::Taken {
-                    age_secs,
-                    next: value["appProperties"][guard::NEXT_PROPERTY]
-                        .as_str()
-                        .map(str::to_owned),
+                // The 409 can be our own claim: an earlier attempt committed it and answered
+                // 5xx, and this retry met it. `next` is a fresh id this attempt generated.
+                if value["appProperties"][guard::NEXT_PROPERTY].as_str() == Some(next.as_str()) {
+                    guard::Claim::Won
+                } else {
+                    let created = value["createdTime"].as_str().and_then(created_secs);
+                    let age_secs = server_secs(&taken)
+                        .zip(created)
+                        .map(|(now, created)| now.saturating_sub(created))
+                        .ok_or_else(|| Error::Server("drive: missing claim time".into()))?;
+                    guard::Claim::Taken {
+                        age_secs,
+                        next: value["appProperties"][guard::NEXT_PROPERTY]
+                            .as_str()
+                            .map(str::to_owned),
+                    }
                 }
             } else {
                 guard::Claim::Won
