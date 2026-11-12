@@ -1,6 +1,6 @@
 [package]
 name = "save-relay"
-version = "0.0.0"
+version = "1.0.0-rc.1"
 edition = "2021"
 license = "MIT"
 description = "Share game saves between machines through Nextcloud (WebDAV), Google Drive or Dropbox"

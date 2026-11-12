@@ -256,3 +256,4 @@ jobs:
             dist/save-relay-*
             dist/SHA256SUMS
           fail_on_unmatched_files: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
