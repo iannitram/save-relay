@@ -183,13 +183,28 @@ pub fn upload_entry(
     }
 }
 
-/// Make `saves_dir` hold exactly `wanted` (the files of history entry `entry`): download each
-/// file whose hash differs from `local`'s into `<name>.save-relay-part`, check its SHA-256
-/// (a mismatch is `Error::Server` and nothing is replaced), rename it into place and set its
-/// modification time to the entry's `mtime` (`File::set_modified`), so the game's load list
-/// shows when the save was made; then delete the files in `local` that `wanted` lacks.
-/// Creates folders as needed.
-pub fn download_entry(
+/// Files downloaded and checked, waiting in part files to be renamed into place
+/// (`commit_staged`). Dropping it without committing removes the part files.
+#[derive(Debug)]
+pub struct Staged {
+    parts: Vec<(PathBuf, PathBuf)>,
+    local: SaveSet,
+    wanted: SaveSet,
+    saves_dir: PathBuf,
+}
+
+impl Drop for Staged {
+    fn drop(&mut self) {
+        for (part, _) in &self.parts {
+            let _ = fs::remove_file(part);
+        }
+    }
+}
+
+/// The first half of `download_entry`: check every path of `wanted`, download each file whose
+/// hash differs from `local`'s into `<name>.save-relay-part` and check its SHA-256 (a mismatch is
+/// `Error::Server`). Nothing is replaced yet; `restore` does this before it publishes anything.
+pub fn stage_entry(
     remote: &dyn Remote,
     layout: &Layout,
     game: &str,
@@ -197,7 +212,7 @@ pub fn download_entry(
     wanted: &SaveSet,
     saves_dir: &Path,
     local: &SaveSet,
-) -> Result<Counts> {
+) -> Result<Staged> {
     // Reserved names (a sidecar, a part file) are neither fetched nor replaced nor deleted.
     let wanted = without_reserved(wanted);
     let local = without_reserved(local);
@@ -205,16 +220,32 @@ pub fn download_entry(
         check_save_path(&file.path)?;
     }
     let entry_dir = layout.entry_dir(game, entry);
-    let mut staged: Vec<(PathBuf, PathBuf)> = Vec::new();
-    if let Err(err) = stage_downloads(remote, &entry_dir, &wanted, saves_dir, &local, &mut staged) {
-        for (part, _) in &staged {
-            let _ = fs::remove_file(part);
-        }
-        return Err(err);
-    }
-    for (index, (part, target)) in staged.iter().enumerate() {
+    let mut staged = Staged {
+        parts: Vec::new(),
+        local: local.clone(),
+        wanted: wanted.clone(),
+        saves_dir: saves_dir.to_path_buf(),
+    };
+    stage_downloads(
+        remote,
+        &entry_dir,
+        &wanted,
+        saves_dir,
+        &local,
+        &mut staged.parts,
+    )?;
+    Ok(staged)
+}
+
+/// The second half of `download_entry`: rename the staged files into place (the entry's `mtime`
+/// is already set), then delete the files in `local` that `wanted` lacks. Creates folders as needed.
+pub fn commit_staged(mut staged: Staged) -> Result<Counts> {
+    let parts = std::mem::take(&mut staged.parts);
+    let (local, wanted) = (&staged.local, &staged.wanted);
+    let saves_dir: &Path = &staged.saves_dir;
+    for (index, (part, target)) in parts.iter().enumerate() {
         if let Err(e) = fs::rename(part, target) {
-            for (left, _) in &staged[index..] {
+            for (left, _) in &parts[index..] {
                 let _ = fs::remove_file(left);
             }
             return Err(io_err(target, e));
@@ -240,10 +271,26 @@ pub fn download_entry(
         }
     }
     Ok(Counts {
-        downloaded: staged.len() as u32,
+        downloaded: parts.len() as u32,
         deleted,
         ..Counts::default()
     })
+}
+
+/// Make `saves_dir` hold exactly `wanted` (the files of history entry `entry`): `stage_entry`,
+/// then `commit_staged`. A hash mismatch is `Error::Server` and nothing is replaced.
+pub fn download_entry(
+    remote: &dyn Remote,
+    layout: &Layout,
+    game: &str,
+    entry: &str,
+    wanted: &SaveSet,
+    saves_dir: &Path,
+    local: &SaveSet,
+) -> Result<Counts> {
+    commit_staged(stage_entry(
+        remote, layout, game, entry, wanted, saves_dir, local,
+    )?)
 }
 
 /// The file list of history entry `entry` (its `RECORD`). Missing: `Error::NotFound`;

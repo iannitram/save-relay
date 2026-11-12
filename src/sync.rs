@@ -1225,6 +1225,18 @@ pub fn restore(s: &Session, game: &Game, store: &LocalStore, entry: &str) -> Res
         &game.manifest.exclude,
     )?;
     let last = store.load_last(id)?;
+    // The entry's paths and file hashes are checked (the files downloaded into part files)
+    // before the backup is uploaded or anything is published: a bad entry changes nothing.
+    // Dropping `staged` on an error removes the part files.
+    let staged = transfer::stage_entry(
+        s.remote,
+        &s.layout,
+        id,
+        entry,
+        &wanted,
+        &game.saves_dir,
+        &local,
+    )?;
     let mut taken = listed;
     let mut counts = transfer::Counts::default();
     // Notes from the backup's card (sidecar, picture, a failed card write); never an error.
@@ -1262,15 +1274,7 @@ pub fn restore(s: &Session, game: &Game, store: &LocalStore, entry: &str) -> Res
         files: wanted.files.clone(),
     };
     write_state(s, Some(store), id, revision, &new_entry, &next, &pre)?;
-    let downloaded = transfer::download_entry(
-        s.remote,
-        &s.layout,
-        id,
-        &new_entry,
-        &wanted,
-        &game.saves_dir,
-        &local,
-    )?;
+    let downloaded = transfer::commit_staged(staged)?;
     counts.downloaded = downloaded.downloaded;
     counts.deleted = downloaded.deleted;
     record_sync(s, store, id, revision, &wanted, &game.saves_dir)?;
