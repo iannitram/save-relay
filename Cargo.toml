@@ -28,7 +28,7 @@ keyring = ["dep:keyring"]
 # `save-relay panel`; off by default, so a plain `cargo build` needs no Node and serves a
 # placeholder page. Release builds turn it on.
 panel-dist = []
-# No system libraries, so the core builds for Linux, Windows, macOS and later Android and iOS
+# No system libraries, so the core builds for Linux, Windows, macOS, Android and iOS
 # (`ring`, under rustls, compiles its own bundled C: docs/code-map.md, rules).
 [dependencies]
 getrandom = "0.2"

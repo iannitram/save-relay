@@ -32,10 +32,10 @@ Each Must is something a person can do and see. Each one gets its own issue, and
 ## Shoulds
 
 - macOS builds in 1.0: a supported, signed and notarized Mac build of the CLI and the library, with a real pull and push round trip on a Mac. Moved here from the Won'ts by my ruling of 2026-11-12 (see the approval line above). Tracked in #238.
+- Android and iOS bindings in 1.0: the full bindings for the game ports' apps, on this same core (the C-interface library builds of #49 and the bindings on top of them, #254), with sign-in through the platform's browser session. Moved here from the Won'ts by my ruling of 2026-11-12: "Bindings into 1.0 too".
 
 ## Won'ts
 
-- Android and iOS bindings: they come with the game ports' 2.0 (Android, iOS with controller support), on this same core.
 - Syncing while the game runs; only pull at launch and push at exit (the open-elsewhere mark of M11 is written at launch and cleared at exit, nothing in between).
 - Capturing the screen myself: a card's picture comes from the port or from Steam's own screenshots, or there is none.
 - A guessed saves folder: a wrapped game with no clear entry is refused (M13).
@@ -61,7 +61,7 @@ My game ports keep saves in a folder on each machine. Moving from the handheld t
 
 ## Solution
 
-One small library and command-line tool that every port's launcher calls: pull before Play, push after the game quits, through my own Nextcloud, with a conflict prompt, history and offline play. A game joins with a manifest. Android and iOS builds embed the same core later.
+One small library and command-line tool that every port's launcher calls: pull before Play, push after the game quits, through my own Nextcloud, with a conflict prompt, history and offline play. A game joins with a manifest. Android and iOS builds embed the same core (a Should for 1.0).
 
 ## User stories
 
@@ -77,7 +77,7 @@ One small library and command-line tool that every port's launcher calls: pull b
 
 - Rulings 2026-10-31 (question tool): Nextcloud over WebDAV with a per-device app password; pull at launch, push at exit; ask and keep both on conflict; shared library + CLI; 1.0 = Uncharted on the three PCs; last 10 versions per game; play local and push later when offline; new public repo; own small Rust core, with Ludusavi as the main peer to learn from.
 - Storage is one interface with three backends: WebDAV (a create-once `rev/<n+1>` claim guards servers whose etag can repeat before push or restore writes state with If-Match; #149; a crash can strand it and `repair` releases it, moving a complete entry it names to `<game>/set-aside/`), Dropbox (uploads tied to the file revision) and Google Drive (a narrow-scope folder; its weaker overwrite check gets a guard so M9 holds). Google Drive and Dropbox sign in with OAuth in the browser (PKCE, loopback redirect); the app registrations on each service are made under my own accounts.
-- Core in Rust: a library crate and a `save-relay` binary. It must build for Linux, Windows and macOS now, and Android and iOS later (no platform-only dependencies in the core).
+- Core in Rust: a library crate and a `save-relay` binary. It must build for Linux, Windows and macOS now, and, as a Should for 1.0, Android and iOS (no platform-only dependencies in the core).
 - Server layout under one Nextcloud folder: per game, the current saves, a small state file (revision, device, time, file list with hashes), and a history folder of dated copies. Each machine records the revision it last synced; a conflict is "server revision changed and local files changed since that revision".
 - Pushes upload to a temporary name and rename, so a broken upload never replaces the current saves.
 - The game manifest is a small data file shipped by each port.
