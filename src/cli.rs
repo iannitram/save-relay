@@ -1921,10 +1921,14 @@ fn setup(
         root: config.root.clone(),
         credential_store: cx.creds.kind().to_string(),
     };
-    let text = format!(
+    let mut text = format!(
         "Set up: this machine ({}) syncs through {} as {}, in the folder '{}'.\nThe app password is stored in the {} credential store.",
         data.device, data.server, data.user, data.root, data.credential_store
     );
+    if let Some(warning) = webdav::http_warning(server) {
+        text.push('\n');
+        text.push_str(&warning);
+    }
     Ok(outcome("setup", &data, text, 0))
 }
 
