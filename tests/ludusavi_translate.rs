@@ -239,6 +239,14 @@ fn fresh_machine_glob_less_folder_is_the_folder_not_its_parent() {
         located.manifest.saves[&Platform::Windows],
         "fixture/documents/Saved Games/Hades"
     );
+    assert_eq!(
+        located.guesses,
+        ["\"fixture/documents/Saved Games/Hades\" is not on disk yet; taken as a folder (no extension)"]
+    );
+    // On a machine that ran the game there is nothing to guess.
+    let folder = "fixture/documents/Saved Games/Hades";
+    let located = locate(&hades(), &facts(Platform::Windows), &[folder], &[folder]).unwrap();
+    assert!(located.guesses.is_empty(), "{:?}", located.guesses);
 }
 
 // A missing path whose last segment has an extension is a file: its parent is the folder.
@@ -248,14 +256,28 @@ fn fresh_machine_glob_less_file_keeps_its_parent_folder() {
     let located = locate(&entry, &facts(Platform::Mac), &[], &[]).unwrap();
     assert_eq!(located.saves_dir, Path::new("fixture/home/Hades"));
     assert_eq!(located.manifest.include, ["profile.sav"]);
+    assert_eq!(
+        located.guesses,
+        [
+            "\"fixture/home/Hades/profile.sav\" is not on disk yet; taken as a file (it has an \
+          extension) in \"fixture/home/Hades\""
+        ]
+    );
 }
 
 // A candidate that cannot be resolved here counts toward "exactly one", so the folder that does
-// resolve is not the clear answer.
+// resolve, and exists on disk as a folder, is not the clear answer. Without the unresolvable
+// candidate the same entry is `Located` (the control), so only the count makes it unclear.
 fn lone_folder_beside_unresolved(files: Value, facts: &Facts) -> String {
+    let lone = "fixture/home/saves";
+    let mut control = json!({});
+    control["<home>/saves"] = json!({"tags": ["save"]});
+    let located = locate(&entry(control.clone()), facts, &[lone], &[lone]).unwrap();
+    assert_eq!(located.saves_dir, Path::new(lone));
+    assert_eq!(located.manifest.include, ["**"]);
     let mut files = files;
-    files["<home>/saves"] = json!({"tags": ["save"]});
-    unclear(locate(&entry(files), facts, &["fixture/home/saves"], &[]))
+    files["<home>/saves"] = control["<home>/saves"].clone();
+    unclear(locate(&entry(files), facts, &[lone], &[lone]))
 }
 
 #[test]

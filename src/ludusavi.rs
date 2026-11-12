@@ -284,6 +284,9 @@ fn named_candidates(entry: &Entry, facts: &Facts, name: Option<&str>) -> (Vec<St
 pub struct Located {
     pub manifest: Manifest,
     pub saves_dir: PathBuf,
+    /// One line naming each folder-or-file guess (`is_folder_shaped`) behind `saves_dir`: a
+    /// glob-less path not on disk yet, taken as a folder or a file from its last segment.
+    pub guesses: Vec<String>,
 }
 
 /// Translate one entry: each candidate splits at its first segment with a glob character into
@@ -343,6 +346,7 @@ pub fn translate(
         return Err(Error::SaveLocationUnclear(reason));
     }
     let (folder, mut include) = folders.into_iter().next().expect("one folder");
+    let guesses = shape_guesses(&candidates, &folder, exists, is_dir);
     include.sort();
     include.dedup();
     // The ludusavi data is external input: refuse a pattern a Windows sync client cannot
@@ -368,7 +372,35 @@ pub fn translate(
     Ok(Located {
         saves_dir: PathBuf::from(&folder),
         manifest,
+        guesses,
     })
+}
+
+/// The guesses `is_folder_shaped` made for `folder`: one line per glob-less candidate under it
+/// that is not on disk, saying whether it was taken as the folder or as a file in it.
+fn shape_guesses(
+    candidates: &[String],
+    folder: &str,
+    exists: &dyn Fn(&Path) -> bool,
+    is_dir: &dyn Fn(&Path) -> bool,
+) -> Vec<String> {
+    candidates
+        .iter()
+        .filter(|candidate| !candidate.contains(['*', '?']) && !exists(Path::new(candidate)))
+        .filter(|candidate| {
+            folder_map(std::slice::from_ref(candidate), exists, is_dir).contains_key(folder)
+        })
+        .map(|candidate| {
+            if is_folder_shaped(candidate, exists) {
+                format!("{candidate:?} is not on disk yet; taken as a folder (no extension)")
+            } else {
+                format!(
+                    "{candidate:?} is not on disk yet; taken as a file (it has an extension) \
+                     in {folder:?}"
+                )
+            }
+        })
+        .collect()
 }
 
 /// A Windows game run through Proton keeps its prefix after it becomes native, and the prefix

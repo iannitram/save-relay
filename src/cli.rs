@@ -1468,6 +1468,11 @@ fn ludusavi_game(arg: &GameArg, app_id: u32, cx: &Context) -> Result<Game> {
         eprintln!("save-relay: ludusavi data not refreshed: {error}");
     }
     let (_, located) = ludusavi_located(app_id, cx, &cache)?;
+    if arg.saves_dir.is_none() {
+        for guess in &located.guesses {
+            eprintln!("save-relay: {guess}");
+        }
+    }
     let saves_dir = arg.saves_dir.clone().unwrap_or(located.saves_dir);
     cx.store.save_game(&GameRecord {
         manifest: located.manifest.clone(),
