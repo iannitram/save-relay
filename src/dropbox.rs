@@ -440,6 +440,14 @@ impl Remote for Dropbox {
             Err(Error::Changed) if matches!(pre, Precondition::Any) => {
                 Err(Error::Server("dropbox: a folder is there".into()))
             }
+            // A retry after a 5xx finds the write it already made: the same bytes at the
+            // revision that write produced. That is our write, not a conflict.
+            Err(Error::Changed) if matches!(pre, Precondition::Match(_) | Precondition::Absent) => {
+                match self.get(path) {
+                    Ok((current, rev)) if current == bytes => Ok(rev),
+                    _ => Err(Error::Changed),
+                }
+            }
             other => parse_rev(&other?.text()),
         }
     }

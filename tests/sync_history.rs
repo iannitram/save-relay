@@ -1,9 +1,10 @@
+use save_relay::api::Action;
 use save_relay::layout::{entry_name, Layout};
 use save_relay::local::LocalStore;
 use save_relay::manifest::Manifest;
 use save_relay::plan::Decision;
 use save_relay::platform::AppDirs;
-use save_relay::remote::MemoryRemote;
+use save_relay::remote::{MemoryRemote, Precondition, Remote, RemoteEntry};
 use save_relay::stamp;
 use save_relay::state::{LastSynced, ServerState};
 use save_relay::sync::{history, push, restore, status, Game, Session};
@@ -286,4 +287,52 @@ fn status_changes_nothing() {
     assert_eq!(snapshot(&f.remote), remote_before);
     assert_eq!(f.store.load_last(GAME).unwrap(), Some(last_before));
     assert_eq!(fs::read(f.game.saves_dir.join("a.sav")).unwrap(), b"edited");
+}
+
+/// A remote that refuses every DELETE: retention and marker pruning fail after the new state
+/// is published.
+struct RefusingDeletes<'a>(&'a MemoryRemote);
+impl Remote for RefusingDeletes<'_> {
+    fn list(&self, dir: &str) -> save_relay::Result<Vec<RemoteEntry>> {
+        self.0.list(dir)
+    }
+    fn get(&self, path: &str) -> save_relay::Result<(Vec<u8>, String)> {
+        self.0.get(path)
+    }
+    fn put(&self, path: &str, bytes: &[u8], pre: &Precondition) -> save_relay::Result<String> {
+        self.0.put(path, bytes, pre)
+    }
+    fn mkcol(&self, dir: &str) -> save_relay::Result<()> {
+        self.0.mkcol(dir)
+    }
+    fn copy(&self, from: &str, to: &str) -> save_relay::Result<()> {
+        self.0.copy(from, to)
+    }
+    fn move_to(&self, from: &str, to: &str) -> save_relay::Result<()> {
+        self.0.move_to(from, to)
+    }
+    fn delete(&self, _path: &str) -> save_relay::Result<()> {
+        Err(Error::Server("refused".into()))
+    }
+}
+
+#[test]
+fn a_failed_prune_after_the_state_is_published_is_still_a_successful_push() {
+    let f = Fixture::new();
+    for i in 0..11 {
+        f.push_at(&format!("save {i}"), NOW + i * 60);
+    }
+    f.local("save 11");
+    let refusing = RefusingDeletes(&f.remote);
+    let session = Session {
+        remote: &refusing,
+        layout: layout(),
+        device: DEVICE.into(),
+        now: NOW + 11 * 60,
+    };
+    let report = push(&session, &f.game, &f.store, None)
+        .expect("the state is published; pruning is best-effort");
+    assert_eq!(report.sync.action, Action::Pushed);
+    assert_eq!(server_state(&f.remote).revision, 12);
+    assert_eq!(f.store.load_last(GAME).unwrap().unwrap().revision, 12);
 }

@@ -77,8 +77,8 @@ pub fn pull(
 }
 
 /// After the game quits (M2, M3, M5, M11). `plan::decide(Intent::Exit, ..)`, then: Push (upload,
-/// new revision with this device and time, then retention); unreachable is `Action::Deferred`;
-/// the rest as in `pull`. The mark is not read to decide: at exit `decide_with_mark` ignores it.
+/// new revision with this device and time, then the record, then retention, best-effort);
+/// unreachable is `Action::Deferred`; the rest as in `pull`. The mark is not read to decide: at exit `decide_with_mark` ignores it.
 /// After Noop, Adopt, Pull (a resolved conflict) or Push, `clear_mark` removes `playing.json`, but
 /// only when it names this device: another machine's mark stays. A `deferred` push and an
 /// unresolved conflict leave it, since the saves are still only here.
@@ -239,20 +239,8 @@ fn sync(
                 return Err(error);
             }
             server_entry = Some(entry.clone());
-            let entries = s
-                .remote
-                .list(&s.layout.history_dir(id))?
-                .into_iter()
-                .filter(|entry| entry.is_dir && data.backup.as_deref() != Some(entry.name.as_str()))
-                .map(|entry| entry.name)
-                .collect::<Vec<_>>();
-            // Reserve a slot for the conflict's losing side, even with an old clock.
-            let keep = retention::KEEP - usize::from(data.backup.is_some());
-            for old in retention::to_drop(&entries, keep, &entry) {
-                s.remote.delete(&s.layout.entry_dir(id, &old))?;
-            }
-            prune_markers(s, id, revision)?;
             record_sync(s, store, id, revision, &local)?;
+            prune_after_publish(s, id, data.backup.as_deref(), &entry, revision);
             data.action = Action::Pushed;
             data.revision = Some(revision);
             data.server = Some(server_side(&next));
@@ -678,6 +666,29 @@ fn claim_revision(s: &Session, id: &str, name: &str, entry: &str) -> Result<()> 
         .map(|_| ())
 }
 
+/// Retention and marker pruning, run after `state.json` is published and `LastSynced` is saved
+/// (S9). Best-effort: the push or restore has happened, so a failed DELETE leaves old entries or
+/// claims for a later push to prune and does not fail the command.
+fn prune_after_publish(s: &Session, id: &str, backup: Option<&str>, newest: &str, revision: u64) {
+    let _ = retain_entries(s, id, backup, newest);
+    let _ = prune_markers(s, id, revision);
+}
+
+/// Drops the oldest history entries beyond `retention::KEEP`. The backup (the conflict's losing
+/// side, or a restore's backup) takes a slot, even with an old clock.
+fn retain_entries(s: &Session, id: &str, backup: Option<&str>, newest: &str) -> Result<()> {
+    let entries = history_children(s, id)?
+        .into_iter()
+        .filter(|child| child.is_dir && backup != Some(child.name.as_str()))
+        .map(|child| child.name)
+        .collect::<Vec<_>>();
+    let keep = retention::KEEP - usize::from(backup.is_some());
+    for old in retention::to_drop(&entries, keep, newest) {
+        s.remote.delete(&s.layout.entry_dir(id, &old))?;
+    }
+    Ok(())
+}
+
 /// Deletes the revision claims beyond the newest `retention::KEEP`, with the entries (#149). A
 /// claim older than the current revision is never needed again: a push reads the current
 /// revision and claims the next one. Other backends: nothing.
@@ -1071,7 +1082,7 @@ fn complete_entry(s: &Session, game: &str, entry: &str) -> bool {
 /// file list is read; the backup (if the local files changed since the last sync) is uploaded;
 /// the folder is copied; `state.json` moves to the copy with `Precondition::Match` (a `Changed`
 /// removes the copy again, as `push` does); the files are downloaded; `LastSynced` is saved; then
-/// retention runs, with the backup taking a slot as in `push`.
+/// retention and marker pruning run, best-effort, with the backup taking a slot as in `push`.
 pub fn restore(s: &Session, game: &Game, store: &LocalStore, entry: &str) -> Result<RestoreData> {
     let id = &game.manifest.id;
     let (state, pre, reachable) = read_server(s, id)?;
@@ -1145,17 +1156,7 @@ pub fn restore(s: &Session, game: &Game, store: &LocalStore, entry: &str) -> Res
     counts.downloaded = downloaded.downloaded;
     counts.deleted = downloaded.deleted;
     record_sync(s, store, id, revision, &wanted)?;
-    let entries = history_children(s, id)?
-        .into_iter()
-        .filter(|child| child.is_dir && backup.as_deref() != Some(child.name.as_str()))
-        .map(|child| child.name)
-        .collect::<Vec<_>>();
-    // Reserve a slot for the backup, as `push` does.
-    let keep = retention::KEEP - usize::from(backup.is_some());
-    for old in retention::to_drop(&entries, keep, &new_entry) {
-        s.remote.delete(&s.layout.entry_dir(id, &old))?;
-    }
-    prune_markers(s, id, revision)?;
+    prune_after_publish(s, id, backup.as_deref(), &new_entry, revision);
     let mut message = format!("Restored {entry} as revision {revision}.");
     for note in &notes {
         message = format!("{message} {}.", one_line(note));

@@ -1128,3 +1128,45 @@ fn retry_wait_cannot_extend_a_won_claim_past_its_deadline() {
     assert_eq!(transport.attempted.get(), 1);
     assert_eq!(first.get("state.json").unwrap().0, b"base");
 }
+
+/// Forwards to the fake, but the first claim create (`POST files?fields=`) commits and then
+/// answers 503: a claim that landed whose answer was lost.
+struct ClaimCommitThen503 {
+    fake: Arc<FakeDrive>,
+    armed: Mutex<bool>,
+}
+impl Transport for ClaimCommitThen503 {
+    fn send(&self, request: &Request) -> save_relay::Result<Response> {
+        let answer = Transport::send(&*self.fake, request)?;
+        let mut armed = self.armed.lock().unwrap();
+        if request.method == "POST" && request.url.starts_with(&format!("{API}/files?")) && *armed {
+            *armed = false;
+            return Ok(Response::new(503, String::new()));
+        }
+        Ok(answer)
+    }
+}
+
+#[test]
+#[allow(clippy::arc_with_non_send_sync)]
+fn a_retried_guarded_write_whose_claim_committed_is_its_own_claim() {
+    let fake = Arc::new(FakeDrive::new());
+    let wire = Arc::new(ClaimCommitThen503 {
+        fake: fake.clone(),
+        armed: Mutex::new(false),
+    });
+    let backend = Drive::new(tokens(fake.clone()), wire.clone(), clock).with_wait(Arc::new(|_| {}));
+    backend.mkcol("g").unwrap();
+    backend.mkcol("g/entry").unwrap();
+    backend.put("g/entry/a.sav", b"saves", ANY).unwrap();
+    backend.put("g/state.json", b"one", ANY).unwrap();
+    let (_, etag) = backend.get("g/state.json").unwrap();
+    *wire.armed.lock().unwrap() = true;
+    let written = backend.put("g/state.json", b"two", &Precondition::Match(etag));
+    assert!(
+        written.is_ok(),
+        "a committed claim must not read as Changed: {written:?}"
+    );
+    assert_eq!(backend.get("g/state.json").unwrap().0, b"two");
+    assert_eq!(backend.get("g/entry/a.sav").unwrap().0, b"saves");
+}
