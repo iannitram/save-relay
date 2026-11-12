@@ -9,7 +9,7 @@ use save_relay::platform::AppDirs;
 use save_relay::remote::{MemoryRemote, Precondition, Remote, RemoteEntry};
 use save_relay::stamp;
 use save_relay::state::ServerState;
-use save_relay::sync::{pull, push, restore, Game, Session};
+use save_relay::sync::{pull, push, repair, restore, Game, Session};
 use save_relay::{Error, Result};
 use std::cell::{Cell, RefCell};
 use std::fs;
@@ -394,4 +394,172 @@ fn current_and_later_claims_are_never_pruned() {
         markers_to_drop(&claims(&["1", "1", "2"]), 2, 2),
         Vec::<String>::new()
     );
+}
+
+/// The hook `Faulty::before_state` runs.
+type BeforeState = Box<dyn FnOnce(&Faulty) -> Result<()>>;
+
+/// A WebDAV-like remote with two faults at the `state.json` write. `drop_link` drops the network
+/// there: the write fails as unreachable and the link stays down until the test brings it back.
+/// `before_state` runs first, as another machine would while this push is paused; its error, if
+/// any, is the write's error.
+struct Faulty {
+    inner: MemoryRemote,
+    state_path: String,
+    drop_link: Cell<bool>,
+    before_state: RefCell<Option<BeforeState>>,
+}
+
+impl Faulty {
+    fn new() -> Faulty {
+        Faulty {
+            inner: MemoryRemote::new(),
+            state_path: layout().state_path(GAME),
+            drop_link: Cell::new(false),
+            before_state: RefCell::new(None),
+        }
+    }
+}
+
+impl Remote for Faulty {
+    fn list(&self, dir: &str) -> Result<Vec<RemoteEntry>> {
+        self.inner.list(dir)
+    }
+
+    fn get(&self, path: &str) -> Result<(Vec<u8>, String)> {
+        self.inner.get(path)
+    }
+
+    fn put(&self, path: &str, bytes: &[u8], pre: &Precondition) -> Result<String> {
+        if path == self.state_path {
+            if self.drop_link.replace(false) {
+                self.inner.set_reachable(false);
+                return Err(Error::Unreachable("the link dropped".into()));
+            }
+            let hook = self.before_state.borrow_mut().take();
+            if let Some(hook) = hook {
+                hook(self)?;
+            }
+        }
+        self.inner.put(path, bytes, pre)
+    }
+
+    fn mkcol(&self, dir: &str) -> Result<()> {
+        self.inner.mkcol(dir)
+    }
+
+    fn copy(&self, from: &str, to: &str) -> Result<()> {
+        self.inner.copy(from, to)
+    }
+
+    fn move_to(&self, from: &str, to: &str) -> Result<()> {
+        self.inner.move_to(from, to)
+    }
+
+    fn delete(&self, path: &str) -> Result<()> {
+        self.inner.delete(path)
+    }
+
+    fn needs_rev_marker(&self) -> bool {
+        true
+    }
+}
+
+#[test]
+fn a_push_that_lost_the_link_after_its_claim_releases_its_own_claim_on_the_next_push() {
+    let root = Root::new();
+    let remote = Faulty::new();
+    let c = Machine::new(&root.0, "dev-c");
+    c.save("save one");
+
+    remote.drop_link.set(true);
+    let error = push(&c.session(&remote), &c.game, &c.store, None).unwrap_err();
+    assert!(matches!(error, Error::Unreachable(_)), "{error:?}");
+    // The claim is stranded: the link was down, so the release could not reach the server.
+    remote.inner.set_reachable(true);
+    assert_eq!(
+        remote.inner.read(&layout().rev_path(GAME, "1")).unwrap(),
+        first_entry("dev-c").as_bytes()
+    );
+
+    // The same machine's next push releases its own claim and publishes revision 1.
+    c.save("save two");
+    let pushed = push(&c.session(&remote), &c.game, &c.store, None)
+        .unwrap()
+        .sync;
+    assert_eq!(pushed.action, Action::Pushed);
+    assert_eq!(pushed.revision, Some(1));
+    assert_eq!(state_of(&remote).revision, 1);
+}
+
+#[test]
+fn a_failed_state_write_leaves_another_machines_claim_alone() {
+    let root = Root::new();
+    let remote = Faulty::new();
+    let c = Machine::new(&root.0, "dev-c");
+    c.save("save one");
+
+    // While C's state write is paused, C's claim is gone and dev-b holds revision 1; then C's
+    // write fails.
+    let theirs = first_entry("dev-b");
+    *remote.before_state.borrow_mut() = Some(Box::new(move |remote: &Faulty| {
+        remote.inner.delete(&layout().rev_path(GAME, "1"))?;
+        remote.inner.put(
+            &layout().rev_path(GAME, "1"),
+            theirs.as_bytes(),
+            &Precondition::Absent,
+        )?;
+        Err(Error::Server("state write refused".into()))
+    }));
+    let error = push(&c.session(&remote), &c.game, &c.store, None).unwrap_err();
+    assert!(matches!(error, Error::Server(_)), "{error:?}");
+
+    // C's failure path did not delete dev-b's claim.
+    assert_eq!(
+        remote.inner.read(&layout().rev_path(GAME, "1")).unwrap(),
+        first_entry("dev-b").as_bytes()
+    );
+}
+
+#[test]
+fn repair_during_a_paused_push_leaves_state_naming_a_live_entry() {
+    let root = Root::new();
+    let remote = Faulty::new();
+    let c = Machine::new(&root.0, "dev-c");
+    let a = Machine::new(&root.0, "dev-a");
+    c.save("save one");
+    push(&c.session(&remote), &c.game, &c.store, None).unwrap();
+    pull(&a.session(&remote), &a.game, &a.store, None, false).unwrap();
+
+    // A's push is paused after it claims revision 2 and uploads its entry. Another machine runs
+    // `repair` in the pause: the claim is complete, so its entry is moved to `set-aside/`.
+    a.save("save two");
+    *remote.before_state.borrow_mut() = Some(Box::new(|remote: &Faulty| {
+        let other = Session {
+            remote,
+            layout: layout(),
+            device: "dev-b".into(),
+            now: NOW,
+        };
+        let repaired = repair(&other, GAME, true)?;
+        assert_eq!(repaired.markers[0].status, "set_aside", "{repaired:?}");
+        Ok(())
+    }));
+    let pushed = push(&a.session(&remote), &a.game, &a.store, None)
+        .unwrap()
+        .sync;
+    assert_eq!(pushed.action, Action::Pushed);
+
+    // Whatever order the two ran in, the final state names an entry in `history/`.
+    let state = state_of(&remote);
+    assert_eq!(state.revision, 2);
+    let history = names(&remote, &layout().history_dir(GAME), true);
+    assert!(
+        history.contains(&state.entry),
+        "{state:?} not in {history:?}"
+    );
+    assert!(remote
+        .inner
+        .read(&layout().set_aside_path(GAME, 2, &state.entry))
+        .is_none());
 }
