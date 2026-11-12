@@ -605,9 +605,12 @@ fn fresh_entry(now: u64, device: &str, taken: &[String]) -> String {
 /// write that creates `rev/<revision>` may write `state.json`. A refused claim or write is
 /// `Error::Changed` (or Drive's confirmed missing-claim failure), and `entry` is removed: a
 /// rejected conditional write cannot have published it. Other failures may be ambiguous, so
-/// `entry` stays in history. A failed state write releases
-/// the claim on a best-effort basis. A crash or failed cleanup can strand it;
-/// `repair` releases it safely (#159, ADR 0002).
+/// `entry` stays in history. A failed state write releases the claim only when the claim names
+/// `entry` (its own), on a best-effort basis; a claim another machine took is never touched. A
+/// crash, a dropped link or a failed cleanup can strand it: the same machine's next push releases
+/// its own stranded claim (`claim_revision`, #242 S1), and `repair` releases the rest safely
+/// (#159, ADR 0002). After a publish on WebDAV, an entry that `repair` set aside while this push
+/// was paused is moved back into `history/`, so `state.json` never names a set-aside entry (S2).
 fn write_state(
     s: &Session,
     store: Option<&LocalStore>,
@@ -651,28 +654,67 @@ fn write_state(
         if matches!(error, Error::Changed | Error::MissingDriveClaim { .. }) {
             let _ = s.remote.delete(&s.layout.entry_dir(id, entry));
         }
-        if s.remote.needs_rev_marker() {
+        if s.remote.needs_rev_marker() && claim_body(s, id, &name).as_deref() == Some(entry) {
             let _ = s.remote.delete(&s.layout.rev_path(id, &name));
         }
         return Err(error);
     }
+    if s.remote.needs_rev_marker() {
+        restore_set_aside_entry(s, id, revision, entry)?;
+    }
     Ok(())
 }
 
+/// The body of `rev/<name>` (the entry it names), when it can be read.
+fn claim_body(s: &Session, id: &str, name: &str) -> Option<String> {
+    s.remote
+        .get(&s.layout.rev_path(id, name))
+        .ok()
+        .and_then(|(bytes, _)| String::from_utf8(bytes).ok())
+}
+
+/// Moves `entry` back from `set-aside/` into `history/` when `repair` moved it while this push
+/// was paused (S2). `repair` checks `state.json` after its move and moves the entry back itself
+/// when the state moved; this check covers the other order, a publish after that check. A move
+/// that finds the entry already back is not an error.
+fn restore_set_aside_entry(s: &Session, id: &str, revision: u64, entry: &str) -> Result<()> {
+    if history_names(s, id)?.iter().any(|name| name == entry) {
+        return Ok(());
+    }
+    let from = s.layout.set_aside_path(id, revision, entry);
+    match s.remote.move_to(&from, &s.layout.entry_dir(id, entry)) {
+        Ok(()) | Err(Error::NotFound(_)) => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
 /// Creates `rev/<name>` (its body: the entry it names) with `Precondition::Absent`, on a backend
-/// that needs the claim (#149). Other backends: nothing. A refused create is `Error::Changed`.
+/// that needs the claim (#149). Other backends: nothing. A refused create is `Error::Changed`,
+/// unless the refusing claim names this machine's own device: a push that lost its link after
+/// its claim left that claim behind, and no one else can release it, so this machine releases it
+/// and claims again (#242 S1). Another machine's claim is never released here (`repair` does that).
 fn claim_revision(s: &Session, id: &str, name: &str, entry: &str) -> Result<()> {
     if !s.remote.needs_rev_marker() {
         return Ok(());
     }
     ensure_dir(s.remote, &s.layout.rev_dir(id))?;
-    s.remote
-        .put(
-            &s.layout.rev_path(id, name),
-            entry.as_bytes(),
-            &Precondition::Absent,
-        )
-        .map(|_| ())
+    let path = s.layout.rev_path(id, name);
+    match s.remote.put(&path, entry.as_bytes(), &Precondition::Absent) {
+        Err(Error::Changed) if own_stranded_claim(s, id, name) => {
+            s.remote.delete(&path)?;
+            s.remote
+                .put(&path, entry.as_bytes(), &Precondition::Absent)
+                .map(|_| ())
+        }
+        result => result.map(|_| ()),
+    }
+}
+
+/// True when `rev/<name>` names an entry of this machine's own device (#242 S1).
+fn own_stranded_claim(s: &Session, id: &str, name: &str) -> bool {
+    claim_body(s, id, name)
+        .and_then(|body| parse_entry_name(&body))
+        .is_some_and(|(_, device)| device == s.device)
 }
 
 /// Retention and marker pruning, run after `state.json` is published and `LastSynced` is saved
@@ -1067,7 +1109,11 @@ fn release_claim(
         ensure_dir(s.remote, &s.layout.set_aside_dir(game))?;
         s.remote.move_to(&from, &to)?;
         if !state_unchanged(s, game, state, pre)? {
-            s.remote.move_to(&to, &from)?;
+            // A paused push may have moved the entry back already (#242 S2): not an error.
+            match s.remote.move_to(&to, &from) {
+                Ok(()) | Err(Error::NotFound(_)) => {}
+                Err(error) => return Err(error),
+            }
             return Ok(("skipped_state_moved", None));
         }
         set_aside = Some(to);
