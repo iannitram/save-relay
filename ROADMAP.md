@@ -129,7 +129,7 @@ Every Must has an issue: M1 (F07, F11, F19, F20, F23, F43), M2 (F02, F03, F20, F
 
 ## Mac, PC and Linux (R04)
 
-- **Linux** (SteamOS on the two handhelds) and **Windows** (the desktop) are the 1.0 platforms; **macOS** is a Won't for 1.0, but CI builds and tests it on every push because it is free on a public repo, so the core stays ready for the 2.0 Mac port. All three run the same `cargo fmt`, `clippy` (default and no features), `build` and `test`.
+- **Linux** (SteamOS on the two handhelds) and **Windows** (the desktop) are the 1.0 platforms; **macOS** is a Should for 1.0 (my ruling of 2026-11-12; a supported, signed Mac build is #238), and CI builds and tests it on every push because it is free on a public repo. All three run the same `cargo fmt`, `clippy` (default and no features), `build` and `test`.
 - What differs per OS is kept in three places: `platform` (folders), `creds::KeyringStore` (Secret Service, Credential Manager, Keychain), and the file system edge of `scan` and `transfer` (paths in a save set are always `/`; Windows file names that cannot exist are an `io` error, not a silent skip).
 - **Linux risk:** a launcher started from Steam's Game Mode may find no unlocked Secret Service. F18 finds out on the handhelds first; if the store is missing there, it stops and asks, because a fallback store would change M6. The same store holds the Google Drive and Dropbox refresh tokens, so the answer covers every service.
 - **Game Mode sign-in risk (Linux):** a browser started from a Game Mode launcher may never show on screen, so Drive and Dropbox setup there defaults to the code flows (`--no-browser`, then `--finish`; Google: a short code typed on a phone; Dropbox: a code typed back, or Steam's own browser). Recommended: set up once in Desktop Mode. F42 builds it, F46 checks it on a handheld.
@@ -194,6 +194,6 @@ Stages 1-7 are done (2026-11-06); the "free now" and "after" notes below are the
 
 ## After 1.0
 
-#49 (F70: Android and iOS library builds with a C interface, for game ports that embed save-relay; TotK) is after-1.0.
+#49 (F70: Android and iOS library builds with a C interface, for game ports that embed save-relay; TotK) is in 1.0 (my ruling of 2026-11-12: "Before 1.0").
 
-Android and iOS bindings (with the game ports' 2.0), with sign-in through the platform's browser session (the panel's views can follow them there); signed macOS release; moving saves from one service to another (a Won't for 1.0: switching starts fresh); more services (OneDrive, S3) behind the same `Remote`; upload only changed files (server-side COPY of unchanged ones from the previous entry); Nextcloud chunked upload for large save sets; a `save-relay forget <game>`; pruning old conflict backups separately from pushes; saves kept in the Windows registry for wrapped games (ludusavi's registry entries); wrapping games from launchers other than Steam.
+Android and iOS bindings (with the game ports' 2.0), with sign-in through the platform's browser session (the panel's views can follow them there); moving saves from one service to another (a Won't for 1.0: switching starts fresh); more services (OneDrive, S3) behind the same `Remote`; upload only changed files (server-side COPY of unchanged ones from the previous entry); Nextcloud chunked upload for large save sets; a `save-relay forget <game>`; pruning old conflict backups separately from pushes; saves kept in the Windows registry for wrapped games (ludusavi's registry entries); wrapping games from launchers other than Steam.
