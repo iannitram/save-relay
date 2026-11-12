@@ -2,14 +2,15 @@
 
 From `SPEC.md` (re-approved 2026-11-01) to 1.0: Uncharted on the AMD handheld, the Strix Halo tablet and the RTX 3090 Ti desktop sharing saves through Play alone, through the service chosen at setup: Nextcloud, Google Drive or Dropbox (`docs/adr/0002-storage-backends.md`); a game still open on another machine said before I play; any Steam game synced with one launch option; and each save shown as a card in a Game Mode panel (`docs/adr/0003-baton-wrap-cards-panel.md`). How the code is laid out: `docs/code-map.md`. Each feature below is one GitHub issue (number in brackets), sized by the pipeline's rubric; Easy ones carry a Qwen brief and locked tests.
 
-## Where it stands (2026-11-11)
+## Where it stands (2026-11-12)
 
-**Audited checkpoint:** main at `a8e07ff` has Stages 1–7 merged (F01–F25, F27–F45, F48–F66 and F69). **You are here: Dev Loop, M16 implementation through F78 (#213), with Game Mode handheld acceptance still pending.** The M16 implementation adds the Steam Cloud parser and cache, CLI, Add games view, integration coverage and usage docs.
+**Audited checkpoint:** main at `77e6c2c` has Stages 1–7 merged (F01–F25, F27–F45, F48–F66 and F69), the M16 integration (F72–F78: #207–#211 and #213 closed 2026-11-11) and the six audit blockers B1–B6 (#223–#228 closed). **You are here: Dev Loop, release-candidate packaging.** The rc.1 packaging pull request (#236) is open and waits on its checks; #212 (F77) is built and merged, and waits only on the SteamOS handheld check.
 
-- **Verified on main:** the [check run for `a8e07ff`](https://github.com/iannitram/save-relay/actions/runs/42939286063) passed Rust and WebDAV integration on Linux, Windows and macOS, plus the frontend build and tests. Dropbox and Drive have automated fake-service coverage; live sign-in and round trips remain in #47.
+- **Verified on main:** the [check run for `77e6c2c`](https://github.com/iannitram/save-relay/actions/runs/43155552302) passed Rust and WebDAV integration on Linux, Windows and macOS, plus the frontend build and tests. Dropbox and Drive have automated fake-service coverage; live sign-in and round trips remain in #47.
 - **Stage 8 remains open:** the 20 design findings (#164–#179, #197, #198, #201, #202) are fixed. #73 tracks the controller-only Game Mode re-check after handheld acceptance for #212.
-- **Audit blockers:** the 2026-11-11 audit (`docs/audit-2026-11-11.md`) found B1–B6; all remain in the 1.0 run order ahead of `rc.1`. This M16 integration does not implement them.
-- **Release and acceptance:** Cargo is at `0.0.0` and GitHub has no release. The owner can register Google and Dropbox in #36 while M16 proceeds. The release candidate (#205) waits for M16, #36, handheld acceptance and B1–B6.
+- **Audit blockers:** B1–B6 are done on main (rows below). The audit's should-fix items S1–S17 and its Minor list are now issues F79–F87 (#242–#250), milestone `1.0`.
+- **Release and acceptance:** Cargo is at `0.0.0` on main and GitHub has no release; #236 sets `1.0.0-rc.1`. The owner can register Google and Dropbox in #36. The release candidate (#205) waits on #36 and the merge of #236.
+- **Open questions for me:** which save-slot option for #240; whether #49 (Android and iOS) is inside 1.0; and the macOS wording (CI now signs and notarizes a Mac binary, #239, while SPEC and README still say no Mac in 1.0). No Must or Won't changes until I answer.
 
 ### Run order to 1.0
 
@@ -17,29 +18,29 @@ Each step is one issue. An automated run takes the **agent** steps whose "Waits 
 
 | Step | Who | Issue | What | Waits on | Done when |
 |---|---|---|---|---|---|
-| 1 | agent | #207 (F72) | Steam store answer parser; a game's name from its appmanifest | nothing | its tests pass |
-| 2 | agent | #208 (F73) | The Steam Cloud answer cache | step 1 | its tests pass against a fake transport |
-| 3 | agent | #209 (F74) | `save-relay steam-games` | step 2 | the fixture Steam folder lists yes, no, unknown |
-| 4 | agent | #210 (F75) | `install-wrap --no-steam-cloud` | step 3 | only the no-cloud game is wrapped; unknown is skipped |
-| 5 | agent | #211 (F76) | `save-relay launch-option`; the panel API runs the M16 commands | steps 3, 4 | the three routes answer |
-| 6 | agent, check on a SteamOS handheld | #212 (F77) | The panel's Add games view | steps 3, 4, 5 | vitest and the contract fixtures pass; the Game Mode add is tried on a handheld |
-| 7 | agent | #213 (F78) | M16 integration test and docs | steps 4, 6 | the flow test and the doc test pass |
+| 1 | agent | #207 (F72) | Steam store answer parser; a game's name from its appmanifest | nothing | Done (#207 closed 2026-11-11). its tests pass |
+| 2 | agent | #208 (F73) | The Steam Cloud answer cache | step 1 | Done (#208 closed 2026-11-11). its tests pass against a fake transport |
+| 3 | agent | #209 (F74) | `save-relay steam-games` | step 2 | Done (#209 closed 2026-11-11). the fixture Steam folder lists yes, no, unknown |
+| 4 | agent | #210 (F75) | `install-wrap --no-steam-cloud` | step 3 | Done (#210 closed 2026-11-11). only the no-cloud game is wrapped; unknown is skipped |
+| 5 | agent | #211 (F76) | `save-relay launch-option`; the panel API runs the M16 commands | steps 3, 4 | Done (#211 closed 2026-11-11). the three routes answer |
+| 6 | agent, check on a SteamOS handheld | #212 (F77) | The panel's Add games view | steps 3, 4, 5 | vitest and the contract fixtures pass; the Game Mode add is tried on a handheld. Code merged (`3b5d98c`, `panel/src/App.tsx`, `decky/src/index.tsx`); only the SteamOS check (Decky `SetAppLaunchOptions` with Steam open) is outstanding, and #212 stays open for it |
+| 7 | agent | #213 (F78) | M16 integration test and docs | steps 4, 6 | Done (#213 closed 2026-11-11; `tests/steam_games_flow.rs`). the flow test and the doc test pass |
 | 8 | owner | #36 (F47) | Register the app with Google and Dropbox; set the five values as this repo's Actions variables and secrets (a tagged release refuses to build without them) and put them in `src/clients.rs` | nothing, any time | `gh variable list` and `gh secret list` show the five names; the values are on `main` |
 | 9 | agent, on a SteamOS handheld | #73 (F68) | Re-check the panel in Game Mode after #201 and #202, with the Add games view; file and fix any new `design-pass` finding; record the pass in `PIPELINE.md` and `CHANGELOG.md` | step 6 handheld acceptance | every view re-checked at 1280x800, controller only; #73 closed |
-| B1 | agent | #223 | An empty or missing saves folder is pushed as the newest revision: pull the server's saves instead (`src/plan.rs`, `src/scan.rs`, `tests/plan.rs`) | nothing | the audit's "Expected" for B1 holds, with tests |
-| B2 | agent | #224 | The panel never shows a pending choice, and a late answer does nothing: fill `pending` in `status`, apply a late answer right away (`src/sync.rs`, `src/pending.rs`, `src/wrap.rs`, panel) | nothing | the audit's "Expected" for B2 holds, with tests |
-| B3 | agent | #226 | A wrapped game found through the ludusavi data is never remembered: save its record on the first locate (`src/cli.rs`) | nothing | the audit's "Expected" for B3 holds, with tests |
-| B4 | agent | #225 | Wire the Steam screenshot into a wrapped game's card (`src/steam.rs`, `src/sync.rs`) | nothing | the audit's "Expected" for B4 holds, with tests |
-| B5 | agent | #228 | Refuse a ludusavi saves folder that is a root, the home folder or a bare platform folder; cap the download size (`src/ludusavi.rs`, `src/manifest.rs`, `src/http.rs`) | nothing | the audit's "Expected" for B5 holds, with tests |
-| B6 | agent | #227 | Google Drive: `clean_claims` never deletes the claim `state.json` names; `repair` recovers a game already stuck (`src/gdrive.rs`) | nothing | the audit's "Expected" for B6 holds, with tests |
-| 10 | agent | #205 (F71) | Cut `v1.0.0-rc.1`: version bump, release dry run, tag, checksum check | steps 7, 8, B1-B6 | the GitHub release holds the three binaries, `SHA256SUMS`, the Decky zip and the panel zip |
+| B1 | agent | #223 | An empty or missing saves folder is pushed as the newest revision: pull the server's saves instead (`src/plan.rs`, `src/scan.rs`, `tests/plan.rs`) | nothing | Done (ccc4613, #229; #223 closed). the audit's "Expected" for B1 holds, with tests |
+| B2 | agent | #224 | The panel never shows a pending choice, and a late answer does nothing: fill `pending` in `status`, apply a late answer right away (`src/sync.rs`, `src/pending.rs`, `src/wrap.rs`, panel) | nothing | Done (f523bf7, #235; #224 closed). the audit's "Expected" for B2 holds, with tests |
+| B3 | agent | #226 | A wrapped game found through the ludusavi data is never remembered: save its record on the first locate (`src/cli.rs`) | nothing | Done (fe8500a, #231; #226 closed). the audit's "Expected" for B3 holds, with tests |
+| B4 | agent | #225 | Wire the Steam screenshot into a wrapped game's card (`src/steam.rs`, `src/sync.rs`) | nothing | Done (29cf845, #233; #225 closed). the audit's "Expected" for B4 holds, with tests |
+| B5 | agent | #228 | Refuse a ludusavi saves folder that is a root, the home folder or a bare platform folder; cap the download size (`src/ludusavi.rs`, `src/manifest.rs`, `src/http.rs`) | nothing | Done (729e43d, #234; #228 closed). the audit's "Expected" for B5 holds, with tests |
+| B6 | agent | #227 | Google Drive: `clean_claims` never deletes the claim `state.json` names; `repair` recovers a game already stuck (`src/gdrive.rs`) | nothing | Done (58c6bbb and daec880, #237; #227 closed). the audit's "Expected" for B6 holds, with tests |
+| 10 | agent | #205 (F71) | Cut `v1.0.0-rc.1`: version bump, release dry run, tag, checksum check | step 8 (#36) and the merge of #236 (steps 7 and B1-B6 are done) | the GitHub release holds the three binaries, `SHA256SUMS`, the Decky zip and the panel zip |
 | 11 | owner, an agent may drive with the owner signing in | #47 (F46) | Real round trips on Dropbox and Google Drive; Game Mode sign-in | step 10 | `cargo test --test live_services -- --ignored` passes on Windows and a handheld; written up on #47 |
 | 12 | owner | #72 (F67) | Device checks: suspend hand-off, wrap and install-wrap, the panel in Game Mode, adding a game without Steam Cloud | steps 9, 10 | written up on #72 |
 | 13 | agent | Uncharted-Universal #163 | The launcher calls the released binary around Play. Its own note (2026-11-06) holds it until the integration contract is ready: the `--json` API shape in `docs/code-map.md` at the `rc.1` tag is that contract | step 10 | merged there, bundling a save-relay release |
 | 14 | owner | #26 (F26) | 1.0 acceptance on the three PCs | steps 11, 12, 13 | written up on #26 |
 | 15 | agent | new issue when step 14 passes | Tag `v1.0.0`; `PIPELINE.md` moves to Prototype / Beta with a CHANGELOG line | step 14 | the 1.0 release is out |
 
-Rows B1-B6 are the audit's blockers (2026-11-11), filed as #223-#228 from the drafts in `docs/audit-2026-11-11.md`. They do not wait on each other or on steps 1-9.
+Rows B1-B6 were the audit's blockers (2026-11-11), filed as #223-#228 from the drafts in `docs/audit-2026-11-11.md`; all six are merged and closed. The audit's should-fix items are F79-F87 below (milestone `1.0`); none of them gates `rc.1`, except that F85 (pin the release actions) is done before the first public tag.
 
 A bug found in steps 11, 12 or 14 becomes its own issue, is fixed by an agent, and ships in the next `rc` before the step is run again. Before step 10, a device can try a build from the release workflow's dry run (`gh workflow run release.yml --ref main`): Nextcloud works in it, Google Drive and Dropbox say they are not registered.
 
@@ -124,6 +125,15 @@ A bug found in steps 11, 12 or 14 becomes its own issue, is fixed by an agent, a
 | F76 | `save-relay launch-option`; the panel API and the Decky backend run the M16 commands | `cli`, `panel` (Rust), `decky/` | M16 | #211 |
 | F77 | The panel's Add games view, in the browser and in Game Mode | `panel/`, `decky/` | M16 | #212 |
 | F78 | M16 integration test and docs | `tests/`, `docs/wrap.md`, `docs/panel.md` | M16 | #213 |
+| F79 | WebDAV claim recovery after a dropped push; `repair` against a paused push (audit S1, S2) | `sync` | M5, M9 | #242 |
+| F80 | `wrap` handles termination signals: push and release the mark (audit S3) | `wrap` | M11, M12 | #243 |
+| F81 | A wrapped game receives saves on a machine that never ran it; no holes in "refuse when unclear" (audit S4, S5) | `ludusavi`, `cli` | M12, M13 | #244 |
+| F82 | Decky 60-second kill and the whole-request HTTP deadline (audit S6, S7) | `decky/`, `http` | M9, M15 | #245 |
+| F83 | A retried write after a 5xx keeps the live entry; record first, prune best-effort (audit S8, S9) | `dropbox`, `gdrive`, `sync` | M1, M9 | #246 |
+| F84 | Durable and atomic downloads; case-only names on Windows; include/exclude drift (audit S10-S12) | `transfer`, `sync`, `plan` | M1-M3, M7 | #247 |
+| F85 | Pin release-workflow actions to SHAs; `permissions:` in `check.yml` (audit S13) | `.github/workflows/` | M8 | #248 |
+| F86 | Panel token and API surface, restore in-flight state, Game Mode B and D-pad, `install-wrap` edge cases (audit S14-S17) | `panel`, `panel/`, `decky/`, `steam::launch` | M13, M15 | #249 |
+| F87 | The audit's Minor list, as one checklist to split | various | various | #250 |
 
 Every Must has an issue: M1 (F07, F11, F19, F20, F23, F43), M2 (F02, F03, F20, F23, F43), M3 (F07, F19, F20, F23, F43), M4 (F08, F21, F23, F43), M5 (F07, F12, F20, F23, F43), M6 (F13, F14, F18, F22, F27-F30, F35, F37, F42, F44-F47), M7 (F01, F05, F23, F25, F69), M8 (F09, F10, F22, F24, F26, F44, F71), M9 (F12, F27, F31-F34, F36, F38-F41, F43, F46), M10 (F28, F29, F33, F40-F42, F44-F47), M11 (F48-F52, F65, F67), M12 (F52-F54, F57, F58, F65-F67), M13 (F52-F56, F59, F65-F67), M14 (F52, F54, F60, F61, F65-F67), M15 (F52, F62-F64, F66-F68), M16 (F67, F72-F78).
 
@@ -195,5 +205,9 @@ Stages 1-7 are done (2026-11-06); the "free now" and "after" notes below are the
 ## After 1.0
 
 #49 (F70: Android and iOS library builds with a C interface, for game ports that embed save-relay; TotK) is after-1.0.
+
+#238 (F88: a supported, signed macOS build of the CLI and the library, for the Mac game ports; platform: macOS) is after-1.0. CI already builds the macOS arm64 binary and signs and notarizes it when the Apple secrets are set (#239, `97db787`); what #238 adds is the supported claim, the README platform table and a real Mac round trip. Whether the Won't "macOS builds in 1.0" in `SPEC.md` still stands is my call and is not changed here.
+
+#240 (save slots: a changed saves folder under one game id must not push or pull across slots; M7) gets its row when I pick one of its three options.
 
 Android and iOS bindings (with the game ports' 2.0), with sign-in through the platform's browser session (the panel's views can follow them there); signed macOS release; moving saves from one service to another (a Won't for 1.0: switching starts fresh); more services (OneDrive, S3) behind the same `Remote`; upload only changed files (server-side COPY of unchanged ones from the previous entry); Nextcloud chunked upload for large save sets; a `save-relay forget <game>`; pruning old conflict backups separately from pushes; saves kept in the Windows registry for wrapped games (ludusavi's registry entries); wrapping games from launchers other than Steam.
