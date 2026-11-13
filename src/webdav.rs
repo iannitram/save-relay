@@ -28,6 +28,24 @@ pub fn files_url(server: &str, user: &str) -> Result<String> {
     ))
 }
 
+/// A warning for a `server` that uses plain `http://` to a host other than this machine
+/// (`localhost`, `127.x`, `::1`): the app password and the saves would cross the network
+/// unencrypted. `None` for `https://` and for those loopback hosts.
+pub fn http_warning(server: &str) -> Option<String> {
+    let rest = server.strip_prefix("http://")?;
+    let authority = rest.split('/').next().unwrap_or("");
+    let host = match authority.strip_prefix('[') {
+        Some(v6) => v6.split(']').next().unwrap_or(""),
+        None => authority.split(':').next().unwrap_or(""),
+    };
+    if host.eq_ignore_ascii_case("localhost") || host == "::1" || host.starts_with("127.") {
+        return None;
+    }
+    Some(format!(
+        "Warning: {server} uses http://, so the app password and your saves cross the network unencrypted. Use https:// unless this is a network you trust."
+    ))
+}
+
 /// Percent-encode one path segment: keep `A-Z a-z 0-9 - . _ ~`, encode every other byte of the
 /// UTF-8 as `%XX` (uppercase hex). `"Uncharted 1"` -> `"Uncharted%201"`.
 pub fn encode_segment(segment: &str) -> String {

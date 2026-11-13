@@ -40,7 +40,7 @@ export const TOKEN_HEADER = "X-Save-Relay-Token";
 type Fetch = (
   url: string,
   init: { method: string; headers: Record<string, string>; body: string },
-) => Promise<{ json(): Promise<unknown> }>;
+) => Promise<{ status?: number; json(): Promise<unknown> }>;
 
 /** The desktop bridge: `POST <base>/api/<command>` with the token header and `args` as JSON. */
 export function httpBridge(base: string, token: string, fetcher: Fetch): Bridge {
@@ -51,7 +51,18 @@ export function httpBridge(base: string, token: string, fetcher: Fetch): Bridge 
         headers: { "Content-Type": "application/json", [TOKEN_HEADER]: token },
         body: JSON.stringify(args),
       });
-      return (await response.json()) as Envelope<T>;
+      try {
+        return (await response.json()) as Envelope<T>;
+      } catch {
+        // A refusal (403), a missing page or a crash can answer plain text: say so, instead of
+        // showing the browser's "Unexpected token" parse error.
+        const status = response.status === undefined ? "" : ` (HTTP ${response.status})`;
+        return {
+          ok: false,
+          command,
+          error: { code: "server", message: `The panel answered with something that is not JSON${status}.` },
+        };
+      }
     },
   };
 }

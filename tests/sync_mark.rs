@@ -462,3 +462,62 @@ fn a_failed_mark_write_or_clear_is_in_the_message_not_an_error() {
     assert!(data.sync.message.contains("Could not clear playing.json"));
     assert_eq!(mark(&w.remote), Some(mark_for(AMD, NOW + 120, Some(1))));
 }
+
+/// Delegates to a `MemoryRemote`, but every read of `playing.json` is unreachable.
+struct FlakyMark<'a>(&'a MemoryRemote);
+
+impl Remote for FlakyMark<'_> {
+    fn list(&self, dir: &str) -> save_relay::Result<Vec<save_relay::remote::RemoteEntry>> {
+        self.0.list(dir)
+    }
+    fn get(&self, path: &str) -> save_relay::Result<(Vec<u8>, String)> {
+        if path.ends_with("playing.json") {
+            return Err(save_relay::Error::Unreachable("blip".into()));
+        }
+        self.0.get(path)
+    }
+    fn put(&self, path: &str, bytes: &[u8], pre: &Precondition) -> save_relay::Result<String> {
+        self.0.put(path, bytes, pre)
+    }
+    fn mkcol(&self, dir: &str) -> save_relay::Result<()> {
+        self.0.mkcol(dir)
+    }
+    fn copy(&self, from: &str, to: &str) -> save_relay::Result<()> {
+        self.0.copy(from, to)
+    }
+    fn move_to(&self, from: &str, to: &str) -> save_relay::Result<()> {
+        self.0.move_to(from, to)
+    }
+    fn delete(&self, path: &str) -> save_relay::Result<()> {
+        self.0.delete(path)
+    }
+}
+
+#[test]
+fn an_unreachable_mark_read_on_a_reachable_server_is_an_error_not_no_mark() {
+    let w = World::new();
+    let amd = w.machine(AMD);
+    let tablet = w.machine(TABLET);
+    tablet.save("tablet saves");
+    tablet.push(&w.remote, NOW);
+    tablet.pull(&w.remote, NOW + 60, None, false);
+    assert!(mark(&w.remote).is_some());
+
+    let flaky = FlakyMark(&w.remote);
+    let result = pull(
+        &amd.session_dyn(&flaky, NOW + 120),
+        &amd.game,
+        &amd.store,
+        None,
+        false,
+    );
+    assert!(
+        matches!(result, Err(save_relay::Error::Unreachable(_))),
+        "{result:?}"
+    );
+    let status = status(&amd.session_dyn(&flaky, NOW + 120), &amd.game, &amd.store);
+    assert!(
+        matches!(status, Err(save_relay::Error::Unreachable(_))),
+        "{status:?}"
+    );
+}

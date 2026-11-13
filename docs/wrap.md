@@ -81,3 +81,9 @@ The ludusavi data names the game's saves folder even where the game has never ru
 A save path with no glob that is not on disk yet (Hades' `Saved Games/Hades` on a machine that has not run it) stays `save_location_unclear` until the game has run once: it could be a folder or a file, and save-relay does not guess from the name.
 
 Whether a Windows game runs under Proton comes from the launch (Steam sets `STEAM_COMPAT_DATA_PATH`), not from the prefix folder being on disk. If a Proton prefix folder and a native saves folder are both on disk, the location is unclear and the person says which with their own manifest; a leftover prefix never wins.
+
+## When Steam force-closes the game (Linux, macOS)
+
+On SIGTERM or SIGHUP (Steam's force exit, a logout, a shutdown) `wrap` stops waiting, passes the signal on to the game, runs the exit push and clears this device's `playing.json` mark, then exits with 128 plus the signal number. A second signal while it does this ends `wrap` at once and leaves the mark, so the next launch handles it as an interrupted session.
+
+What is not covered yet: `wrap` does not wait for a game that ignores the signal it was sent, so the exit push can run while that game is still writing (a half-written set can be pushed); a signal during the pull or the choice wait before the game starts is not handled; and on Windows the console close, logoff and shutdown events are not handled (#264 tracks the Windows half and a bounded wait).
