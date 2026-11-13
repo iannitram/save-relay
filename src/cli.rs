@@ -1461,23 +1461,24 @@ fn wrap_game(arg: &GameArg, app_id: Option<u32>, cx: &Context) -> Result<Game> {
 /// The game for a Steam app with no manifest of the person's own: the ludusavi data, refreshed
 /// when a week old. A failed refresh is a note; the data already cached still serves. The
 /// located folder (or one the person gave with `--saves-dir`) and manifest are remembered so
-/// later commands can load the wrapped game by id alone.
+/// later commands can load the wrapped game by id alone, unless the located folder is not on
+/// disk yet.
 fn ludusavi_game(arg: &GameArg, app_id: u32, cx: &Context) -> Result<Game> {
     let cache = ludusavi::Cache::new(&AppDirs::from_vars(cx.vars));
     if let Err(error) = cache.refresh(&*cx.net.transport, cx.now, false) {
         eprintln!("save-relay: ludusavi data not refreshed: {error}");
     }
     let (_, located) = ludusavi_located(app_id, cx, &cache)?;
-    if arg.saves_dir.is_none() {
-        for guess in &located.guesses {
-            eprintln!("save-relay: {guess}");
-        }
-    }
+    let existed = located.existed;
     let saves_dir = arg.saves_dir.clone().unwrap_or(located.saves_dir);
-    cx.store.save_game(&GameRecord {
-        manifest: located.manifest.clone(),
-        saves_dir: Some(saves_dir.clone()),
-    })?;
+    // A folder that was not on disk when it was located is not remembered: the next launch
+    // locates it again (the pull has made it by then, or the game has).
+    if existed || arg.saves_dir.is_some() {
+        cx.store.save_game(&GameRecord {
+            manifest: located.manifest.clone(),
+            saves_dir: Some(saves_dir.clone()),
+        })?;
+    }
     Ok(Game {
         manifest: located.manifest,
         saves_dir,
@@ -2517,7 +2518,8 @@ fn install_wrap_outcome(data: &InstallWrapData) -> Outcome {
 /// What this machine knows about a wrapped Steam game for `ludusavi::translate`: its Steam
 /// library (`<root>`; the Steam folder when the game is not installed), its install folder
 /// (`<base>`), the one Steam user (`<storeUserId>`), and on Linux whether it runs under Proton
-/// (its prefix exists).
+/// (this launch says so: Steam sets `STEAM_COMPAT_DATA_PATH`; the prefix folder existing says
+/// nothing, since it is a leftover or not made yet).
 fn steam_facts(app_id: u32, cx: &Context) -> Result<Facts> {
     let env = |name: &str| std::env::var(name).ok();
     let root = steam::find_root(cx.platform, cx.vars, &env)?;
@@ -2537,7 +2539,8 @@ fn steam_facts(app_id: u32, cx: &Context) -> Result<Facts> {
     .map(|dir| library.join("steamapps/common").join(dir));
     let mut users = steam::user_ids(&root)?;
     let user_id = if users.len() == 1 { users.pop() } else { None };
-    let proton = cx.platform == Platform::Linux && steam::proton_prefix(&library, app_id).is_dir();
+    let proton = cx.platform == Platform::Linux
+        && env("STEAM_COMPAT_DATA_PATH").is_some_and(|path| !path.is_empty());
     Ok(Facts {
         platform: cx.platform,
         vars: cx.vars.clone(),

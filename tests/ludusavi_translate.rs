@@ -207,62 +207,54 @@ fn two_existing_folders_are_unclear_and_both_named() {
 
 #[test]
 fn no_existing_folder_is_unclear_and_names_attempts() {
-    let entry = entry(json!({
-        "<home>/first/*.sav": {"tags": ["save"]},
-        "<home>/second/*.sav": {"tags": ["save"]}
-    }));
-    let message = unclear(locate(&entry, &facts(Platform::Mac), &[], &[]));
+    let message = unclear(locate(&hades(), &facts(Platform::Windows), &[], &[]));
     assert!(message.contains("no existing"));
-    assert!(message.contains("fixture/home/first"));
-    assert!(message.contains("fixture/home/second"));
+    assert!(message.contains("fixture/documents/Saved Games"));
     unclear(locate(&Entry::default(), &facts(Platform::Linux), &[], &[]));
 }
 
+// A lone folder that a glob names need not exist yet: the saves come down into it.
 #[test]
 fn one_named_folder_need_not_exist_yet() {
-    let folder = "fixture/documents/Saved Games/Hades";
-    let located = locate(&hades(), &facts(Platform::Windows), &[], &[]).unwrap();
-    assert_eq!(located.saves_dir, Path::new(folder));
-    assert_eq!(located.manifest.include, ["**"]);
+    let entry = entry(json!({
+        "<xdgData>/Hades/*.sav": {"tags": ["save"], "when": [{"os": "linux", "store": "steam"}]}
+    }));
+    let located = locate(&entry, &facts(Platform::Linux), &[], &[]).unwrap();
+    assert_eq!(located.saves_dir, Path::new("fixture/data/Hades"));
+    assert_eq!(located.manifest.include, ["*.sav"]);
+    assert!(!located.existed);
+    let folder = "fixture/data/Hades";
+    let located = locate(&entry, &facts(Platform::Linux), &[folder], &[folder]).unwrap();
+    assert!(located.existed);
 }
 
-// A glob-less entry that is not on disk yet is the saves folder itself, never its parent.
+// A path with no glob that is not on disk could be a folder or a file in its parent, and the real
+// `is_dir` says no to both. Nothing guesses: the location stays unclear until the game has run.
 #[test]
-fn fresh_machine_glob_less_folder_is_the_folder_not_its_parent() {
-    let located = locate(&hades(), &facts(Platform::Windows), &[], &[]).unwrap();
-    assert_eq!(
-        located.saves_dir,
-        Path::new("fixture/documents/Saved Games/Hades")
-    );
-    assert_eq!(located.manifest.include, ["**"]);
-    assert_eq!(
-        located.manifest.saves[&Platform::Windows],
-        "fixture/documents/Saved Games/Hades"
-    );
-    assert_eq!(
-        located.guesses,
-        ["\"fixture/documents/Saved Games/Hades\" is not on disk yet; taken as a folder (no extension)"]
-    );
-    // On a machine that ran the game there is nothing to guess.
+fn a_glob_less_path_that_is_not_on_disk_stays_unclear() {
+    // Hades' `Saved Games/Hades`: neither it nor its parent exists, and nothing is a directory.
+    let message = unclear(locate(&hades(), &facts(Platform::Windows), &[], &[]));
+    assert!(message.contains("no existing"), "{message}");
+    // A file named by its extension is no different.
+    let entry = entry(json!({"<home>/Hades/profile.sav": {"tags": ["save"]}}));
+    unclear(locate(&entry, &facts(Platform::Mac), &[], &[]));
+    // Once the folder is on disk it is clear, and the whole folder syncs.
     let folder = "fixture/documents/Saved Games/Hades";
     let located = locate(&hades(), &facts(Platform::Windows), &[folder], &[folder]).unwrap();
-    assert!(located.guesses.is_empty(), "{:?}", located.guesses);
+    assert_eq!(located.saves_dir, Path::new(folder));
+    assert_eq!(located.manifest.include, ["**"]);
+    assert!(located.existed);
 }
 
-// A missing path whose last segment has an extension is a file: its parent is the folder.
+// A lone folder named by a glob counts the glob-less path beside it as a guess too, so the folder
+// is not taken as clear before it exists.
 #[test]
-fn fresh_machine_glob_less_file_keeps_its_parent_folder() {
-    let entry = entry(json!({"<home>/Hades/profile.sav": {"tags": ["save"]}}));
-    let located = locate(&entry, &facts(Platform::Mac), &[], &[]).unwrap();
-    assert_eq!(located.saves_dir, Path::new("fixture/home/Hades"));
-    assert_eq!(located.manifest.include, ["profile.sav"]);
-    assert_eq!(
-        located.guesses,
-        [
-            "\"fixture/home/Hades/profile.sav\" is not on disk yet; taken as a file (it has an \
-          extension) in \"fixture/home/Hades\""
-        ]
-    );
+fn a_glob_less_path_beside_a_glob_folder_is_no_lone_folder() {
+    let entry = entry(json!({
+        "<xdgData>/Hades/*.sav": {"tags": ["save"]},
+        "<xdgData>/Hades/profile": {"tags": ["save"]}
+    }));
+    unclear(locate(&entry, &facts(Platform::Linux), &[], &[]));
 }
 
 // A candidate that cannot be resolved here counts toward "exactly one", so the folder that does
@@ -309,23 +301,56 @@ fn missing_appmanifest_candidate_counts_toward_exactly_one() {
     assert!(message.contains("could not be resolved"), "{message}");
 }
 
-#[test]
-fn a_native_folder_beats_a_leftover_proton_prefix() {
-    let entry = entry(json!({
+fn proton_and_native_entry() -> Entry {
+    entry(json!({
         "<winDocuments>/Saved Games/Hades/*.sav": {"tags": ["save"], "when": [{"os": "windows"}]},
         "<xdgData>/Hades/*.sav": {"tags": ["save"], "when": [{"os": "linux", "store": "steam"}]}
-    }));
+    }))
+}
+
+const PREFIX_SAVES: &str = "fixture/library/steamapps/compatdata/1145360/pfx/drive_c/users/steamuser/Documents/Saved Games/Hades";
+const NATIVE_SAVES: &str = "fixture/data/Hades";
+
+// The launch says whether the game runs under Proton, not the prefix folder being on disk.
+#[test]
+fn a_leftover_prefix_does_not_win_over_a_native_launch() {
+    let entry = proton_and_native_entry();
+    let native = facts(Platform::Linux);
+    // The native folder is the only one on disk: clear.
+    let located = locate(&entry, &native, &[NATIVE_SAVES], &[]).unwrap();
+    assert_eq!(located.saves_dir, Path::new(NATIVE_SAVES));
+    // Only the leftover prefix is on disk: the native launch does not take it.
+    let message = unclear(locate(&entry, &native, &[PREFIX_SAVES], &[]));
+    assert!(message.contains("both"), "{message}");
+    assert!(message.contains(PREFIX_SAVES), "{message}");
+}
+
+#[test]
+fn a_prefix_folder_and_a_native_folder_on_disk_are_unclear_either_way() {
+    let entry = proton_and_native_entry();
+    let both = [PREFIX_SAVES, NATIVE_SAVES];
+    let native = facts(Platform::Linux);
+    let message = unclear(locate(&entry, &native, &both, &[]));
+    assert!(message.contains(PREFIX_SAVES), "{message}");
     let mut proton = facts(Platform::Linux);
     proton.proton = true;
-    let prefix = "fixture/library/steamapps/compatdata/1145360/pfx/drive_c/users/steamuser/Documents/Saved Games/Hades";
-    let native = "fixture/data/Hades";
-    // The prefix outlived a move to a native build: the folder the game now uses wins.
-    let located = locate(&entry, &proton, &[prefix, native], &[]).unwrap();
-    assert_eq!(located.saves_dir, Path::new(native));
-    assert_eq!(located.manifest.saves[&Platform::Linux], native);
-    // With no native folder yet, the prefix is still the place.
-    let located = locate(&entry, &proton, &[prefix], &[]).unwrap();
-    assert_eq!(located.saves_dir, Path::new(prefix));
+    let message = unclear(locate(&entry, &proton, &both, &[]));
+    assert!(message.contains(NATIVE_SAVES), "{message}");
+}
+
+#[test]
+fn a_proton_launch_with_no_prefix_yet_uses_the_prefix_path() {
+    let entry = proton_and_native_entry();
+    let mut proton = facts(Platform::Linux);
+    proton.proton = true;
+    // First launch: Proton has not made the prefix. The prefix path is still the place.
+    let located = locate(&entry, &proton, &[], &[]).unwrap();
+    assert_eq!(located.saves_dir, Path::new(PREFIX_SAVES));
+    assert!(!located.existed);
+    // With the prefix saves on disk it is clear too.
+    let located = locate(&entry, &proton, &[PREFIX_SAVES], &[]).unwrap();
+    assert_eq!(located.saves_dir, Path::new(PREFIX_SAVES));
+    assert!(located.existed);
 }
 
 #[test]

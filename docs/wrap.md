@@ -76,4 +76,8 @@ A save path that cannot be resolved on this machine counts toward "exactly one" 
 
 ## A machine that has never run the game
 
-The ludusavi data names the game's saves folder even where the game has never run. When that is the only folder named, save-relay uses it without requiring it to exist. The first `wrap` (or `pull`) on that machine downloads the server's saves into the folder, creating it, and that first launch is not a conflict. A path with no glob that is not on disk yet is that folder itself when its last segment has no extension (Hades' `Saved Games/Hades`), never its parent; with an extension it is a file in its parent folder. When the Proton prefix for a Windows game is still on disk but the game now runs natively and its native saves folder exists, the native folder is used, not the prefix's.
+The ludusavi data names the game's saves folder even where the game has never run. When a save path with a glob is the only one named (Hades on Linux: `~/.local/share/Hades/*.sav`), save-relay uses its folder without requiring it to exist. The first `wrap` (or `pull`) on that machine downloads the server's saves into the folder, creating it, and that first launch is not a conflict. A folder that did not exist when it was located is not remembered for the game: the next launch locates it again.
+
+A save path with no glob that is not on disk yet (Hades' `Saved Games/Hades` on a machine that has not run it) stays `save_location_unclear` until the game has run once: it could be a folder or a file, and save-relay does not guess from the name.
+
+Whether a Windows game runs under Proton comes from the launch (Steam sets `STEAM_COMPAT_DATA_PATH`), not from the prefix folder being on disk. If a Proton prefix folder and a native saves folder are both on disk, the location is unclear and the person says which with their own manifest; a leftover prefix never wins.
