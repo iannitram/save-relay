@@ -119,6 +119,9 @@ fn signal_game() {
         return;
     }
     let dir = PathBuf::from(std::env::var_os(DIR).expect("the scratch folder"));
+    // The game's pid, written whole before `started` (no /proc on macOS to find it by).
+    fs::write(dir.join("game.tmp"), std::process::id().to_string()).expect("write the pid");
+    fs::rename(dir.join("game.tmp"), dir.join("game.pid")).expect("publish the pid");
     touch(&dir.join("started"));
     // Bounded, so a game the signal never reached does not outlive the test.
     let until = Instant::now() + Duration::from_secs(60);
@@ -172,17 +175,17 @@ fn wait_exit(host: &mut Child, secs: u64) -> ExitStatus {
     panic!("the wrap host did not exit within {secs} s");
 }
 
-/// True once the process is gone or only a zombie (no `/proc` entry means gone).
+/// True once the process is gone (`kill(pid, 0)` fails) or, where `/proc` exists, only a zombie.
 fn process_gone(pid: u32) -> bool {
-    match fs::read_to_string(format!("/proc/{pid}/stat")) {
-        Err(_) => true,
-        Ok(stat) => {
-            stat.rsplit(')')
-                .next()
-                .and_then(|rest| rest.trim_start().chars().next())
-                == Some('Z')
-        }
+    if unsafe { kill(pid as i32, 0) } != 0 {
+        return true;
     }
+    fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+        stat.rsplit(')')
+            .next()
+            .and_then(|rest| rest.trim_start().chars().next())
+            == Some('Z')
+    })
 }
 
 #[test]
@@ -224,16 +227,10 @@ fn the_first_signal_reaches_the_game() {
     let dir = scratch("forward");
     let mut host = spawn_host(&dir, false);
     assert!(wait_for(&dir.join("started"), 20), "the game did not start");
-    let pid = {
-        // The game is a child of the host; find it through /proc.
-        let mut found = None;
-        let until = Instant::now() + Duration::from_secs(5);
-        while found.is_none() && Instant::now() < until {
-            found = child_of(host.id());
-            thread::sleep(Duration::from_millis(20));
-        }
-        found.expect("the host's game process")
-    };
+    let pid: u32 = fs::read_to_string(dir.join("game.pid"))
+        .expect("the game's pid")
+        .parse()
+        .expect("a pid");
     send(host.id(), SIGTERM);
     let _ = wait_exit(&mut host, 20);
     let until = Instant::now() + Duration::from_secs(10);
@@ -245,27 +242,6 @@ fn the_first_signal_reaches_the_game() {
         "the game {pid} is still running after the signal"
     );
     let _ = fs::remove_dir_all(&dir);
-}
-
-/// The pid of a direct child of `parent`, read from `/proc/<pid>/stat` (field 4).
-fn child_of(parent: u32) -> Option<u32> {
-    for entry in fs::read_dir("/proc").ok()?.flatten() {
-        let Some(pid) = entry
-            .file_name()
-            .to_str()
-            .and_then(|s| s.parse::<u32>().ok())
-        else {
-            continue;
-        };
-        let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat")) else {
-            continue;
-        };
-        let fields: Vec<&str> = stat.rsplit(')').next()?.split_whitespace().collect();
-        if fields.get(1).and_then(|p| p.parse::<u32>().ok()) == Some(parent) {
-            return Some(pid);
-        }
-    }
-    None
 }
 
 #[test]
