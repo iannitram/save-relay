@@ -1,7 +1,8 @@
 //! Moving a save set between the saves folder and the server, safely. An upload goes to
 //! `incoming/<entry>/` and is renamed into `history/<entry>/` only when every file is there, so
 //! a broken upload never becomes a revision (SPEC.md). A download writes each file to a part
-//! name, checks its hash, then renames it over the old one.
+//! name, fsyncs it and checks its hash; then the whole set is put in place as one step, with the
+//! old files moved aside until it is done, so a failure puts the pre-pull files back (S10).
 //!
 //! A save card (`card::CARD_FILE`) and its picture go into `history/<entry>/` after the MOVE
 //! and before `state.json` (`put_card`): a crash in between leaves an entry with no card,
@@ -23,7 +24,7 @@ use std::time::{Duration, UNIX_EPOCH};
 pub const PART: &str = ".save-relay-part";
 
 /// `saves_dir` joined with a `/` save path, segment by segment.
-fn local_path(saves_dir: &Path, path: &str) -> PathBuf {
+pub(crate) fn local_path(saves_dir: &Path, path: &str) -> PathBuf {
     let mut full = saves_dir.to_path_buf();
     for segment in path.split('/').filter(|s| !s.is_empty()) {
         full.push(segment);
@@ -135,6 +136,7 @@ fn stage_downloads(
         handle
             .set_modified(UNIX_EPOCH + Duration::from_secs(file.mtime))
             .map_err(|e| io_err(&part, e))?;
+        handle.sync_all().map_err(|e| io_err(&part, e))?;
     }
     Ok(())
 }
@@ -183,6 +185,80 @@ pub fn upload_entry(
     }
 }
 
+/// Names compare without case where the usual file system folds case (NTFS, and APFS by
+/// default); elsewhere they compare exactly.
+const FOLD_CASE: bool = cfg!(any(windows, target_os = "macos"));
+
+/// The prefix of a file moved aside while a download runs. A name that starts with
+/// `.save-relay-` is reserved, so a leftover aside file (after a crash) is never a save.
+const ASIDE: &str = ".save-relay-prev-";
+
+#[cfg(test)]
+thread_local! {
+    /// Test hook: how many renames may still succeed before one fails (`None`: no injection).
+    static RENAMES_LEFT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+/// Whether the test hook makes this rename fail.
+#[cfg(test)]
+fn injected_failure() -> bool {
+    RENAMES_LEFT.with(|cell| match cell.get() {
+        Some(0) => true,
+        Some(left) => {
+            cell.set(Some(left - 1));
+            false
+        }
+        None => false,
+    })
+}
+
+#[cfg(not(test))]
+fn injected_failure() -> bool {
+    false
+}
+
+/// `fs::rename`, which a test can make fail (`injected_failure`). Rollback uses `fs::rename`.
+fn rename(from: &Path, to: &Path) -> std::io::Result<()> {
+    if injected_failure() {
+        return Err(std::io::Error::other("injected rename failure"));
+    }
+    fs::rename(from, to)
+}
+
+/// Where `path` goes while it is set aside: the same folder, under an `ASIDE` name.
+fn aside_path(path: &Path) -> PathBuf {
+    let mut name = std::ffi::OsString::from(ASIDE);
+    name.push(path.file_name().unwrap_or(std::ffi::OsStr::new("")));
+    path.with_file_name(name)
+}
+
+/// Move `path` aside if a file is there (a name already moved, by a case-only twin, is nothing
+/// to do). Each move is recorded as (original, aside) so a rollback can put it back.
+fn set_aside(path: &Path, moved: &mut Vec<(PathBuf, PathBuf)>) -> Result<()> {
+    if path.symlink_metadata().is_err() {
+        return Ok(());
+    }
+    let aside = aside_path(path);
+    let _ = fs::remove_file(&aside);
+    rename(path, &aside).map_err(|e| io_err(path, e))?;
+    moved.push((path.to_path_buf(), aside));
+    Ok(())
+}
+
+/// Undo a download that failed: remove the files already placed, put every set-aside file back,
+/// and remove the part files not placed yet. Best effort; the caller returns the first error.
+fn rollback(placed: &[PathBuf], staged: &[(PathBuf, PathBuf)], moved: &[(PathBuf, PathBuf)]) {
+    for target in placed.iter().rev() {
+        let _ = fs::remove_file(target);
+    }
+    for (original, aside) in moved.iter().rev() {
+        let _ = fs::rename(aside, original);
+    }
+    for (part, _) in &staged[placed.len()..] {
+        let _ = fs::remove_file(part);
+    }
+}
+
 /// Files downloaded and checked, waiting in part files to be renamed into place
 /// (`commit_staged`). Dropping it without committing removes the part files.
 #[derive(Debug)]
@@ -191,6 +267,8 @@ pub struct Staged {
     local: SaveSet,
     wanted: SaveSet,
     saves_dir: PathBuf,
+    /// Names compare without case (`FOLD_CASE`, or what a test asks for).
+    fold: bool,
 }
 
 impl Drop for Staged {
@@ -202,8 +280,9 @@ impl Drop for Staged {
 }
 
 /// The first half of `download_entry`: check every path of `wanted`, download each file whose
-/// hash differs from `local`'s into `<name>.save-relay-part` and check its SHA-256 (a mismatch is
-/// `Error::Server`). Nothing is replaced yet; `restore` does this before it publishes anything.
+/// hash differs from `local`'s into `<name>.save-relay-part`, fsync it, check its SHA-256 (a
+/// mismatch is `Error::Server`) and set its modification time to the entry's `mtime`. Nothing is
+/// replaced yet; `restore` does this before it publishes anything.
 pub fn stage_entry(
     remote: &dyn Remote,
     layout: &Layout,
@@ -212,6 +291,23 @@ pub fn stage_entry(
     wanted: &SaveSet,
     saves_dir: &Path,
     local: &SaveSet,
+) -> Result<Staged> {
+    stage(
+        remote, layout, game, entry, wanted, saves_dir, local, FOLD_CASE,
+    )
+}
+
+/// `stage_entry` with the name comparison given (`fold`: case-insensitive names).
+#[allow(clippy::too_many_arguments)]
+fn stage(
+    remote: &dyn Remote,
+    layout: &Layout,
+    game: &str,
+    entry: &str,
+    wanted: &SaveSet,
+    saves_dir: &Path,
+    local: &SaveSet,
+    fold: bool,
 ) -> Result<Staged> {
     // Reserved names (a sidecar, a part file) are neither fetched nor replaced nor deleted.
     let wanted = without_reserved(wanted);
@@ -225,7 +321,9 @@ pub fn stage_entry(
         local: local.clone(),
         wanted: wanted.clone(),
         saves_dir: saves_dir.to_path_buf(),
+        fold,
     };
+    // A failure leaves part files in `staged.parts`; dropping `staged` removes them.
     stage_downloads(
         remote,
         &entry_dir,
@@ -237,31 +335,62 @@ pub fn stage_entry(
     Ok(staged)
 }
 
-/// The second half of `download_entry`: rename the staged files into place (the entry's `mtime`
-/// is already set), then delete the files in `local` that `wanted` lacks. Creates folders as needed.
+/// The second half of `download_entry`: make `saves_dir` hold exactly the staged `wanted`. The
+/// whole change is one step: every old file that changes or goes is first moved aside, then the
+/// parts are renamed into place, then the aside files are removed. A failure at any point puts
+/// the pre-pull files back and leaves no part file (S10). Files whose names differ only by case
+/// count as the same name on a case-folding file system (S11). Creates folders as needed.
 pub fn commit_staged(mut staged: Staged) -> Result<Counts> {
     let parts = std::mem::take(&mut staged.parts);
     let (local, wanted) = (&staged.local, &staged.wanted);
     let saves_dir: &Path = &staged.saves_dir;
-    for (index, (part, target)) in parts.iter().enumerate() {
-        if let Err(e) = fs::rename(part, target) {
-            for (left, _) in &parts[index..] {
-                let _ = fs::remove_file(left);
-            }
-            return Err(io_err(target, e));
+    let fold = staged.fold;
+    let same_name = |a: &str, b: &str| {
+        if fold {
+            a.to_lowercase() == b.to_lowercase()
+        } else {
+            a == b
         }
-    }
-    let mut deleted = 0u32;
+    };
+    // Set aside: each old file not kept as it is, then whatever sits on a download's target.
+    let mut moved: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let mut removed: Vec<PathBuf> = Vec::new();
+    let mut to_move: Vec<PathBuf> = Vec::new();
     for old in &local.files {
-        if wanted.files.iter().any(|w| w.path == old.path) {
+        let kept = wanted
+            .files
+            .iter()
+            .any(|w| w.path == old.path && w.sha256 == old.sha256);
+        if kept {
             continue;
         }
         let path = local_path(saves_dir, &old.path);
-        match fs::remove_file(&path) {
-            Ok(()) => deleted += 1,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(io_err(&path, e)),
+        if !wanted.files.iter().any(|w| same_name(&w.path, &old.path)) {
+            removed.push(path.clone());
         }
+        to_move.push(path);
+    }
+    to_move.extend(parts.iter().map(|(_, target)| target.clone()));
+    for path in &to_move {
+        if let Err(err) = set_aside(path, &mut moved) {
+            rollback(&[], &parts, &moved);
+            return Err(err);
+        }
+    }
+    // Place: rename each part over its target (which is free now).
+    let mut placed: Vec<PathBuf> = Vec::new();
+    for (part, target) in &parts {
+        if let Err(e) = rename(part, target) {
+            rollback(&placed, &parts, &moved);
+            return Err(io_err(target, e));
+        }
+        placed.push(target.clone());
+    }
+    // Commit: the old files are gone for good, then their emptied folders go.
+    for (_, aside) in &moved {
+        let _ = fs::remove_file(aside);
+    }
+    for path in &removed {
         let mut folder = path.parent().map(Path::to_path_buf);
         while let Some(dir) = folder {
             if dir == saves_dir || !dir.starts_with(saves_dir) || fs::remove_dir(&dir).is_err() {
@@ -272,7 +401,7 @@ pub fn commit_staged(mut staged: Staged) -> Result<Counts> {
     }
     Ok(Counts {
         downloaded: parts.len() as u32,
-        deleted,
+        deleted: removed.len() as u32,
         ..Counts::default()
     })
 }
@@ -288,8 +417,25 @@ pub fn download_entry(
     saves_dir: &Path,
     local: &SaveSet,
 ) -> Result<Counts> {
-    commit_staged(stage_entry(
-        remote, layout, game, entry, wanted, saves_dir, local,
+    download(
+        remote, layout, game, entry, wanted, saves_dir, local, FOLD_CASE,
+    )
+}
+
+/// `download_entry` with the name comparison given (`fold`: case-insensitive names).
+#[allow(clippy::too_many_arguments)]
+fn download(
+    remote: &dyn Remote,
+    layout: &Layout,
+    game: &str,
+    entry: &str,
+    wanted: &SaveSet,
+    saves_dir: &Path,
+    local: &SaveSet,
+    fold: bool,
+) -> Result<Counts> {
+    commit_staged(stage(
+        remote, layout, game, entry, wanted, saves_dir, local, fold,
     )?)
 }
 
@@ -370,5 +516,107 @@ pub fn get_picture(
         Ok((bytes, _)) => Ok((bytes, kind.mime().to_string())),
         Err(Error::NotFound(_)) => Err(missing()),
         Err(error) => Err(error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::remote::MemoryRemote;
+    use crate::scan::scan;
+
+    const GAME: &str = "fixture";
+
+    fn folder(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("save-relay-transfer-{}-{name}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Publish `files` as one history entry on `remote`; returns the entry name and its set.
+    fn publish(remote: &MemoryRemote, tag: &str, files: &[(&str, &[u8])]) -> (String, SaveSet) {
+        let src = folder(&format!("{tag}-src"));
+        for (path, bytes) in files {
+            fs::write(src.join(path), bytes).unwrap();
+        }
+        let set = scan(&src, &["**".to_string()], &[]).unwrap();
+        let layout = Layout::new("root").unwrap();
+        let entry = format!("{tag}-entry");
+        ensure_dir(remote, &layout.history_dir(GAME)).unwrap();
+        upload_entry(remote, &layout, GAME, &entry, &src, &set).unwrap();
+        (entry, set)
+    }
+
+    fn names(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// S10: the third place fails after two files were placed; the folder must hold the old
+    /// revision, whole, with no part, aside or new file left.
+    #[test]
+    fn a_rename_failure_midway_leaves_the_old_revision_whole() {
+        let remote = MemoryRemote::new();
+        let (entry, wanted) = publish(
+            &remote,
+            "midway",
+            &[
+                ("a.sav", b"new-a"),
+                ("b.sav", b"new-b"),
+                ("c.sav", b"new-c"),
+            ],
+        );
+        let saves = folder("midway-saves");
+        fs::write(saves.join("a.sav"), b"old-a").unwrap();
+        fs::write(saves.join("b.sav"), b"old-b").unwrap();
+        let local = scan(&saves, &["**".to_string()], &[]).unwrap();
+        // Moving the two old files aside takes two renames, then placing a and b takes two more:
+        // the fifth rename, placing c, fails only if the first four succeed.
+        RENAMES_LEFT.with(|cell| cell.set(Some(4)));
+        let result = download_entry(
+            &remote,
+            &Layout::new("root").unwrap(),
+            GAME,
+            &entry,
+            &wanted,
+            &saves,
+            &local,
+        );
+        RENAMES_LEFT.with(|cell| cell.set(None));
+        assert!(result.is_err());
+        assert_eq!(fs::read(saves.join("a.sav")).unwrap(), b"old-a");
+        assert_eq!(fs::read(saves.join("b.sav")).unwrap(), b"old-b");
+        assert_eq!(names(&saves), ["a.sav", "b.sav"]);
+    }
+
+    /// S11: on a case-folding file system `Save.sav` and `save.sav` are one file. The download
+    /// replaces it and nothing is counted as deleted.
+    #[test]
+    fn a_case_only_difference_does_not_delete_the_download() {
+        let remote = MemoryRemote::new();
+        let (entry, wanted) = publish(&remote, "fold", &[("save.sav", b"new")]);
+        let saves = folder("fold-saves");
+        fs::write(saves.join("Save.sav"), b"old").unwrap();
+        let local = scan(&saves, &["**".to_string()], &[]).unwrap();
+        let counts = download(
+            &remote,
+            &Layout::new("root").unwrap(),
+            GAME,
+            &entry,
+            &wanted,
+            &saves,
+            &local,
+            true,
+        )
+        .unwrap();
+        assert_eq!(counts.deleted, 0);
+        assert_eq!(fs::read(saves.join("save.sav")).unwrap(), b"new");
+        assert_eq!(names(&saves), ["save.sav"]);
     }
 }
