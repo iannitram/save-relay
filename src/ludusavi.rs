@@ -439,7 +439,13 @@ fn folder_map(
             folder.trim_end_matches('/')
         };
         if guess { &mut guessed } else { &mut solid }.insert(folder.to_owned());
-        folders.entry(folder.to_owned()).or_default().push(pattern);
+        // Where another path makes the folder clear, a missing one is matched as either shape.
+        let shapes = if guess {
+            vec![format!("{pattern}/**"), pattern]
+        } else {
+            vec![pattern]
+        };
+        folders.entry(folder.to_owned()).or_default().extend(shapes);
     }
     let any_guess = !guessed.is_empty();
     guessed.retain(|folder| !solid.contains(folder));

@@ -533,7 +533,11 @@ fn shared_folder_collects_patterns_and_drops_missing_folders() {
         "<home>/absent/*.sav": {"tags": ["save"]}
     }));
     let located = locate(&entry, &facts(Platform::Mac), &["fixture/home/saves"], &[]).unwrap();
-    assert_eq!(located.manifest.include, ["*.sav", "profile.dat"]);
+    // `profile.dat` is not on disk, so it may still be made as a file or a folder.
+    assert_eq!(
+        located.manifest.include,
+        ["*.sav", "profile.dat", "profile.dat/**"]
+    );
     assert_eq!(located.saves_dir, Path::new("fixture/home/saves"));
 }
 
@@ -562,4 +566,18 @@ fn parent_segments_and_windows_reserved_names_never_reach_the_manifest() {
         Err(Error::ManifestInvalid(message)) => assert!(message.contains("CON.sav")),
         other => panic!("expected an invalid manifest, got {other:?}"),
     }
+}
+
+// A glob-less path that is not on disk, in a folder another path makes clear, is matched both as
+// a file and as a folder: the game may make either, and neither shape is guessed.
+#[test]
+fn a_missing_glob_less_path_in_a_clear_folder_matches_either_shape() {
+    let entry = entry(json!({
+        "<winDocuments>/Saved Games/*.cfg": {"tags": ["save"]},
+        "<winDocuments>/Saved Games/Hades": {"tags": ["save"]}
+    }));
+    let parent = "fixture/documents/Saved Games";
+    let located = locate(&entry, &facts(Platform::Windows), &[parent], &[parent]).unwrap();
+    assert_eq!(located.saves_dir, Path::new(parent));
+    assert_eq!(located.manifest.include, ["*.cfg", "Hades", "Hades/**"]);
 }
