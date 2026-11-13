@@ -160,7 +160,7 @@ fn native_linux_xdg_data_file_uses_parent() {
     let located = locate(
         &entry,
         &facts(Platform::Linux),
-        &["fixture/data/Hades"],
+        &["fixture/data/Hades", "fixture/data/Hades/profile.sav"],
         &[],
     )
     .unwrap();
@@ -244,6 +244,20 @@ fn a_glob_less_path_that_is_not_on_disk_stays_unclear() {
     assert_eq!(located.saves_dir, Path::new(folder));
     assert_eq!(located.manifest.include, ["**"]);
     assert!(located.existed);
+}
+
+// The parent of a glob-less path that is not on disk is a guess even when the parent is on disk:
+// Hades' `Saved Games/Hades` is missing, `Saved Games` is there, and the saves do not go there.
+#[test]
+fn a_missing_leaf_under_a_present_parent_stays_unclear() {
+    let parent = "fixture/documents/Saved Games";
+    let message = unclear(locate(
+        &hades(),
+        &facts(Platform::Windows),
+        &[parent],
+        &[parent],
+    ));
+    assert!(message.contains("no existing"), "{message}");
 }
 
 // A lone folder named by a glob counts the glob-less path beside it as a guess too, so the folder
@@ -336,6 +350,20 @@ fn a_prefix_folder_and_a_native_folder_on_disk_are_unclear_either_way() {
     proton.proton = true;
     let message = unclear(locate(&entry, &proton, &both, &[]));
     assert!(message.contains(NATIVE_SAVES), "{message}");
+}
+
+// A glob-less native rule whose leaf is missing names no native folder, so a Proton launch is
+// not unclear just because its parent (`~/.local/share`) is on disk.
+#[test]
+fn a_proton_launch_ignores_a_glob_less_native_rule_whose_leaf_is_missing() {
+    let entry = entry(json!({
+        "<winDocuments>/Saved Games/Hades/*.sav": {"tags": ["save"], "when": [{"os": "windows"}]},
+        "<xdgData>/Hades": {"tags": ["save"], "when": [{"os": "linux", "store": "steam"}]}
+    }));
+    let mut proton = facts(Platform::Linux);
+    proton.proton = true;
+    let located = locate(&entry, &proton, &["fixture/data"], &["fixture/data"]).unwrap();
+    assert_eq!(located.saves_dir, Path::new(PREFIX_SAVES));
 }
 
 #[test]
@@ -528,7 +556,7 @@ fn parent_segments_and_windows_reserved_names_never_reach_the_manifest() {
     match locate(
         &reserved,
         &facts(Platform::Mac),
-        &["fixture/home/saves"],
+        &["fixture/home/saves", "fixture/home/saves/CON.sav"],
         &[],
     ) {
         Err(Error::ManifestInvalid(message)) => assert!(message.contains("CON.sav")),

@@ -307,15 +307,16 @@ pub fn translate(
     is_dir: &dyn Fn(&Path) -> bool,
 ) -> Result<Located> {
     let (candidates, dropped) = named_candidates(entry, facts, Some(name));
-    let (mut folders, guessed) = folder_map(&candidates, exists, is_dir);
+    let (mut folders, guessed, any_guess) = folder_map(&candidates, exists, is_dir);
     let named = folders.keys().cloned().collect::<Vec<_>>();
     let tried = named.join(", ");
     // A lone folder that a glob names need not exist yet: `pull` makes it when the server has
     // saves. A path with no glob that is not on disk could be a folder or a file, so it never
     // qualifies. Otherwise only the folders that exist count.
-    let lone_new = folders.len() == 1 && dropped == 0 && guessed.is_empty() && !named[0].is_empty();
+    // A folder that only such a path names is a guessed parent, so it does not count either.
+    let lone_new = folders.len() == 1 && dropped == 0 && !any_guess && !named[0].is_empty();
     if !lone_new {
-        folders.retain(|folder, _| exists(Path::new(folder)));
+        folders.retain(|folder, _| exists(Path::new(folder)) && !guessed.contains(folder));
     }
     if let Some(folder) = folders
         .keys()
@@ -400,24 +401,25 @@ fn other_way_folder(
         ..facts.clone()
     };
     let (candidates, _) = named_candidates(entry, &other, Some(name));
-    let (folders, _) = folder_map(&candidates, exists, is_dir);
-    folders
-        .into_keys()
-        .find(|folder| !named.contains(folder) && exists(Path::new(folder)))
+    let (folders, guessed, _) = folder_map(&candidates, exists, is_dir);
+    folders.into_keys().find(|folder| {
+        !named.contains(folder) && !guessed.contains(folder) && exists(Path::new(folder))
+    })
 }
 
 /// The candidates grouped by the folder each names, with the include pattern under it, and the
 /// folders that rest on a guess. A path with a glob splits at the end of its last glob-free
 /// segment; a path that `is_dir` is a folder (`**`); any other path's parent is the folder and its
 /// last segment the pattern. A path of the last kind that is not on disk could as well be a
-/// folder, so its folder is in the second set.
+/// folder: the second set holds the folders that only such paths name, and the flag says whether
+/// any candidate was one.
 fn folder_map(
     candidates: &[String],
     exists: &dyn Fn(&Path) -> bool,
     is_dir: &dyn Fn(&Path) -> bool,
-) -> (BTreeMap<String, Vec<String>>, BTreeSet<String>) {
+) -> (BTreeMap<String, Vec<String>>, BTreeSet<String>, bool) {
     let mut folders: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut guessed = BTreeSet::new();
+    let (mut guessed, mut solid) = (BTreeSet::new(), BTreeSet::new());
     for candidate in candidates {
         let mut guess = false;
         let (folder, pattern) = if let Some(glob) = candidate.find(['*', '?']) {
@@ -436,12 +438,12 @@ fn folder_map(
         } else {
             folder.trim_end_matches('/')
         };
-        if guess {
-            guessed.insert(folder.to_owned());
-        }
+        if guess { &mut guessed } else { &mut solid }.insert(folder.to_owned());
         folders.entry(folder.to_owned()).or_default().push(pattern);
     }
-    (folders, guessed)
+    let any_guess = !guessed.is_empty();
+    guessed.retain(|folder| !solid.contains(folder));
+    (folders, guessed, any_guess)
 }
 
 /// Refuse folders that could expose a whole filesystem, user profile, platform directory, or
