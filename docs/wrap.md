@@ -70,7 +70,17 @@ save-relay answer steam-1234560 play-anyway
 
 ## When the saves folder is unclear
 
-`which <appid>` exits 2 with `save_location_unclear` when there is no single existing folder. `wrap` in that case prints the error and starts the game without sync (the game still starts; nothing is pushed). To fix it, write your own manifest for the game (see manifest.md) and pass it once: `wrap --manifest <file> -- %command%`. save-relay remembers it for that game.
+`which <appid>` exits 2 with `save_location_unclear` when there is no single folder to use. `wrap` in that case prints the error and starts the game without sync (the game still starts; nothing is pushed). To fix it, write your own manifest for the game (see manifest.md) and pass it once: `wrap --manifest <file> -- %command%`. save-relay remembers it for that game.
+
+A save path that cannot be resolved on this machine counts toward "exactly one" too: an unknown placeholder, a `<storeUserId>` with more than one Steam user, or a `<base>` with no appmanifest. With one resolvable folder and such a path beside it, the location is unclear, not that folder.
+
+## A machine that has never run the game
+
+The ludusavi data names the game's saves folder even where the game has never run. When a save path with a glob is the only one named (Hades on Linux: `~/.local/share/Hades/*.sav`), save-relay uses its folder without requiring it to exist. The first `wrap` (or `pull`) on that machine downloads the server's saves into the folder, creating it, and that first launch is not a conflict. A folder that did not exist when it was located is not remembered for the game: the next launch locates it again.
+
+A save path with no glob that is not on disk yet (Hades' `Saved Games/Hades` on a machine that has not run it) stays `save_location_unclear` until the game has run once: it could be a folder or a file, and save-relay does not guess from the name.
+
+Whether a Windows game runs under Proton comes from the launch (Steam sets `STEAM_COMPAT_DATA_PATH`), not from the prefix folder being on disk. If a Proton prefix folder and a native saves folder are both on disk, the location is unclear and the person says which with their own manifest; a leftover prefix never wins.
 
 ## When Steam force-closes the game (Linux, macOS)
 

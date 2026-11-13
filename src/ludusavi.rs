@@ -7,10 +7,13 @@
 //!
 //! An entry is translated to our own `manifest::Manifest` for one machine: its placeholders,
 //! its `when` filter, only paths tagged `save`, and on Linux a Windows-only game under Proton
-//! maps into the app's prefix. One clear folder or nothing: no entry, no save path for this OS,
-//! or more than one existing folder that could be it is `Error::SaveLocationUnclear`, never a
-//! guess. A manifest of the person's own (`--manifest`, or one remembered for that game id)
-//! always wins over this data.
+//! maps into the app's prefix (whether it does is the launch's to say: `Facts::proton`). One
+//! clear folder or nothing: no entry, no save path for this OS, a save path that cannot be
+//! resolved here (it still counts as a candidate), more than one existing folder that could be
+//! it, or a Proton prefix folder and a native folder both on disk, is `Error::SaveLocationUnclear`,
+//! never a guess. A lone folder that a glob names need not exist yet; a path with no glob that is
+//! not on disk is never taken as a folder or as a file from its name. A manifest of the person's
+//! own (`--manifest`, or one remembered for that game id) always wins over this data.
 //!
 //! ```yaml
 //! Hades:
@@ -29,7 +32,7 @@ use crate::http::{Request, Transport};
 use crate::manifest::Manifest;
 use crate::platform::{AppDirs, PathVars, Platform};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// The data's address.
@@ -178,8 +181,9 @@ pub struct Facts {
     pub user_id: Option<String>,
     /// `<osUserName>`.
     pub os_user: String,
-    /// Linux, a Windows game run through Proton: Windows placeholders map into
-    /// `steam::proton_prefix(library, app_id)/drive_c/users/steamuser/` (`AppData/Roaming`,
+    /// Linux, a Windows game run through Proton, as this launch says (Steam sets
+    /// `STEAM_COMPAT_DATA_PATH`), not as the prefix folder being on disk: Windows placeholders map
+    /// into `steam::proton_prefix(library, app_id)/drive_c/users/steamuser/` (`AppData/Roaming`,
     /// `AppData/Local`, `Documents`), `<home>` to that user folder, `<osUserName>` to `steamuser`.
     pub proton: bool,
 }
@@ -189,10 +193,14 @@ pub struct Facts {
 /// known, expanded with `facts`. `/`-separated, glob characters (`*`, `?`, `**`) kept, sorted,
 /// no duplicates. A path with a `..` segment is dropped.
 pub fn candidates(entry: &Entry, facts: &Facts) -> Vec<String> {
-    named_candidates(entry, facts, None)
+    named_candidates(entry, facts, None).0
 }
 
-fn named_candidates(entry: &Entry, facts: &Facts, name: Option<&str>) -> Vec<String> {
+/// `candidates`, and how many save templates apply here but cannot be expanded (an unknown or
+/// unclosed placeholder, no single Steam user, no appmanifest, a `..` segment): those count
+/// toward "exactly one" in `translate`.
+fn named_candidates(entry: &Entry, facts: &Facts, name: Option<&str>) -> (Vec<String>, usize) {
+    let mut dropped = 0;
     let proton = facts.platform == Platform::Linux && facts.proton;
     let os = if proton {
         "windows"
@@ -262,13 +270,14 @@ fn named_candidates(entry: &Entry, facts: &Facts, name: Option<&str>) -> Vec<Str
             // A `..` segment would let a saves folder or pattern leave the folder it names.
             (!path.split('/').any(|segment| segment == "..")).then_some(path)
         };
-        if let Some(path) = expand() {
-            paths.push(path);
+        match expand() {
+            Some(path) => paths.push(path),
+            None => dropped += 1,
         }
     }
     paths.sort();
     paths.dedup();
-    paths
+    (paths, dropped)
 }
 
 /// A wrapped game as save-relay syncs it: our manifest (id `steam::game_id(app_id)`, the
@@ -277,13 +286,19 @@ fn named_candidates(entry: &Entry, facts: &Facts, name: Option<&str>) -> Vec<Str
 pub struct Located {
     pub manifest: Manifest,
     pub saves_dir: PathBuf,
+    /// Whether `saves_dir` was on disk when it was located. A folder that was not is not the
+    /// game's record: it is located again on the next launch.
+    pub existed: bool,
 }
 
 /// Translate one entry: each candidate splits at its first segment with a glob character into
 /// a folder and an include pattern (no glob: the folder is the path's parent and the pattern its
-/// last segment, or `**` when `is_dir` says it is a folder). Folders that do not exist (`exists`)
-/// are dropped. Exactly one folder left: `Located`, with every pattern under it. None, or more
-/// than one: `Error::SaveLocationUnclear` naming them.
+/// last segment, or `**` when `is_dir` says it is a folder). A candidate that cannot be expanded
+/// here counts as well. Exactly one folder, named by a glob, and nothing dropped: `Located`, even
+/// if the folder does not exist yet (`pull` makes it). Otherwise the folders that exist (`exists`)
+/// are counted: exactly one, and nothing dropped, is `Located`; none, or more, is
+/// `Error::SaveLocationUnclear` naming them. So is an existing folder that the rules for the other
+/// way of running the game (Proton or native, on Linux) name when this launch's rules name another.
 pub fn translate(
     name: &str,
     entry: &Entry,
@@ -291,33 +306,38 @@ pub fn translate(
     exists: &dyn Fn(&Path) -> bool,
     is_dir: &dyn Fn(&Path) -> bool,
 ) -> Result<Located> {
-    let mut folders: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for candidate in named_candidates(entry, facts, Some(name)) {
-        let (folder, pattern) = if let Some(glob) = candidate.find(['*', '?']) {
-            let split = candidate[..glob].rfind('/').map_or(0, |index| index + 1);
-            (&candidate[..split], candidate[split..].to_owned())
-        } else if is_dir(Path::new(&candidate)) {
-            (candidate.as_str(), "**".to_owned())
-        } else {
-            let split = candidate.rfind('/').map_or(0, |index| index + 1);
-            (&candidate[..split], candidate[split..].to_owned())
-        };
-        // Keep a filesystem root's slash; other trailing slashes do not distinguish folders.
-        let folder = if folder == "/" || folder.ends_with(":/") {
-            folder
-        } else {
-            folder.trim_end_matches('/')
-        };
-        folders.entry(folder.to_owned()).or_default().push(pattern);
+    let (candidates, dropped) = named_candidates(entry, facts, Some(name));
+    let (mut folders, guessed, any_guess) = folder_map(&candidates, exists, is_dir);
+    let named = folders.keys().cloned().collect::<Vec<_>>();
+    let tried = named.join(", ");
+    // A lone folder that a glob names need not exist yet: `pull` makes it when the server has
+    // saves. A path with no glob that is not on disk could be a folder or a file, so it never
+    // qualifies. Otherwise only the folders that exist count.
+    // A folder that only such a path names is a guessed parent, so it does not count either.
+    let lone_new = folders.len() == 1 && dropped == 0 && !any_guess && !named[0].is_empty();
+    if !lone_new {
+        folders.retain(|folder, _| exists(Path::new(folder)) && !guessed.contains(folder));
     }
-    let tried = folders.keys().cloned().collect::<Vec<_>>().join(", ");
-    folders.retain(|folder, _| exists(Path::new(folder)));
     if let Some(folder) = folders
         .keys()
         .find(|folder| unsafe_save_folder(folder, facts))
     {
         return Err(Error::SaveLocationUnclear(format!(
             "{name} resolves to an overly broad saves folder {folder:?}"
+        )));
+    }
+    if let Some(other) =
+        other_way_folder(entry, facts, name, &named, exists, is_dir).filter(|_| !named.is_empty())
+    {
+        return Err(Error::SaveLocationUnclear(format!(
+            "{name}: saves exist both under Proton and natively ({other:?} is the other way's \
+             folder; this launch names {tried}); say which with your own manifest"
+        )));
+    }
+    if dropped > 0 {
+        return Err(Error::SaveLocationUnclear(format!(
+            "{name}: {dropped} save path(s) could not be resolved here (an unknown placeholder, \
+             no single Steam user, or no appmanifest); folders tried: {tried}"
         )));
     }
     if folders.len() != 1 {
@@ -332,6 +352,7 @@ pub fn translate(
         return Err(Error::SaveLocationUnclear(reason));
     }
     let (folder, mut include) = folders.into_iter().next().expect("one folder");
+    let existed = exists(Path::new(&folder));
     include.sort();
     include.dedup();
     // The ludusavi data is external input: refuse a pattern a Windows sync client cannot
@@ -357,7 +378,78 @@ pub fn translate(
     Ok(Located {
         saves_dir: PathBuf::from(&folder),
         manifest,
+        existed,
     })
+}
+
+/// The folder an existing save of the other way of running the game would be in: on Linux, the
+/// rules with `proton` flipped (the prefix against the native paths). It is named only when it is
+/// on disk and this launch's rules (`named`) do not name it too.
+fn other_way_folder(
+    entry: &Entry,
+    facts: &Facts,
+    name: &str,
+    named: &[String],
+    exists: &dyn Fn(&Path) -> bool,
+    is_dir: &dyn Fn(&Path) -> bool,
+) -> Option<String> {
+    if facts.platform != Platform::Linux {
+        return None;
+    }
+    let other = Facts {
+        proton: !facts.proton,
+        ..facts.clone()
+    };
+    let (candidates, _) = named_candidates(entry, &other, Some(name));
+    let (folders, guessed, _) = folder_map(&candidates, exists, is_dir);
+    folders.into_keys().find(|folder| {
+        !named.contains(folder) && !guessed.contains(folder) && exists(Path::new(folder))
+    })
+}
+
+/// The candidates grouped by the folder each names, with the include pattern under it, and the
+/// folders that rest on a guess. A path with a glob splits at the end of its last glob-free
+/// segment; a path that `is_dir` is a folder (`**`); any other path's parent is the folder and its
+/// last segment the pattern. A path of the last kind that is not on disk could as well be a
+/// folder: the second set holds the folders that only such paths name, and the flag says whether
+/// any candidate was one.
+fn folder_map(
+    candidates: &[String],
+    exists: &dyn Fn(&Path) -> bool,
+    is_dir: &dyn Fn(&Path) -> bool,
+) -> (BTreeMap<String, Vec<String>>, BTreeSet<String>, bool) {
+    let mut folders: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let (mut guessed, mut solid) = (BTreeSet::new(), BTreeSet::new());
+    for candidate in candidates {
+        let mut guess = false;
+        let (folder, pattern) = if let Some(glob) = candidate.find(['*', '?']) {
+            let split = candidate[..glob].rfind('/').map_or(0, |index| index + 1);
+            (&candidate[..split], candidate[split..].to_owned())
+        } else if is_dir(Path::new(candidate)) {
+            (candidate.as_str(), "**".to_owned())
+        } else {
+            guess = !exists(Path::new(candidate));
+            let split = candidate.rfind('/').map_or(0, |index| index + 1);
+            (&candidate[..split], candidate[split..].to_owned())
+        };
+        // Keep a filesystem root's slash; other trailing slashes do not distinguish folders.
+        let folder = if folder == "/" || folder.ends_with(":/") {
+            folder
+        } else {
+            folder.trim_end_matches('/')
+        };
+        if guess { &mut guessed } else { &mut solid }.insert(folder.to_owned());
+        // Where another path makes the folder clear, a missing one is matched as either shape.
+        let shapes = if guess {
+            vec![format!("{pattern}/**"), pattern]
+        } else {
+            vec![pattern]
+        };
+        folders.entry(folder.to_owned()).or_default().extend(shapes);
+    }
+    let any_guess = !guessed.is_empty();
+    guessed.retain(|folder| !solid.contains(folder));
+    (folders, guessed, any_guess)
 }
 
 /// Refuse folders that could expose a whole filesystem, user profile, platform directory, or
