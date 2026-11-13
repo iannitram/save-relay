@@ -71,3 +71,9 @@ save-relay answer steam-1234560 play-anyway
 ## When the saves folder is unclear
 
 `which <appid>` exits 2 with `save_location_unclear` when there is no single existing folder. `wrap` in that case prints the error and starts the game without sync (the game still starts; nothing is pushed). To fix it, write your own manifest for the game (see manifest.md) and pass it once: `wrap --manifest <file> -- %command%`. save-relay remembers it for that game.
+
+## When Steam force-closes the game (Linux, macOS)
+
+On SIGTERM or SIGHUP (Steam's force exit, a logout, a shutdown) `wrap` stops waiting, passes the signal on to the game, runs the exit push and clears this device's `playing.json` mark, then exits with 128 plus the signal number. A second signal while it does this ends `wrap` at once and leaves the mark, so the next launch handles it as an interrupted session.
+
+What is not covered yet: `wrap` does not wait for a game that ignores the signal it was sent, so the exit push can run while that game is still writing (a half-written set can be pushed); a signal during the pull or the choice wait before the game starts is not handled; and on Windows the console close, logoff and shutdown events are not handled (#264 tracks the Windows half and a bounded wait).
