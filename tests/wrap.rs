@@ -279,6 +279,11 @@ impl Machine {
     fn run(&self, remote: &MemoryRemote, args: Vec<String>) -> (i32, String) {
         std::env::set_var("SAVE_RELAY_STEAM_DIR", &self.steam);
         std::env::set_var("SteamAppId", APP_ID);
+        // On Linux the game runs under Proton, as Steam says with this variable at launch.
+        if cfg!(target_os = "linux") {
+            let prefix = self.steam.join("steamapps/compatdata").join(APP_ID);
+            std::env::set_var("STEAM_COMPAT_DATA_PATH", prefix);
+        }
         let refuse: &dyn Fn(&str) -> save_relay::Result<()> =
             &|_: &str| Err(Error::Unreachable("no browser in this test".into()));
         let net = Net {
