@@ -225,3 +225,16 @@ fn usage_names_every_command_and_the_password_rule() {
     }
     assert!(text.contains("standard input"));
 }
+
+#[test]
+fn history_and_picture_reject_an_invalid_game_id() {
+    for line in [
+        "history ../x",
+        "history -x",
+        "picture ../x e --out o.png",
+        "picture a/b e --out o.png",
+    ] {
+        assert!(matches!(p(line), Err(Error::Usage(_))), "{line}");
+    }
+    assert!(p("history ok-game").is_ok());
+}

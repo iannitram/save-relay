@@ -386,6 +386,9 @@ pub fn parse(args: &[String]) -> Result<Args> {
         "history" => {
             let flags = split(&args[1..], &["--slot"], &[])?;
             require(&flags.positionals, 1, &["<game>"])?;
+            if !is_game_id(flags.positionals[0]) {
+                return Err(Error::Usage("invalid <game> id".into()));
+            }
             Command::History {
                 game: selected_game(flags.positionals[0], &flags)?,
             }
@@ -633,6 +636,9 @@ pub fn parse(args: &[String]) -> Result<Args> {
         "picture" => {
             let flags = split(&args[1..], &["--out", "--slot"], &[])?;
             require(&flags.positionals, 2, &["<game>", "<entry>"])?;
+            if !is_game_id(flags.positionals[0]) {
+                return Err(Error::Usage("invalid <game> id".into()));
+            }
             let out = match flags.flag("--out") {
                 Some(value) => PathBuf::from(value),
                 None => return missing("--out"),
@@ -1915,10 +1921,14 @@ fn setup(
         root: config.root.clone(),
         credential_store: cx.creds.kind().to_string(),
     };
-    let text = format!(
+    let mut text = format!(
         "Set up: this machine ({}) syncs through {} as {}, in the folder '{}'.\nThe app password is stored in the {} credential store.",
         data.device, data.server, data.user, data.root, data.credential_store
     );
+    if let Some(warning) = webdav::http_warning(server) {
+        text.push('\n');
+        text.push_str(&warning);
+    }
     Ok(outcome("setup", &data, text, 0))
 }
 
@@ -1999,8 +2009,11 @@ fn setup_service(
                 transport,
                 clock,
             );
-            // The waiting sign-in is used up whether or not it worked.
-            cx.creds.delete(&account)?;
+            // The waiting sign-in is used up whether or not it worked, except when the network
+            // was unreachable: nothing reached the service, so the person can run `--finish` again.
+            if !matches!(finished, Err(Error::Unreachable(_))) {
+                cx.creds.delete(&account)?;
+            }
             let tokens = finished.map_err(sign_in_refused)?;
             finish_setup(service, tokens, client, kind, &device, &layout, cx)
         }

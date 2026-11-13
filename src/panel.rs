@@ -403,8 +403,17 @@ pub fn serve(
         let _ = oauth::open_browser(&url);
     }
     for mut stream in listener.incoming().flatten() {
-        // A client that fails or goes away is dropped; the next one is served.
-        let _ = handle(&mut stream, &token, run);
+        // A client that fails or goes away is dropped; the next one is served. A command that
+        // panics is that request's 500, not the end of the server.
+        let handled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            handle(&mut stream, &token, run)
+        }));
+        if handled.is_err() {
+            let _ = write_answer(
+                &mut stream,
+                (500, TEXT, b"the command failed unexpectedly".to_vec()),
+            );
+        }
     }
     Ok(())
 }

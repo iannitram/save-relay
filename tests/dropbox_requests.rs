@@ -111,3 +111,9 @@ fn classify_missing_paths() {
     let other = Outcome::Err(Error::Server("dropbox 409: nope".into()));
     assert_eq!(classify(Op::Put, 409, "nope", "g/x"), other);
 }
+
+#[test]
+fn header_json_escapes_delete_u007f() {
+    let text = header_json(&json!("a\u{7f}b"));
+    assert_eq!(text, r#""a\u007fb""#);
+}

@@ -259,15 +259,155 @@ fn rollback(placed: &[PathBuf], staged: &[(PathBuf, PathBuf)], moved: &[(PathBuf
     }
 }
 
-/// Make `saves_dir` hold exactly `wanted` (the files of history entry `entry`): download each
-/// file whose hash differs from `local`'s into `<name>.save-relay-part`, fsync it, check its
-/// SHA-256 (a mismatch is `Error::Server` and nothing is replaced), then set the modification
-/// time to the entry's `mtime` (`File::set_modified`), so the game's load list shows when the
-/// save was made. The whole change is one step: every old file that changes or goes is first
-/// moved aside, then the parts are renamed into place, then the aside files are removed. A
-/// failure at any point puts the pre-pull files back and leaves no part file (S10). Files whose
-/// names differ only by case count as the same name on a case-folding file system (S11).
-/// Creates folders as needed.
+/// Files downloaded and checked, waiting in part files to be renamed into place
+/// (`commit_staged`). Dropping it without committing removes the part files.
+#[derive(Debug)]
+pub struct Staged {
+    parts: Vec<(PathBuf, PathBuf)>,
+    local: SaveSet,
+    wanted: SaveSet,
+    saves_dir: PathBuf,
+    /// Names compare without case (`FOLD_CASE`, or what a test asks for).
+    fold: bool,
+}
+
+impl Drop for Staged {
+    fn drop(&mut self) {
+        for (part, _) in &self.parts {
+            let _ = fs::remove_file(part);
+        }
+    }
+}
+
+/// The first half of `download_entry`: check every path of `wanted`, download each file whose
+/// hash differs from `local`'s into `<name>.save-relay-part`, fsync it, check its SHA-256 (a
+/// mismatch is `Error::Server`) and set its modification time to the entry's `mtime`. Nothing is
+/// replaced yet; `restore` does this before it publishes anything.
+pub fn stage_entry(
+    remote: &dyn Remote,
+    layout: &Layout,
+    game: &str,
+    entry: &str,
+    wanted: &SaveSet,
+    saves_dir: &Path,
+    local: &SaveSet,
+) -> Result<Staged> {
+    stage(
+        remote, layout, game, entry, wanted, saves_dir, local, FOLD_CASE,
+    )
+}
+
+/// `stage_entry` with the name comparison given (`fold`: case-insensitive names).
+#[allow(clippy::too_many_arguments)]
+fn stage(
+    remote: &dyn Remote,
+    layout: &Layout,
+    game: &str,
+    entry: &str,
+    wanted: &SaveSet,
+    saves_dir: &Path,
+    local: &SaveSet,
+    fold: bool,
+) -> Result<Staged> {
+    // Reserved names (a sidecar, a part file) are neither fetched nor replaced nor deleted.
+    let wanted = without_reserved(wanted);
+    let local = without_reserved(local);
+    for file in wanted.files.iter().chain(&local.files) {
+        check_save_path(&file.path)?;
+    }
+    let entry_dir = layout.entry_dir(game, entry);
+    let mut staged = Staged {
+        parts: Vec::new(),
+        local: local.clone(),
+        wanted: wanted.clone(),
+        saves_dir: saves_dir.to_path_buf(),
+        fold,
+    };
+    // A failure leaves part files in `staged.parts`; dropping `staged` removes them.
+    stage_downloads(
+        remote,
+        &entry_dir,
+        &wanted,
+        saves_dir,
+        &local,
+        &mut staged.parts,
+    )?;
+    Ok(staged)
+}
+
+/// The second half of `download_entry`: make `saves_dir` hold exactly the staged `wanted`. The
+/// whole change is one step: every old file that changes or goes is first moved aside, then the
+/// parts are renamed into place, then the aside files are removed. A failure at any point puts
+/// the pre-pull files back and leaves no part file (S10). Files whose names differ only by case
+/// count as the same name on a case-folding file system (S11). Creates folders as needed.
+pub fn commit_staged(mut staged: Staged) -> Result<Counts> {
+    let parts = std::mem::take(&mut staged.parts);
+    let (local, wanted) = (&staged.local, &staged.wanted);
+    let saves_dir: &Path = &staged.saves_dir;
+    let fold = staged.fold;
+    let same_name = |a: &str, b: &str| {
+        if fold {
+            a.to_lowercase() == b.to_lowercase()
+        } else {
+            a == b
+        }
+    };
+    // Set aside: each old file not kept as it is, then whatever sits on a download's target.
+    let mut moved: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let mut removed: Vec<PathBuf> = Vec::new();
+    let mut to_move: Vec<PathBuf> = Vec::new();
+    for old in &local.files {
+        let kept = wanted
+            .files
+            .iter()
+            .any(|w| w.path == old.path && w.sha256 == old.sha256);
+        if kept {
+            continue;
+        }
+        let path = local_path(saves_dir, &old.path);
+        if !wanted.files.iter().any(|w| same_name(&w.path, &old.path)) {
+            removed.push(path.clone());
+        }
+        to_move.push(path);
+    }
+    to_move.extend(parts.iter().map(|(_, target)| target.clone()));
+    for path in &to_move {
+        if let Err(err) = set_aside(path, &mut moved) {
+            rollback(&[], &parts, &moved);
+            return Err(err);
+        }
+    }
+    // Place: rename each part over its target (which is free now).
+    let mut placed: Vec<PathBuf> = Vec::new();
+    for (part, target) in &parts {
+        if let Err(e) = rename(part, target) {
+            rollback(&placed, &parts, &moved);
+            return Err(io_err(target, e));
+        }
+        placed.push(target.clone());
+    }
+    // Commit: the old files are gone for good, then their emptied folders go.
+    for (_, aside) in &moved {
+        let _ = fs::remove_file(aside);
+    }
+    for path in &removed {
+        let mut folder = path.parent().map(Path::to_path_buf);
+        while let Some(dir) = folder {
+            if dir == saves_dir || !dir.starts_with(saves_dir) || fs::remove_dir(&dir).is_err() {
+                break;
+            }
+            folder = dir.parent().map(Path::to_path_buf);
+        }
+    }
+    Ok(Counts {
+        downloaded: parts.len() as u32,
+        deleted: removed.len() as u32,
+        ..Counts::default()
+    })
+}
+
+/// Make `saves_dir` hold exactly `wanted` (the files of history entry `entry`): `stage_entry`,
+/// then `commit_staged`. A hash mismatch is `Error::Server` and nothing is replaced.
 pub fn download_entry(
     remote: &dyn Remote,
     layout: &Layout,
@@ -294,77 +434,9 @@ fn download(
     local: &SaveSet,
     fold: bool,
 ) -> Result<Counts> {
-    // Reserved names (a sidecar, a part file) are neither fetched nor replaced nor deleted.
-    let wanted = without_reserved(wanted);
-    let local = without_reserved(local);
-    for file in wanted.files.iter().chain(&local.files) {
-        check_save_path(&file.path)?;
-    }
-    let same_name = |a: &str, b: &str| {
-        if fold {
-            a.to_lowercase() == b.to_lowercase()
-        } else {
-            a == b
-        }
-    };
-    let entry_dir = layout.entry_dir(game, entry);
-    let mut staged: Vec<(PathBuf, PathBuf)> = Vec::new();
-    if let Err(err) = stage_downloads(remote, &entry_dir, &wanted, saves_dir, &local, &mut staged) {
-        rollback(&[], &staged, &[]);
-        return Err(err);
-    }
-    // Set aside: each old file not kept as it is, then whatever sits on a download's target.
-    let mut moved: Vec<(PathBuf, PathBuf)> = Vec::new();
-    let mut removed: Vec<PathBuf> = Vec::new();
-    let mut to_move: Vec<PathBuf> = Vec::new();
-    for old in &local.files {
-        let kept = wanted
-            .files
-            .iter()
-            .any(|w| w.path == old.path && w.sha256 == old.sha256);
-        if kept {
-            continue;
-        }
-        let path = local_path(saves_dir, &old.path);
-        if !wanted.files.iter().any(|w| same_name(&w.path, &old.path)) {
-            removed.push(path.clone());
-        }
-        to_move.push(path);
-    }
-    to_move.extend(staged.iter().map(|(_, target)| target.clone()));
-    for path in &to_move {
-        if let Err(err) = set_aside(path, &mut moved) {
-            rollback(&[], &staged, &moved);
-            return Err(err);
-        }
-    }
-    // Place: rename each part over its target (which is free now).
-    let mut placed: Vec<PathBuf> = Vec::new();
-    for (part, target) in &staged {
-        if let Err(e) = rename(part, target) {
-            rollback(&placed, &staged, &moved);
-            return Err(io_err(target, e));
-        }
-        placed.push(target.clone());
-    }
-    // Commit: the old files are gone for good, then their emptied folders go.
-    for (_, aside) in &moved {
-        let _ = fs::remove_file(aside);
-    }
-    for path in &removed {
-        let mut folder = path.parent().map(Path::to_path_buf);
-        while let Some(dir) = folder {
-            if dir == saves_dir || !dir.starts_with(saves_dir) || fs::remove_dir(&dir).is_err() {
-                break;
-            }
-            folder = dir.parent().map(Path::to_path_buf);
-        }
-    }
-    Ok(Counts {
-        downloaded: staged.len() as u32,
-        deleted: removed.len() as u32,
-        ..Counts::default()
-    })
+    commit_staged(stage(
+        remote, layout, game, entry, wanted, saves_dir, local, fold,
+    )?)
 }
 
 /// The file list of history entry `entry` (its `RECORD`). Missing: `Error::NotFound`;
