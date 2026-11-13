@@ -24,6 +24,23 @@ Glob patterns use these rules:
 - Patterns are relative to the saves folder, using `/` only
 - Patterns may not start with `/`, contain `\`, or contain a `..` segment
 
+## Machines with different patterns (S12)
+
+The patterns are per machine: each machine reads its own manifest, and the server keeps only the
+file list of the current revision. When two machines' `include` or `exclude` differ, a file one
+machine does not scan can still be in the revision another machine pushed:
+
+- A pull writes every file of the current revision to the saves folder, whatever this machine's
+  patterns say, so the file is on disk here.
+- Each sync then carries such a file into this machine's local set when it is still on disk with
+  the revision's hash. A push keeps it, and a launch does not read its absence as a change.
+- If such a file is missing from the saves folder (deleted by hand, or never pulled), the push
+  does not go ahead: it fails with a message naming the files, and the server is left alone. Pull
+  again, or make the two manifests agree.
+
+Keep the `include` and `exclude` lists the same on every machine that shares a game, so no file
+is ever left out of a push.
+
 ## Placeholders
 
 The following placeholders are supported:

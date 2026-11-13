@@ -12,7 +12,12 @@ import tempfile
 
 import decky  # supplied by Decky Loader
 
-TIMEOUT = 60
+# A command that prints nothing and moves no bytes for this long is stopped (seconds).
+STALL_TIMEOUT = 60
+# Transfers (pull, push, restore) may run longer while they still move bytes, up to this (seconds).
+TRANSFER_CEILING = 4 * 3600
+TRANSFER_COMMANDS = {"pull", "push", "restore"}
+PROGRESS_POLL = 1.0
 PLUGIN_DIR = Path(__file__).resolve().parent
 API_COMMANDS = {
     "status", "history", "restore", "pull", "push", "answer", "where", "which",
@@ -90,6 +95,52 @@ def api_args(command, args, picture_out):
     return result + ["--json"]
 
 
+def _progress(pid):
+    """Bytes the child has read and written so far (Linux /proc), or None when unknown."""
+    try:
+        counters = Path(f"/proc/{pid}/io").read_text()
+    except (OSError, ValueError):
+        return None
+    total = 0
+    for line in counters.splitlines():
+        if line.startswith(("rchar:", "wchar:")):
+            total += int(line.split()[1])
+    return total
+
+
+async def _communicate(process, command):
+    """Wait for the child's output. A transfer is stopped only when its I/O has stopped moving
+    for STALL_TIMEOUT, or when it runs past TRANSFER_CEILING; any other command past
+    STALL_TIMEOUT. Raises asyncio.TimeoutError after killing and reaping the child."""
+    loop = asyncio.get_running_loop()
+    task = asyncio.ensure_future(process.communicate())
+    started = moved = loop.time()
+    last = _progress(process.pid)
+    try:
+        while True:
+            done, _ = await asyncio.wait({task}, timeout=PROGRESS_POLL)
+            if done:
+                return task.result()
+            now = loop.time()
+            current = _progress(process.pid)
+            if current is not None and current != last:
+                last, moved = current, now
+            if command in TRANSFER_COMMANDS:
+                expired = now - moved >= STALL_TIMEOUT or now - started >= TRANSFER_CEILING
+            else:
+                expired = now - started >= STALL_TIMEOUT
+            if expired:
+                raise asyncio.TimeoutError()
+    except BaseException:
+        if process.returncode is None:
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+        await asyncio.wait({task})
+        raise
+
+
 class Plugin:
     async def _run(self, command, args, picture_out):
         try:
@@ -106,16 +157,7 @@ class Plugin:
                 binary, *argv, stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
             )
-            try:
-                stdout, _ = await asyncio.wait_for(process.communicate(), TIMEOUT)
-            except (asyncio.TimeoutError, asyncio.CancelledError):
-                if process.returncode is None:
-                    try:
-                        process.kill()
-                    except ProcessLookupError:
-                        pass
-                await process.communicate()
-                raise
+            stdout, _ = await _communicate(process, command)
             line = stdout.decode("utf-8")
             envelope = json.loads(line)
             if (not isinstance(envelope, dict)
