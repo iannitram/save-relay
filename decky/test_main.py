@@ -3,16 +3,74 @@
 import asyncio
 import importlib.util
 import json
+import os
 from pathlib import Path
+import sys
 import types
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
-import sys
 
 spec = importlib.util.spec_from_file_location("save_relay_decky", Path(__file__).with_name("main.py"))
 backend = importlib.util.module_from_spec(spec)
 with patch.dict(sys.modules, {"decky": types.ModuleType("decky")}):
     spec.loader.exec_module(backend)
+
+
+FAKE_CLI = """#!{python}
+import json, os, sys, time
+mode, folder = sys.argv[2], os.environ["FAKE_DIR"]
+if mode == "progress":
+    # Writes a little every 50 ms for about 2 s: longer than STALL_TIMEOUT, yet making progress.
+    with open(os.path.join(folder, "out"), "ab") as out:
+        for _ in range(40):
+            out.write(b"x" * 4096)
+            out.flush()
+            time.sleep(0.05)
+elif mode == "stall":
+    # Silent for far longer than STALL_TIMEOUT: must be stopped.
+    open(os.path.join(folder, "pid"), "w").write(str(os.getpid()))
+    time.sleep(30)
+print(json.dumps({{"ok": True, "command": sys.argv[1], "data": {{}}}}))
+"""
+
+
+class TransferProgressTests(unittest.IsolatedAsyncioTestCase):
+    """Real child processes: the watchdog reads the child's I/O counters on Linux."""
+
+    def setUp(self):
+        import tempfile
+        self.folder = tempfile.mkdtemp()
+        self.addCleanup(__import__("shutil").rmtree, self.folder, True)
+        fake = Path(self.folder) / "save-relay"
+        fake.write_text(FAKE_CLI.format(python=sys.executable))
+        fake.chmod(0o755)
+        for target, value in [
+            ("shutil.which", Mock(return_value=str(fake))),
+            ("os.access", Mock(return_value=False)),
+        ]:
+            patcher = patch.object(getattr(backend, target.split(".")[0]), target.split(".")[1], value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        env = patch.dict(os.environ, {"FAKE_DIR": self.folder})
+        env.start()
+        self.addCleanup(env.stop)
+        for name, value in [("STALL_TIMEOUT", 0.5), ("TRANSFER_CEILING", 20), ("PROGRESS_POLL", 0.05)]:
+            patcher = patch.object(backend, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    async def test_transfer_still_making_progress_is_not_timed_out(self):
+        envelope = json.loads(await backend.Plugin().run("push", {"game": "progress"}))
+        self.assertTrue(envelope["ok"], envelope)
+
+    async def test_stalled_transfer_is_stopped_and_reaped(self):
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        envelope = json.loads(await backend.Plugin().run("push", {"game": "stall"}))
+        self.assertEqual(envelope["error"]["message"], "save-relay timed out")
+        self.assertLess(loop.time() - started, 10)
+        pid = int((Path(self.folder) / "pid").read_text())
+        self.assertFalse(os.path.exists(f"/proc/{pid}"), "the stalled child was not reaped")
 
 
 class BackendTests(unittest.IsolatedAsyncioTestCase):
@@ -83,15 +141,20 @@ class BackendTests(unittest.IsolatedAsyncioTestCase):
         self.spawn.side_effect = FileNotFoundError()
         self.assert_error(await self.plugin.run("where", {}), "io")
 
-    async def test_timeout_kills_and_reaps(self):
+    async def test_non_transfer_timeout_kills_and_reaps(self):
+        finished = asyncio.Event()
+
+        async def hang():
+            await finished.wait()
+            return (b"", None)
+
         self.process.returncode = None
-        self.process.communicate.side_effect = [asyncio.TimeoutError(), (b"", None)]
-        wait_for = asyncio.wait_for
-        with patch.object(backend.asyncio, "wait_for", wraps=wait_for) as wait:
+        self.process.communicate.side_effect = hang
+        self.process.kill.side_effect = finished.set
+        with patch.object(backend, "STALL_TIMEOUT", 0.05), patch.object(backend, "PROGRESS_POLL", 0.01):
             self.assert_error(await self.plugin.run("where", {}), "io")
-        self.assertEqual(wait.call_args.args[1], backend.TIMEOUT)
         self.process.kill.assert_called_once()
-        self.assertEqual(self.process.communicate.await_count, 2)
+        self.assertEqual(self.process.communicate.await_count, 1)
 
     async def test_bad_json_empty_multiple_objects_and_wrong_envelopes(self):
         for stdout in [b"bad", b"", b"{}\n{}", b"null", b"[]", b"{}", b'\xff',
