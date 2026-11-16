@@ -1412,6 +1412,10 @@ fn wrap_command(
     });
     match ran {
         Some(code) => {
+            // with_remote has now attempted to save any rotated refresh token. Keep that
+            // storage inside the console handler's original 4.5 s cleanup budget.
+            #[cfg(windows)]
+            wrap::finish_console_cleanup();
             if let Err(error) = synced {
                 eprintln!("save-relay: {error}");
             }

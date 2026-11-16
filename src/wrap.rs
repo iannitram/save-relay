@@ -128,18 +128,16 @@ enum Played {
     /// The termination request: a signal on Unix, a console event on Windows.
     #[cfg_attr(not(any(unix, windows)), allow(dead_code))]
     Signalled(i32),
+    /// Windows may close wrap while a GUI game continues writing its saves.
+    #[cfg(windows)]
+    StillRunning(i32),
 }
 
-/// How long a game that was asked to stop gets to exit on its own before `wrap` ends it (F80,
-/// the #262 review). A game that ignores the stop would otherwise keep writing its saves while
-/// the exit push runs, so the push waits for the game to be gone: after this many seconds the
-/// game is killed and then pushed. Windows ends a process whose console handler has not returned
-/// within its own window (about 5 s on close, 5 to 20 s on logoff and shutdown), so the stop, this
-/// wait and the push together must fit in that window; a push Windows cuts short leaves the mark
-/// for the next launch, as a second signal does.
+/// Unix: give a signalled game this long to exit before killing it and pushing (F80).
 #[cfg(not(windows))]
 pub const STOP_WAIT_SECS: u64 = 3;
-/// Leave most of the console close window for the exit push.
+/// Windows: wait this long for the game to exit on its own. A game still running is left alone;
+/// skip the push and leave the mark. Leave most of the console close window for cleanup.
 #[cfg(windows)]
 pub const STOP_WAIT_SECS: u64 = 1;
 
@@ -150,8 +148,8 @@ use signals as stop;
 
 /// Start the game and wait for it, or for a termination request (F80, audit S3; #264 on
 /// Windows). On a request the game is asked to stop (`stop::forward`) and given `STOP_WAIT_SECS`
-/// to exit (`stop_game`); the exit push then runs. Unix and Windows only; elsewhere the game is
-/// waited for.
+/// to exit (`stop_game`). Windows skips the push if the game is still running; Unix kills and
+/// reaps it before pushing. Elsewhere the game is waited for.
 fn play(command: &[String]) -> Result<Played> {
     // Before the game starts: a request sent once the game runs must find the handlers in place.
     #[cfg(unix)]
@@ -168,7 +166,13 @@ fn play(command: &[String]) -> Result<Played> {
             }
             if let Some(signal) = stop::received() {
                 stop::forward(child.id(), signal);
-                stop_game(&mut child)?;
+                let stopped = stop_game(&mut child)?;
+                #[cfg(windows)]
+                if !stopped {
+                    return Ok(Played::StillRunning(signal));
+                }
+                #[cfg(unix)]
+                debug_assert!(stopped);
                 return Ok(Played::Signalled(signal));
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
@@ -183,11 +187,10 @@ fn play(command: &[String]) -> Result<Played> {
     }
 }
 
-/// After a stop request: wait up to `STOP_WAIT_SECS` for the game to exit, then end it and reap
-/// it, so the exit push never runs beside a game that is still writing. Failure to establish
-/// that the game has stopped must leave the mark and skip the push.
+/// After a stop request: wait up to `STOP_WAIT_SECS` for the game to exit. Unix then kills and
+/// reaps it; Windows leaves it running and returns false to skip the push and keep the mark.
 #[cfg(any(unix, windows))]
-fn stop_game(child: &mut Child) -> Result<()> {
+fn stop_game(child: &mut Child) -> Result<bool> {
     let until = std::time::Instant::now() + std::time::Duration::from_secs(STOP_WAIT_SECS);
     while std::time::Instant::now() < until {
         if child
@@ -195,23 +198,30 @@ fn stop_game(child: &mut Child) -> Result<()> {
             .map_err(|error| Error::Io(format!("cannot wait for the game: {error}")))?
             .is_some()
         {
-            return Ok(());
+            return Ok(true);
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
-    note(format!(
-        "the game did not stop within {STOP_WAIT_SECS} s; ending it"
-    ));
-    if let Err(error) = child.kill() {
-        // The game may have exited between the last poll and the kill.
-        if child.try_wait().ok().flatten().is_none() {
-            return Err(Error::Io(format!("cannot stop the game: {error}")));
-        }
+    #[cfg(windows)]
+    {
+        Ok(false)
     }
-    child
-        .wait()
-        .map_err(|error| Error::Io(format!("cannot wait for the game: {error}")))?;
-    Ok(())
+    #[cfg(unix)]
+    {
+        note(format!(
+            "the game did not stop within {STOP_WAIT_SECS} s; ending it"
+        ));
+        if let Err(error) = child.kill() {
+            // The game may have exited between the last poll and the kill.
+            if child.try_wait().ok().flatten().is_none() {
+                return Err(Error::Io(format!("cannot stop the game: {error}")));
+            }
+        }
+        child
+            .wait()
+            .map_err(|error| Error::Io(format!("cannot wait for the game: {error}")))?;
+        Ok(true)
+    }
 }
 
 /// Unix termination signals: SIGHUP and SIGTERM (Steam's force exit, a logout, a shutdown). The
@@ -272,8 +282,8 @@ mod signals {
 
 /// Windows console events: the console window closing (CTRL_CLOSE_EVENT), logoff and shutdown
 /// (#264, split from #243). The console calls `on_event` on a thread of its own. The first event
-/// is recorded for the wait loop in `play`, and the handler returns only once the exit push has
-/// finished (`finished`) or the shared cleanup budget expires: returning TRUE early lets Windows end
+/// is recorded for the wait loop in `play`, and the handler returns only once the exit push and
+/// rotated-token storage have finished (`finished`): returning TRUE early lets Windows end
 /// the process. A later event ends `wrap` at once with `_exit`, which leaves `playing.json`.
 #[cfg(windows)]
 mod console {
@@ -285,7 +295,7 @@ mod console {
     const CTRL_SHUTDOWN_EVENT: u32 = 6;
     const FALSE: i32 = 0;
     const TRUE: i32 = 1;
-    /// Stop and push share 4.5 s, leaving a margin before Windows' usual 5 s close timeout.
+    /// Stop, push and token storage share 4.5 s, before Windows' usual 5 s close timeout.
     /// If the service cannot finish in time, exit with the mark still present for recovery.
     pub const CLEANUP_BUDGET: Duration = Duration::from_millis(4500);
 
@@ -376,16 +386,24 @@ mod console {
         }
     }
 
-    /// Nothing to send: the console delivers the same event to the game, which shares it.
+    /// Nothing to forward: GUI games do not receive console events. Console games sharing
+    /// this console receive the event directly; either kind may still be writing its saves.
     pub fn forward(_pid: u32, _event: i32) {}
 
-    /// The exit push is done: release the handler.
+    /// The exit push and rotated-token storage are done: release the handler.
     pub fn finished() {
         STATE
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
             .finished = true;
     }
+}
+
+/// Called by the CLI only after `with_remote` has saved any rotated refresh token. The
+/// console handler's original cleanup deadline also covers credential storage.
+#[cfg(windows)]
+pub(crate) fn finish_console_cleanup() {
+    console::finished();
 }
 
 fn exit_code(status: ExitStatus) -> i32 {
@@ -429,21 +447,24 @@ pub fn run(
             ));
             128 + signal
         }
+        #[cfg(windows)]
+        Ok(Played::StillRunning(event)) => {
+            note(format!(
+                "the game did not stop within {STOP_WAIT_SECS} s; skipping the exit push and leaving the mark"
+            ));
+            return 128 + event;
+        }
         Err(error) => {
             note(error);
             #[cfg(any(unix, windows))]
             if stop::received().is_some() {
                 // A failed stop must not upload while the game might still be writing.
-                #[cfg(windows)]
-                console::finished();
                 return 1;
             }
             1
         }
     };
     after_play(engine, store, &game, now());
-    #[cfg(windows)]
-    console::finished();
     code
 }
 
@@ -697,13 +718,21 @@ fn note(text: impl std::fmt::Display) {
 #[cfg(all(test, windows))]
 mod tests {
     use super::*;
+    use crate::cli::{run_with_net, Net};
+    use crate::clients::{Client, ClientSet};
+    use crate::creds::{CredentialStore, MemoryStore, Secret};
+    use crate::fake::{FakeDropbox, REFRESH_TOKEN};
+    use crate::http::{Request, Response, Transport};
     use crate::layout::Layout;
     use crate::manifest::Manifest;
     use crate::platform::{AppDirs, PathVars};
     use crate::remote::MemoryRemote;
+    use crate::service::{token_account, Service};
     use crate::sync::{self, Game, Session};
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::{Duration, Instant};
 
@@ -781,7 +810,7 @@ mod tests {
                 }
             }
             fs::write(self.dir.join("pushing"), "").unwrap();
-            if self.mode != "normal" {
+            if matches!(self.mode.as_str(), "second" | "timeout") {
                 thread::sleep(Duration::from_secs(60));
             }
             // A nonzero push duration also detects early handler completion.
@@ -812,7 +841,8 @@ mod tests {
         fs::write(dir.join("saves/slot.sav"), "game save").unwrap();
         fs::write(dir.join("pid"), std::process::id().to_string()).unwrap();
         fs::write(dir.join("started"), "").unwrap();
-        thread::sleep(Duration::from_secs(60));
+        wait_for(&dir.join("exit-game"));
+        fs::write(dir.join("exiting"), "").unwrap();
     }
 
     #[test]
@@ -854,6 +884,13 @@ mod tests {
             wait_for(&dir.join("started"));
             let began = Instant::now();
             let first = thread::spawn(move || unsafe { console::on_event(event) });
+            while console::received().is_none() {
+                thread::sleep(Duration::from_millis(10));
+            }
+            if mode != "running" {
+                // Simulate a game finishing its save and exiting of its own accord.
+                fs::write(dir.join("exit-game"), "").unwrap();
+            }
             if mode == "second" {
                 wait_for(&dir.join("pushing"));
                 // SAFETY: emulate a second console handler thread during the exit push.
@@ -864,6 +901,15 @@ mod tests {
             }
             assert_eq!(first.join().unwrap(), 1);
             assert!(began.elapsed() < console::CLEANUP_BUDGET);
+            if mode == "running" {
+                assert!(!dir.join("pushing").exists());
+                assert!(dir.join("playing.json").exists());
+                // The game must survive wrap's stop wait, not merely skip its upload.
+                assert_game_running(&dir);
+                fs::write(dir.join("exit-game"), "").unwrap();
+                wait_for(&dir.join("exiting"));
+                return;
+            }
             assert!(
                 dir.join("pushed").exists(),
                 "handler returned before push finished"
@@ -880,8 +926,14 @@ mod tests {
             "--ignored".into(),
         ];
         let code = run(&engine, &engine.store, &command, || 1000, &|_| {});
+        finish_console_cleanup();
         events.join().unwrap();
-        assert_eq!(code, 128 + event as i32);
+        // The game may exit before play observes the event; both paths must push safely.
+        if engine.mode == "running" {
+            assert_eq!(code, 128 + event as i32);
+        } else {
+            assert!(code == 0 || code == 128 + event as i32);
+        }
     }
 
     fn scenario(event: u32, mode: &str) {
@@ -902,6 +954,8 @@ mod tests {
             .spawn()
             .unwrap();
         let began = Instant::now();
+        wait_for(&dir.join("started"));
+        let started = Instant::now();
         let status = loop {
             if let Some(status) = host.try_wait().unwrap() {
                 break status;
@@ -913,8 +967,12 @@ mod tests {
             }
             thread::sleep(Duration::from_millis(10));
         };
-        assert!(dir.join("pushing").exists(), "exit push was not reached");
-        if mode == "normal" {
+        if mode == "running" {
+            assert!(status.success());
+            assert!(!dir.join("pushing").exists());
+            assert!(dir.join("playing.json").exists());
+        } else if mode == "normal" {
+            assert!(dir.join("pushing").exists(), "exit push was not reached");
             assert!(status.success());
             assert!(dir.join("pushed").exists());
             assert!(!dir.join("playing.json").exists());
@@ -924,12 +982,12 @@ mod tests {
             assert!(!dir.join("pushed").exists());
             if mode == "second" {
                 assert!(
-                    began.elapsed() < Duration::from_secs(4),
+                    started.elapsed() < Duration::from_secs(4),
                     "second event did not exit at once"
                 );
             } else {
                 assert!(
-                    began.elapsed() < Duration::from_secs(5),
+                    started.elapsed() < Duration::from_secs(6),
                     "cleanup exceeded the close window"
                 );
             }
@@ -952,5 +1010,205 @@ mod tests {
     #[test]
     fn console_cleanup_deadline_leaves_playing_json() {
         scenario(2, "timeout");
+    }
+
+    #[test]
+    fn console_stop_leaves_a_running_game_and_skips_the_push() {
+        for event in [2, 5, 6] {
+            scenario(event, "running");
+        }
+    }
+
+    fn assert_game_running(dir: &Path) {
+        extern "system" {
+            fn OpenProcess(access: u32, inherit: i32, pid: u32) -> *mut std::ffi::c_void;
+            fn WaitForSingleObject(handle: *mut std::ffi::c_void, millis: u32) -> u32;
+            fn CloseHandle(handle: *mut std::ffi::c_void) -> i32;
+        }
+        let pid = fs::read_to_string(dir.join("pid"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        // SAFETY: open a synchronization handle, poll once, and close it exactly once.
+        unsafe {
+            let handle = OpenProcess(0x00100000, 0, pid);
+            assert!(!handle.is_null(), "the game must still exist");
+            let status = WaitForSingleObject(handle, 0);
+            CloseHandle(handle);
+            assert_eq!(status, 0x00000102, "the game must still be running");
+        }
+    }
+
+    const ROTATED: &str = "fake-rotated-token";
+
+    /// Expire the pull's access token once the game starts, so the exit push rotates it.
+    struct Rotating {
+        fake: FakeDropbox,
+        dir: PathBuf,
+        expired: AtomicBool,
+    }
+
+    impl Transport for Rotating {
+        fn send(&self, request: &Request) -> Result<Response> {
+            if self.dir.join("started").exists() && !self.expired.swap(true, Ordering::SeqCst) {
+                self.fake.expire_access_tokens();
+            }
+            let response = self.fake.send(request)?;
+            if request.url.ends_with("/oauth2/token") && self.expired.load(Ordering::SeqCst) {
+                assert_eq!(response.status, 200);
+                let mut answer: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+                answer["refresh_token"] = ROTATED.into();
+                return Ok(Response::new(200, answer.to_string()));
+            }
+            Ok(response)
+        }
+    }
+
+    struct ObservedCredentials {
+        inner: MemoryStore,
+        handler: Mutex<Option<thread::JoinHandle<i32>>>,
+    }
+
+    impl CredentialStore for ObservedCredentials {
+        fn get(&self, account: &str) -> Result<Option<Secret>> {
+            self.inner.get(account)
+        }
+        fn set(&self, account: &str, secret: &Secret) -> Result<()> {
+            if secret.expose() == ROTATED {
+                // A close right between wrap::run returning and credential storage must
+                // wait for this write. The former completion inside run fails this check.
+                let handler = thread::spawn(|| unsafe { console::on_event(2) });
+                while console::received().is_none() {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                thread::sleep(Duration::from_millis(150));
+                assert!(
+                    !handler.is_finished(),
+                    "handler released before token storage"
+                );
+                *self.handler.lock().unwrap() = Some(handler);
+            }
+            self.inner.set(account, secret)
+        }
+        fn delete(&self, account: &str) -> Result<()> {
+            self.inner.delete(account)
+        }
+        fn kind(&self) -> &'static str {
+            "memory"
+        }
+    }
+
+    #[test]
+    #[ignore = "spawned as the CLI wrap host"]
+    fn console_token_host() {
+        let Some(dir) = std::env::var_os(DIR).map(PathBuf::from) else {
+            return;
+        };
+        fs::create_dir_all(dir.join("saves")).unwrap();
+        let vars = PathVars {
+            home: dir.join("home"),
+            data: dir.join("data"),
+            config: dir.join("config"),
+            documents: None,
+        };
+        let store = LocalStore::new(AppDirs::from_vars(&vars));
+        store
+            .save_config(&crate::local::Config {
+                format: 1,
+                server: "dropbox".into(),
+                user: "test-account".into(),
+                root: "saves".into(),
+                device: "console-test".into(),
+            })
+            .unwrap();
+        let manifest = dir.join("game.json");
+        fs::write(&manifest, r#"{"format":1,"id":"console-game","name":"Console game","saves_from":"launcher","saves":{},"include":["*.sav"]}"#).unwrap();
+        let creds = ObservedCredentials {
+            inner: MemoryStore::new(),
+            handler: Mutex::new(None),
+        };
+        let account = token_account(Service::Dropbox, "test-account").unwrap();
+        creds
+            .inner
+            .set(&account, &Secret::new(REFRESH_TOKEN))
+            .unwrap();
+        let net = Net {
+            transport: Arc::new(Rotating {
+                fake: FakeDropbox::new(),
+                dir: dir.clone(),
+                expired: AtomicBool::new(false),
+            }),
+            open_browser: &|_| panic!("no browser needed"),
+            clients: ClientSet {
+                dropbox: Client {
+                    id: "test-dropbox",
+                    secret: None,
+                },
+                ..ClientSet::shipped()
+            },
+            game_mode: false,
+            clock: || 1000,
+        };
+        // The game exits on its own; the close arrives during credential storage.
+        fs::write(dir.join("exit-game"), "").unwrap();
+        let args = vec![
+            "wrap".into(),
+            "--game".into(),
+            "console-game".into(),
+            "--manifest".into(),
+            manifest.to_string_lossy().into_owned(),
+            "--saves-dir".into(),
+            dir.join("saves").to_string_lossy().into_owned(),
+            "--".into(),
+            std::env::current_exe()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+            "--exact".into(),
+            "wrap::tests::console_game".into(),
+            "--ignored".into(),
+        ];
+        assert_eq!(
+            run_with_net(
+                &args,
+                &mut &b""[..],
+                &mut Vec::new(),
+                &MemoryRemote::new(),
+                &creds,
+                &store,
+                &vars,
+                1000,
+                &net
+            ),
+            0
+        );
+        assert!(creds.inner.get(&account).unwrap().unwrap().expose() == ROTATED);
+        let handler = creds
+            .handler
+            .lock()
+            .unwrap()
+            .take()
+            .expect("token rotated during exit push");
+        assert_eq!(handler.join().unwrap(), 1);
+    }
+
+    #[test]
+    fn console_handler_waits_for_rotated_token_storage() {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target/console-tests")
+            .join(format!("{}-token", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let status = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "wrap::tests::console_token_host",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env(DIR, &dir)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        fs::remove_dir_all(dir).unwrap();
     }
 }
