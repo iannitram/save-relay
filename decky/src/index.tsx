@@ -111,14 +111,15 @@ function DeckyPanel({ run, picture }: {
     const key = keys[event.detail.button];
     const container = root.current;
     if (!key || !container) return;
-    event.preventDefault();
-    event.stopPropagation();
     if (key === "Enter") {
       const active = container.ownerDocument.activeElement;
       const target = active instanceof HTMLElement && container.contains(active) && active.dataset.focus
         ? active : container.querySelector<HTMLElement>("[data-focus]:not([disabled])");
-      target?.click();
-    } else pressKey(key);
+      if (!target) return;
+      target.click();
+    } else if (!pressKey(key)) return;
+    event.preventDefault();
+    event.stopPropagation();
   };
   return (
     <Focusable className="save-relay-decky" ref={root} onButtonDown={button}>

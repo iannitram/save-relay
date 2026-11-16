@@ -53,10 +53,10 @@ const views: [string, React.ReactElement, string[]][] = [
 
 describe("nextFocus", () => {
   const ids = ["a", "b", "c"];
-  it("moves with the arrows and wraps", () => {
+  it("moves with the arrows and leaves list edges to the host", () => {
     expect(nextFocus(ids, "a", "ArrowDown")).toEqual({ focus: "b" });
-    expect(nextFocus(ids, "c", "ArrowRight")).toEqual({ focus: "a" });
-    expect(nextFocus(ids, "a", "ArrowUp")).toEqual({ focus: "c" });
+    expect(nextFocus(ids, "c", "ArrowRight")).toBeNull();
+    expect(nextFocus(ids, "a", "ArrowUp")).toBeNull();
     expect(nextFocus(ids, "b", "ArrowLeft")).toEqual({ focus: "a" });
     expect(nextFocus(ids, null, "ArrowDown")).toEqual({ focus: "a" });
     expect(nextFocus(ids, "gone", "ArrowUp")).toEqual({ focus: "c" });
@@ -73,7 +73,7 @@ describe.each(views)("%s view", (_name, view, expected) => {
   it("has its controls in order, all visible and enabled", () => {
     expect(order(view)).toEqual(expected);
   });
-  it("arrows reach every control in order, then wrap", () => {
+  it("arrows reach every control in order, then leave the view", () => {
     const ids = order(view);
     let at: string | null = null;
     const seen: string[] = [];
@@ -83,6 +83,25 @@ describe.each(views)("%s view", (_name, view, expected) => {
       seen.push(at);
     }
     expect(seen).toEqual(ids);
-    expect(nextFocus(ids, at, "ArrowDown")).toEqual({ focus: ids[0] });
+    expect(nextFocus(ids, at, "ArrowDown")).toBeNull();
+  });
+});
+
+// #267: the decision depends on this view's back action and the current list edge.
+describe("unused controller keys (#267)", () => {
+  it.each(["ArrowUp", "ArrowLeft", "ArrowDown", "ArrowRight"])("routes %s without wrapping", (key) => {
+    const forward = key === "ArrowDown" || key === "ArrowRight";
+    const ids = ["a", "b", "c"];
+    expect(nextFocus(ids, forward ? "c" : "a", key)).toBeNull();
+    expect(nextFocus(ids, "b", key)).toEqual({ focus: forward ? "c" : "a" });
+    expect(nextFocus(["only"], "only", key)).toBeNull();
+    expect(nextFocus([], null, key)).toBeNull();
+  });
+
+  it("leaves B to the host only when the view has no back action", () => {
+    expect(nextFocus(["game"], "game", "Escape", false)).toBeNull();
+    expect(nextFocus([], null, "Escape", false)).toBeNull();
+    expect(nextFocus(["back"], "back", "Escape", true)).toBe("back");
+    expect(nextFocus([], null, "Escape", true)).toBe("back");
   });
 });
