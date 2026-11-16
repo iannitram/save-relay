@@ -131,23 +131,17 @@ pub fn installed_among(
     wanted.intersection(&installed).copied().collect()
 }
 
-/// True when Steam is running. Linux: a pid in one of `LINUX_PID_FILES` under `home` names a
-/// live process (`/proc/<pid>` exists). Mac: the pid in `MAC_PID_FILE` answers `kill -0`
-/// (unverified on a real Mac: the pid file's place is from Steam's usual layout). Windows:
-/// `tasklist` lists `steam.exe`. Android and iOS have no Steam: false. A check that cannot run,
-/// or a pid file that is not a number, is `Error::Io`.
+/// True when Steam is running. Linux (`steam_running_linux` with `/proc`): a pid in one of
+/// `LINUX_PID_FILES` under `home` names a Steam process, meaning its `comm` is `steam`; failing
+/// that, some numeric folder of `/proc` has a `steam` comm, which finds Flatpak Steam (its pid
+/// file holds a sandbox pid, but its processes show in the host `/proc`). Mac: the pid in
+/// `MAC_PID_FILE` answers `kill -0` (unverified on a real Mac: the pid file's place is from
+/// Steam's usual layout). Windows: `tasklist` lists `steam.exe`. Android and iOS have no Steam:
+/// false. A check that cannot run, a pid file that is not a number, or a `/proc` that cannot be
+/// listed, is `Error::Io`.
 pub fn steam_running(platform: Platform, home: &Path) -> Result<bool> {
     match platform {
-        Platform::Linux => {
-            for file in LINUX_PID_FILES {
-                if let Some(pid) = read_pid(&home.join(file))? {
-                    if Path::new("/proc").join(pid.to_string()).exists() {
-                        return Ok(true);
-                    }
-                }
-            }
-            Ok(false)
-        }
+        Platform::Linux => steam_running_linux(home, Path::new("/proc")),
         Platform::Mac => match read_pid(&home.join(MAC_PID_FILE))? {
             Some(pid) => Ok(Command::new("kill")
                 .arg("-0")
@@ -403,6 +397,48 @@ fn next_option(
     } else {
         Some(wrapped(before, program_path, platform))
     }
+}
+
+/// Whether Steam runs on Linux, reading processes from `proc_root` (`/proc` in the program; a
+/// fake folder in the tests). A pid file in `LINUX_PID_FILES` under `home` counts only when
+/// `<proc_root>/<pid>/comm` is `steam`: a live process with another name is a stale file.
+/// Flatpak Steam writes its pid file from inside its own pid namespace, so that number means
+/// nothing in the host's `proc_root`: when the Flatpak pid file exists and no pid file named
+/// Steam, every numeric folder of `proc_root` is looked at for a `steam` comm. Without the
+/// Flatpak pid file there is no scan, so a home with no Steam of its own (a test's) never sees
+/// the host's. An unreadable `comm` (the process is gone, or not allowed) is skipped. A
+/// `proc_root` that cannot be listed, or a pid file that is not a number, is `Error::Io`.
+#[doc(hidden)]
+pub fn steam_running_linux(home: &Path, proc_root: &Path) -> Result<bool> {
+    for file in LINUX_PID_FILES {
+        if let Some(pid) = read_pid(&home.join(file))? {
+            if is_steam_comm(&proc_root.join(pid.to_string()).join("comm")) {
+                return Ok(true);
+            }
+        }
+    }
+    let flatpak = LINUX_PID_FILES
+        .iter()
+        .find(|file| file.starts_with(".var/app/"))
+        .is_some_and(|file| home.join(file).exists());
+    if !flatpak {
+        return Ok(false);
+    }
+    for entry in fs::read_dir(proc_root)? {
+        let Ok(entry) = entry else { continue };
+        let name = entry.file_name();
+        let numeric = name.to_string_lossy().bytes().all(|b| b.is_ascii_digit());
+        if numeric && is_steam_comm(&entry.path().join("comm")) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// True when the `comm` file at `path` reads `steam` once trimmed. Any read error is `false`:
+/// the process is gone or its name is not readable, so it is not Steam.
+fn is_steam_comm(path: &Path) -> bool {
+    fs::read_to_string(path).is_ok_and(|comm| comm.trim() == "steam")
 }
 
 /// The pid in a Steam pid file: `None` when the file is missing.

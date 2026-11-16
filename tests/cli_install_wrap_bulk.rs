@@ -7,9 +7,20 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+/// Held while a test has a fake Steam process alive, and by every CLI run: the Steam-running
+/// check reads the host's `/proc`, so a fake `steam` process would stop the others.
+static STEAM_PROCESSES: Mutex<()> = Mutex::new(());
+
+fn steam_processes_lock() -> MutexGuard<'static, ()> {
+    STEAM_PROCESSES
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+}
 
 struct Machine {
     steam: PathBuf,
@@ -94,7 +105,14 @@ impl Machine {
         self
     }
 
+    /// Runs the CLI while no fake Steam process is alive (see `steam_processes_lock`).
     fn run(&self, args: &[&str]) -> Output {
+        let _steam = steam_processes_lock();
+        self.run_now(args)
+    }
+
+    /// `run` without taking the lock: for a caller that holds it already.
+    fn run_now(&self, args: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_save-relay"))
             .args(args)
             .env("SAVE_RELAY_STEAM_DIR", &self.steam)
@@ -222,19 +240,44 @@ fn cloud_yes_game_is_never_reported_as_skipped() {
         .any(|skip| skip["app_id"] == 504230));
 }
 
+/// A live process named `steam` (its comm is the link's name): the Linux check counts a pid only
+/// when its comm is `steam`. Killed when dropped.
+#[cfg(target_os = "linux")]
+struct FakeSteam(std::process::Child);
+
+#[cfg(target_os = "linux")]
+impl FakeSteam {
+    fn start(dir: &Path) -> FakeSteam {
+        let link = dir.join("steam");
+        std::os::unix::fs::symlink("/bin/sleep", &link).unwrap();
+        let child = Command::new(&link).arg("60").spawn().unwrap();
+        FakeSteam(child)
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for FakeSteam {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn steam_running_guard_precedes_cache_reads() {
     let machine = Machine::new(&[504231, 504232]);
     let pid_dir = machine.home.join(".steam");
     fs::create_dir_all(&pid_dir).unwrap();
-    fs::write(pid_dir.join("steam.pid"), std::process::id().to_string()).unwrap();
+    let _steam_lock = steam_processes_lock();
+    let steam = FakeSteam::start(&machine.home);
+    fs::write(pid_dir.join("steam.pid"), steam.0.id().to_string()).unwrap();
     fs::write(
         machine.data.join("save-relay/steam/cloud.json"),
         "malformed cache",
     )
     .unwrap();
-    let output = machine.run(&["install-wrap", "--no-steam-cloud", "--json"]);
+    let output = machine.run_now(&["install-wrap", "--no-steam-cloud", "--json"]);
     assert!(!output.status.success());
     let envelope: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(envelope["error"]["code"], "steam_running");
