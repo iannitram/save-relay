@@ -1,0 +1,4 @@
+module SaveRelayC {
+    header "../../include/save_relay.h"
+    export *
+}

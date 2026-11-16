@@ -77,6 +77,74 @@ jobs:
         if: matrix.name == 'ios'
         run: cargo build --locked --lib --target aarch64-apple-ios --no-default-features --features ffi
 
+  bindings:
+    # The platform wrappers (#254): the Kotlin `SaveRelay` over its JNI shim on Android, and the
+    # Swift `SaveRelay` over the header's module map on iOS. Build only: no device or emulator run.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: android
+            os: ubuntu-latest
+            target: aarch64-linux-android
+          - name: ios
+            os: macos-latest
+            target: aarch64-apple-ios
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          cache-bin: false
+          key: bindings-${{ matrix.target }}
+      - name: Build the Rust library (Android)
+        if: matrix.name == 'android'
+        run: |
+          set -euo pipefail
+          ndk="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_ROOT:?no Android NDK on this runner}}"
+          bin="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$bin/aarch64-linux-android24-clang"
+          export CC_aarch64_linux_android="$bin/aarch64-linux-android24-clang"
+          export AR_aarch64_linux_android="$bin/llvm-ar"
+          cargo build --locked --lib --target aarch64-linux-android --no-default-features --features ffi
+      - name: Compile the JNI shim (Android)
+        if: matrix.name == 'android'
+        run: |
+          set -euo pipefail
+          ndk="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_ROOT:?no Android NDK on this runner}}"
+          bin="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          mkdir -p build/bindings
+          "$bin/aarch64-linux-android24-clang" -c -fPIC -I include \
+            bindings/android/src/main/cpp/save_relay_jni.c \
+            -o build/bindings/save_relay_jni.o
+      - name: Compile the Kotlin wrapper (Android)
+        if: matrix.name == 'android'
+        run: |
+          set -euo pipefail
+          version=2.0.21
+          curl -fsSL -o "$RUNNER_TEMP/kotlin.zip" "https://github.com/JetBrains/kotlin/releases/download/v$version/kotlin-compiler-$version.zip"
+          unzip -q "$RUNNER_TEMP/kotlin.zip" -d "$RUNNER_TEMP/kotlin"
+          chmod +x "$RUNNER_TEMP/kotlin/kotlinc/bin/kotlinc"
+          "$RUNNER_TEMP/kotlin/kotlinc/bin/kotlinc" \
+            bindings/android/src/main/kotlin/org/saverelay/*.kt \
+            -d build/bindings/save-relay-android.jar
+      - name: Build the Rust library (iOS)
+        if: matrix.name == 'ios'
+        run: cargo build --locked --lib --target aarch64-apple-ios --no-default-features --features ffi
+      - name: Compile the Swift wrapper (iOS)
+        if: matrix.name == 'ios'
+        run: |
+          set -euo pipefail
+          sdk="$(xcrun --sdk iphoneos --show-sdk-path)"
+          mkdir -p build/bindings
+          swiftc -target arm64-apple-ios -sdk "$sdk" -parse-as-library \
+            -I bindings/ios \
+            -c bindings/ios/SaveRelay.swift \
+            -o build/bindings/SaveRelay.o
+
   frontend:
     # The panel (shared views and the desktop page) and the Decky plugin, as one pnpm
     # workspace. Then the Rust build with the panel embedded (`panel-dist`).
