@@ -132,8 +132,8 @@ A bug found in steps 11, 12 or 14 becomes its own issue, is fixed by an agent, a
 | F83 | A retried write after a 5xx keeps the live entry; record first, prune best-effort (audit S8, S9) | `dropbox`, `gdrive`, `sync` | M1, M9 | #246 |
 | F84 | Durable and atomic downloads; case-only names on Windows; include/exclude drift (audit S10-S12) | `transfer`, `sync`, `plan` | M1-M3, M7 | #247 |
 | F85 | Pin release-workflow actions to SHAs; `permissions:` in `check.yml` (audit S13) | `.github/workflows/` | M8 | #248 |
-| F86 | Panel token and API surface, restore in-flight state, Game Mode B and D-pad, `install-wrap` edge cases (audit S14-S17) | `panel`, `panel/`, `decky/`, `steam::launch` | M13, M15 | #249 |
-| F87 | The audit's Minor list, as one checklist to split | various | various | #250 |
+| F86 | Panel token and API surface, restore in-flight state, Game Mode B and D-pad, `install-wrap` edge cases (audit S14-S17) | `panel`, `panel/`, `decky/`, `steam::launch` | M13, M15 | #266 (S14, S15), #267 (S16), #268 (S17); split from #249 |
+| F87 | The audit's Minor list, split into four issues (owner ruling 2026-11-16) | various | various | #269 (items 2, 3, 5), #270 (4, 8, 9), #271 (1, 6, 7, 14), #272 (11, 12, 13); split from #250 |
 
 Every Must has an issue: M1 (F07, F11, F19, F20, F23, F43), M2 (F02, F03, F20, F23, F43), M3 (F07, F19, F20, F23, F43), M4 (F08, F21, F23, F43), M5 (F07, F12, F20, F23, F43), M6 (F13, F14, F18, F22, F27-F30, F35, F37, F42, F44-F47), M7 (F01, F05, F23, F25, F69), M8 (F09, F10, F22, F24, F26, F44, F71), M9 (F12, F27, F31-F34, F36, F38-F41, F43, F46), M10 (F28, F29, F33, F40-F42, F44-F47), M11 (F48-F52, F65, F67), M12 (F52-F54, F57, F58, F65-F67), M13 (F52-F56, F59, F65-F67), M14 (F52, F54, F60, F61, F65-F67), M15 (F52, F62-F64, F66-F68), M16 (F67, F72-F78).
 
