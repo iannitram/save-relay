@@ -49,7 +49,6 @@ use crate::stamp::{self, Clock};
 use crate::steam;
 use crate::sync::{self, Game, Resolve, Session};
 use crate::webdav;
-#[cfg(feature = "http")]
 use crate::webdav::WebDav;
 use crate::wrap;
 use serde::Serialize;
@@ -876,6 +875,20 @@ pub fn connect_before(
     command: &Command,
     store: &LocalStore,
     creds: &dyn CredentialStore,
+) -> Result<Box<dyn Remote>> {
+    connect_before_via(command, store, creds, &connect)
+}
+
+/// How a Nextcloud server is reached: server, user, password.
+pub type Connector = dyn Fn(&str, &str, Secret) -> Result<Box<dyn Remote>>;
+
+/// `connect_before` with the Nextcloud connection passed in, so the C interface (`ffi`) can
+/// connect through the host app's transport instead of the `http` feature's.
+pub fn connect_before_via(
+    command: &Command,
+    store: &LocalStore,
+    creds: &dyn CredentialStore,
+    connect: &Connector,
 ) -> Result<Box<dyn Remote>> {
     if let Command::Answer { game, .. } = command {
         return if store.is_waiting(game)? || store.load_pending(game)?.is_none() {
@@ -2765,15 +2778,25 @@ fn refuse_browser(_: &str) -> Result<()> {
     ))
 }
 
+/// A WebDAV remote for a Nextcloud `server` over `transport` (no feature needed).
+pub fn connect_with(
+    server: &str,
+    user: &str,
+    password: Secret,
+    transport: Arc<dyn Transport>,
+) -> Result<Box<dyn Remote>> {
+    let url = webdav::files_url(server, user)?;
+    Ok(Box::new(WebDav::new(&url, user, password, transport)))
+}
+
 #[cfg(feature = "http")]
 fn connect(server: &str, user: &str, password: Secret) -> Result<Box<dyn Remote>> {
-    let url = webdav::files_url(server, user)?;
-    Ok(Box::new(WebDav::new(
-        &url,
+    connect_with(
+        server,
         user,
         password,
-        std::sync::Arc::new(crate::http::UreqTransport::new()),
-    )))
+        Arc::new(crate::http::UreqTransport::new()),
+    )
 }
 
 #[cfg(not(feature = "http"))]
