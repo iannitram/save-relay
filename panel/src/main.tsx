@@ -7,7 +7,6 @@ import "./app.css";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";
 import { httpBridge } from "./bridge.ts";
-import { fixtureBridge, fixturePicture } from "./fixtureBridge.ts";
 import { applyTheme } from "./theme.ts";
 
 const colorScheme = typeof window !== "undefined" && typeof window.matchMedia === "function"
@@ -26,13 +25,14 @@ const params = new URLSearchParams(window.location.search);
 const token = params.get("token");
 // The fixtures are for `pnpm dev` only: `import.meta.env.DEV` is false in the release build, so
 // the bundler leaves the fixture bridge out and a token-less page just fails its calls.
-const fixtures = import.meta.env.DEV && (!token || params.has("fixtures"));
-const bridge = fixtures
-  ? fixtureBridge()
-  : httpBridge(window.location.origin, token ?? "", (url, init) => fetch(url, init));
 const root = document.getElementById("root");
-if (root) {
-  createRoot(root).render(
-    <App bridge={bridge} pictureUrl={fixtures ? fixturePicture : undefined} token={token} />,
-  );
+if (root && import.meta.env.DEV && (!token || params.has("fixtures"))) {
+  void import("./fixtureBridge.ts").then(({ fixtureBridge, fixturePicture }) => {
+    createRoot(root).render(
+      <App bridge={fixtureBridge()} pictureUrl={fixturePicture} token={token} />,
+    );
+  });
+} else if (root) {
+  const bridge = httpBridge(window.location.origin, token ?? "", (url, init) => fetch(url, init));
+  createRoot(root).render(<App bridge={bridge} token={token} />);
 }

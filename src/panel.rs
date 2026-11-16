@@ -22,7 +22,7 @@
 //! A random token is in the URL that is opened (`/?token=...`) and must come with every request
 //! (`X-Save-Relay-Token` header or `token` query): the page, its files, the API and the pictures.
 //! So other pages in the browser cannot call it; a missing or wrong token is 403. The browser
-//! opens like `oauth::open_browser`. Requests are answered one at a time.
+//! opens like `oauth::open_browser`. Each connection is handled on its own thread.
 
 use crate::api::{self, PanelData};
 use crate::card;
@@ -32,6 +32,7 @@ use serde_json::Value;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::thread;
 use std::time::Duration;
 
 /// The front end, embedded: (path, bytes, content type).
@@ -92,7 +93,7 @@ pub const API_COMMANDS: [&str; 13] = [
 const MAX_HEAD: usize = 16 * 1024;
 /// Request bodies larger than this are refused.
 const MAX_BODY: usize = 1024 * 1024;
-/// A connection that sends nothing for this long is dropped: requests are answered one at a time.
+/// A connection that sends nothing for this long is dropped.
 const READ_TIMEOUT: Duration = Duration::from_secs(10);
 /// The flags of `api_args` that are switches (`true` adds the flag, `false` leaves it out).
 const SWITCHES: [&str; 7] = [
@@ -372,11 +373,11 @@ pub fn response(status: u16, content_type: &str, body: &[u8]) -> Vec<u8> {
 
 /// Runs one command line (the arguments after the program name) and returns its exit code and
 /// stdout; `cli::run` behind a closure.
-pub type RunCommand = dyn Fn(&[String]) -> (i32, Vec<u8>);
+pub type RunCommand = dyn Fn(&[String]) -> (i32, Vec<u8>) + Sync;
 
 /// Listen on `127.0.0.1:<port>` (any free port when `None`), announce the URL with its token
 /// (`api::PanelData`: printed as the `--json` envelope or as text by the caller) through
-/// `announce`, open it unless `open` is false, and answer requests one at a time until the
+/// `announce`, open it unless `open` is false, and answer requests on separate threads until the
 /// process is stopped. `run` runs one command line and returns (exit code, its stdout);
 /// `cli::run` passes itself. Only returns with an error (the port is taken, no random bytes).
 pub fn serve(
@@ -402,20 +403,25 @@ pub fn serve(
         // The URL is already printed, so a browser that does not open is not an error.
         let _ = oauth::open_browser(&url);
     }
-    for mut stream in listener.incoming().flatten() {
-        // A client that fails or goes away is dropped; the next one is served. A command that
-        // panics is that request's 500, not the end of the server.
-        let handled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            handle(&mut stream, &token, run)
-        }));
-        if handled.is_err() {
-            let _ = write_answer(
-                &mut stream,
-                (500, TEXT, b"the command failed unexpectedly".to_vec()),
-            );
+    thread::scope(|scope| {
+        for stream in listener.incoming().flatten() {
+            scope.spawn(|| handle_connection(stream, &token, run));
         }
-    }
+    });
     Ok(())
+}
+
+fn handle_connection(mut stream: TcpStream, token: &str, run: &RunCommand) {
+    // A command that panics is this request's 500; the accept loop and other requests continue.
+    let handled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        handle(&mut stream, token, run)
+    }));
+    if handled.is_err() {
+        let _ = write_answer(
+            &mut stream,
+            (500, TEXT, b"the command failed unexpectedly".to_vec()),
+        );
+    }
 }
 
 /// What a request is answered with: status, content type, body.

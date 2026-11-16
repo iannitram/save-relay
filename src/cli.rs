@@ -1005,20 +1005,42 @@ pub struct Net<'a> {
 /// credential store, the real network and browser, and this session's Game Mode. `run_with_env`
 /// does the work with the environment passed in, and `run_with_net` the rest.
 pub fn run(args: &[String], stdin: &mut dyn Read, stdout: &mut dyn Write) -> i32 {
-    run_with_env(args, stdin, stdout, &|name| std::env::var(name).ok())
+    run_with_paths(
+        args,
+        stdin,
+        stdout,
+        &|name| std::env::var(name).ok(),
+        PathVars::current(),
+    )
 }
 
 /// `run` with the environment passed in: the platform folders and Game Mode are read through
 /// `var`, not the process environment. A test passes its own (an empty one for the folders-not-
-/// found path); `run` passes the process environment.
+/// found path). Unlike `run`, this does not query Windows known folders.
 pub fn run_with_env(
     args: &[String],
     stdin: &mut dyn Read,
     stdout: &mut dyn Write,
     var: &dyn Fn(&str) -> Option<String>,
 ) -> i32 {
+    run_with_paths(
+        args,
+        stdin,
+        stdout,
+        var,
+        PathVars::from_env(Platform::current(), var),
+    )
+}
+
+fn run_with_paths(
+    args: &[String],
+    stdin: &mut dyn Read,
+    stdout: &mut dyn Write,
+    var: &dyn Fn(&str) -> Option<String>,
+    vars: Result<PathVars>,
+) -> i32 {
     let json = args.iter().any(|arg| arg == "--json");
-    let vars = match PathVars::from_env(Platform::current(), var) {
+    let vars = match vars {
         Ok(vars) => vars,
         Err(error) => return front_door_failure(stdout, json, args, &error),
     };

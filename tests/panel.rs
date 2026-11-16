@@ -13,7 +13,7 @@ use serde_json::Value;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -660,7 +660,7 @@ fn fake_run_seen(
 
 /// Serve on port 0 in a thread; the announcement gives the port and the URL with the token.
 /// The thread serves until the test process ends.
-fn start(run: impl Fn(&[String]) -> (i32, Vec<u8>) + Send + 'static) -> PanelData {
+fn start(run: impl Fn(&[String]) -> (i32, Vec<u8>) + Send + Sync + 'static) -> PanelData {
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
         let announce = |data: &PanelData| {
@@ -968,6 +968,83 @@ fn a_malformed_request_is_a_400_and_the_next_connection_is_still_served() {
     assert_eq!(status, "HTTP/1.1 400 Bad Request");
     let (status, _) = get(data.port, &format!("/?token={}", token_in(&data.url)), None);
     assert_eq!(status, "HTTP/1.1 200 OK");
+}
+
+#[test]
+fn a_panicking_request_gets_500_and_the_server_serves_the_next_request() {
+    let server = start(|args| {
+        if args.get(1).map(String::as_str) == Some("panic") {
+            panic!("scripted request panic");
+        }
+        let envelope = serde_json::json!({"ok": true, "command": args[0], "data": {}});
+        (0, envelope.to_string().into_bytes())
+    });
+    let token = token_in(&server.url);
+
+    let (status, body) = post(
+        server.port,
+        "/api/status",
+        Some(format!("{}: {token}", panel::TOKEN_HEADER)),
+        r#"{"game":"panic"}"#,
+    );
+    assert!(status.starts_with("HTTP/1.1 500"), "{status}");
+    assert!(String::from_utf8_lossy(&body).contains("failed unexpectedly"));
+
+    let (status, body) = post(
+        server.port,
+        "/api/status",
+        Some(format!("{}: {token}", panel::TOKEN_HEADER)),
+        r#"{"game":"ok"}"#,
+    );
+    assert!(status.starts_with("HTTP/1.1 200"), "{status}");
+    assert!(serde_json::from_slice::<Value>(&body).unwrap()["ok"]
+        .as_bool()
+        .unwrap());
+}
+
+#[test]
+fn a_slow_request_does_not_block_another_connection() {
+    let gate = Arc::new((Mutex::new(false), Condvar::new()));
+    let slow_gate = Arc::clone(&gate);
+    let (started, started_rx) = mpsc::channel();
+    let server = start(move |args| {
+        if args.get(1).map(String::as_str) == Some("slow") {
+            let _ = started.send(());
+            let (lock, ready) = &*slow_gate;
+            let mut released = lock.lock().unwrap();
+            while !*released {
+                released = ready.wait(released).unwrap();
+            }
+        }
+        let envelope = serde_json::json!({"ok": true, "command": args[0], "data": {}});
+        (0, envelope.to_string().into_bytes())
+    });
+    let token = token_in(&server.url);
+    let slow_token = token.clone();
+    let port = server.port;
+    let slow = thread::spawn(move || {
+        post(
+            port,
+            "/api/status",
+            Some(format!("{}: {slow_token}", panel::TOKEN_HEADER)),
+            r#"{"game":"slow"}"#,
+        )
+    });
+    started_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the slow request reached its command");
+
+    let (status, _) = post(
+        server.port,
+        "/api/status",
+        Some(format!("{}: {token}", panel::TOKEN_HEADER)),
+        r#"{"game":"fast"}"#,
+    );
+    let (lock, ready) = &*gate;
+    *lock.lock().unwrap() = true;
+    ready.notify_one();
+    assert!(slow.join().unwrap().0.starts_with("HTTP/1.1 200"));
+    assert!(status.starts_with("HTTP/1.1 200"), "{status}");
 }
 
 #[test]

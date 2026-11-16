@@ -42,3 +42,6 @@ sha2 = "0.10"
 # pure-Rust zbus Secret Service on Linux (no libdbus; keyring 3's sync backend needs it).
 keyring = { version = "4.2", optional = true }
 ureq = { version = "2.12", optional = true, default-features = false, features = ["tls"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_Com", "Win32_UI_Shell"] }

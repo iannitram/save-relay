@@ -1,10 +1,10 @@
 //! Which OS this is, and the folders a manifest's saves template and this tool's own files
-//! resolve against. Values come from environment variables through a lookup function, so the
-//! rules are tested on every OS without touching the real environment.
+//! resolve against. Injected environments stay pure; this machine's folders also account for
+//! Windows known-folder redirection.
 
 use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// A platform a manifest can name a saves folder for. 1.0 builds Linux and Windows
 /// (macOS is built in CI too); Android and iOS bindings are a Should for 1.0.
@@ -56,15 +56,36 @@ pub struct PathVars {
 }
 
 impl PathVars {
+    /// Resolve this machine's folders, including redirected Windows Documents.
+    pub fn current() -> Result<PathVars> {
+        Self::from_system_env(
+            Platform::current(),
+            &|name| std::env::var(name).ok(),
+            &known_documents_folder,
+        )
+    }
+
+    fn from_system_env(
+        platform: Platform,
+        var: &dyn Fn(&str) -> Option<String>,
+        documents: &dyn Fn() -> Option<PathBuf>,
+    ) -> Result<PathVars> {
+        let mut vars = Self::from_env(platform, var)?;
+        if platform == Platform::Windows {
+            vars.documents = Some(windows_documents(&vars.home, documents()));
+        }
+        Ok(vars)
+    }
+
     /// Resolve the folders for `platform` from environment variables read through `var`
-    /// (pass `|k| std::env::var(k).ok()` for the real environment). An empty value counts as unset.
+    /// without reading machine state. An empty value counts as unset.
     ///
     /// - Linux: home `$HOME`; data `$XDG_DATA_HOME` else `<home>/.local/share`;
     ///   config `$XDG_CONFIG_HOME` else `<home>/.config`; documents `<home>/Documents`.
     /// - Mac: home `$HOME`; data and config `<home>/Library/Application Support`;
     ///   documents `<home>/Documents`.
     /// - Windows: home `%USERPROFILE%`; data `%LOCALAPPDATA%`; config `%APPDATA%`;
-    ///   documents `<home>\Documents`.
+    ///   documents `<home>\Documents`. Use `current` for this machine's known folder.
     /// - Android, iOS: `Error::Usage` (the host app supplies its folders there).
     ///
     /// A required variable that is unset is `Error::Io("<NAME> is not set")`.
@@ -121,6 +142,44 @@ impl PathVars {
     }
 }
 
+fn windows_documents(home: &Path, known_folder: Option<PathBuf>) -> PathBuf {
+    known_folder.unwrap_or_else(|| home.join("Documents"))
+}
+
+#[cfg(windows)]
+fn known_documents_folder() -> Option<PathBuf> {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::System::Com::CoTaskMemFree;
+    use windows_sys::Win32::UI::Shell::{FOLDERID_Documents, SHGetKnownFolderPath};
+
+    let mut path = std::ptr::null_mut();
+    // SAFETY: SHGetKnownFolderPath writes a COM-allocated, NUL-terminated path on success.
+    let result =
+        unsafe { SHGetKnownFolderPath(&FOLDERID_Documents, 0, std::ptr::null_mut(), &mut path) };
+    if result < 0 || path.is_null() {
+        return None;
+    }
+    // SAFETY: the API returned a valid NUL-terminated UTF-16 buffer.
+    let length = unsafe {
+        let mut length = 0;
+        while *path.add(length) != 0 {
+            length += 1;
+        }
+        length
+    };
+    // SAFETY: `path` points to `length` initialized UTF-16 code units.
+    let documents = unsafe { OsString::from_wide(std::slice::from_raw_parts(path, length)) };
+    // SAFETY: SHGetKnownFolderPath allocated `path` with the COM task allocator.
+    unsafe { CoTaskMemFree(path.cast()) };
+    Some(PathBuf::from(documents))
+}
+
+#[cfg(not(windows))]
+fn known_documents_folder() -> Option<PathBuf> {
+    None
+}
+
 /// Where this tool keeps its own files on this machine (docs/code-map.md, `local`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppDirs {
@@ -137,5 +196,41 @@ impl AppDirs {
             config: vars.config.join("save-relay"),
             data: vars.data.join("save-relay"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PathVars, Platform};
+    use std::path::PathBuf;
+
+    #[test]
+    fn windows_documents_uses_known_folder_and_falls_back_to_user_profile() {
+        let env = |name: &str| match name {
+            "USERPROFILE" => Some(r"C:\Users\Player".to_string()),
+            "LOCALAPPDATA" => Some(r"C:\Local".to_string()),
+            "APPDATA" => Some(r"C:\Roaming".to_string()),
+            _ => None,
+        };
+        let redirected = PathBuf::from(r"C:\Users\Player\OneDrive\Documents");
+        assert_eq!(
+            PathVars::from_system_env(Platform::Windows, &env, &|| Some(redirected.clone()))
+                .unwrap()
+                .documents,
+            Some(redirected)
+        );
+        assert_eq!(
+            PathVars::from_system_env(Platform::Windows, &env, &|| None)
+                .unwrap()
+                .documents,
+            Some(PathBuf::from(r"C:\Users\Player").join("Documents"))
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn current_uses_the_windows_known_documents_folder() {
+        let expected = super::known_documents_folder().expect("Windows Documents known folder");
+        assert_eq!(PathVars::current().unwrap().documents, Some(expected));
     }
 }
