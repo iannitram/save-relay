@@ -28,9 +28,9 @@ pub fn files_url(server: &str, user: &str) -> Result<String> {
     ))
 }
 
-/// A warning for a `server` that uses plain `http://` to a host other than this machine
-/// (`localhost`, `127.x`, `::1`): the app password and the saves would cross the network
-/// unencrypted. `None` for `https://` and for those loopback hosts.
+/// A warning for a `server` that uses plain `http://` outside localhost and private addresses:
+/// the app password and saves would cross the network unencrypted. `None` for `https://` and
+/// trusted local addresses.
 pub fn http_warning(server: &str) -> Option<String> {
     let rest = server.strip_prefix("http://")?;
     let authority = rest.split('/').next().unwrap_or("");
@@ -38,7 +38,11 @@ pub fn http_warning(server: &str) -> Option<String> {
         Some(v6) => v6.split(']').next().unwrap_or(""),
         None => authority.split(':').next().unwrap_or(""),
     };
-    if host.eq_ignore_ascii_case("localhost") || host == "::1" || host.starts_with("127.") {
+    let local_ip = host.parse::<std::net::IpAddr>().is_ok_and(|ip| match ip {
+        std::net::IpAddr::V4(ip) => ip.is_loopback() || ip.is_private(),
+        std::net::IpAddr::V6(ip) => ip.is_loopback() || ip.is_unique_local(),
+    });
+    if host.eq_ignore_ascii_case("localhost") || local_ip {
         return None;
     }
     Some(format!(
@@ -441,10 +445,18 @@ impl crate::remote::Remote for WebDav {
             crate::remote::Precondition::Absent => vec![("If-None-Match", "*".to_string())],
         };
         let response = self.send("PUT", path, &headers, bytes.to_vec(), &[200, 201, 204])?;
-        response
-            .header_value("ETag")
-            .map(|etag| etag.to_string())
-            .ok_or_else(|| Error::Server(format!("PUT {path}: no ETag")))
+        if let Some(etag) = response.header_value("ETag") {
+            return Ok(etag.to_string());
+        }
+        // Some WebDAV servers omit ETag from a successful PUT response. Read the properties
+        // back from the containing collection to obtain the canonical ETag.
+        let parent = path.rsplit_once('/').map_or("", |(parent, _)| parent);
+        let name = path.rsplit('/').next().unwrap_or(path);
+        self.list(parent)?
+            .into_iter()
+            .find(|entry| !entry.is_dir && entry.name == name)
+            .and_then(|entry| entry.etag)
+            .ok_or_else(|| Error::Server(format!("PUT {path}: no ETag after PROPFIND")))
     }
     fn mkcol(&self, dir: &str) -> Result<()> {
         self.send("MKCOL", dir, &[], vec![], &[201, 405])?;
