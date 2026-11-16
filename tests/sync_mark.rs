@@ -503,21 +503,44 @@ fn an_unreachable_mark_read_on_a_reachable_server_is_an_error_not_no_mark() {
     tablet.pull(&w.remote, NOW + 60, None, false);
     assert!(mark(&w.remote).is_some());
 
+    // A launch on the tablet would push these edits if a failed read counted as no mark.
+    tablet.save("new local saves");
+    let before_state = w.remote.read(&layout().state_path(GAME));
+    let before_mark = mark(&w.remote);
+    let before_history = w.remote.list(&layout().history_dir(GAME)).unwrap();
     let flaky = FlakyMark(&w.remote);
-    let result = pull(
-        &amd.session_dyn(&flaky, NOW + 120),
-        &amd.game,
-        &amd.store,
-        None,
-        false,
-    );
-    assert!(
-        matches!(result, Err(save_relay::Error::Unreachable(_))),
-        "{result:?}"
-    );
-    let status = status(&amd.session_dyn(&flaky, NOW + 120), &amd.game, &amd.store);
-    assert!(
-        matches!(status, Err(save_relay::Error::Unreachable(_))),
-        "{status:?}"
-    );
+    for machine in [&amd, &tablet] {
+        let before_last = machine.store.load_last(GAME).unwrap();
+        let before_saves = machine.saves();
+        for anyway in [false, true] {
+            let result = pull(
+                &machine.session_dyn(&flaky, NOW + 120),
+                &machine.game,
+                &machine.store,
+                None,
+                anyway,
+            );
+            assert!(
+                matches!(result, Err(save_relay::Error::Unreachable(_))),
+                "{result:?}"
+            );
+            assert_eq!(machine.saves(), before_saves);
+            assert_eq!(machine.store.load_last(GAME).unwrap(), before_last);
+            assert_eq!(w.remote.read(&layout().state_path(GAME)), before_state);
+            assert_eq!(mark(&w.remote), before_mark);
+            assert_eq!(
+                w.remote.list(&layout().history_dir(GAME)).unwrap(),
+                before_history
+            );
+        }
+        let status = status(
+            &machine.session_dyn(&flaky, NOW + 120),
+            &machine.game,
+            &machine.store,
+        );
+        assert!(
+            matches!(status, Err(save_relay::Error::Unreachable(_))),
+            "{status:?}"
+        );
+    }
 }

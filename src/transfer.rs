@@ -112,16 +112,16 @@ fn stage_downloads(
     staged: &mut Vec<(PathBuf, PathBuf)>,
 ) -> Result<()> {
     for file in &wanted.files {
-        if local
+        let unchanged = local
             .files
             .iter()
-            .any(|l| l.path == file.path && l.sha256 == file.sha256)
-        {
-            continue;
-        }
+            .any(|l| l.path == file.path && l.sha256 == file.sha256);
         let (bytes, _) = remote.get(&format!("{entry_dir}/{}", file.path))?;
         if hash_bytes(&bytes) != file.sha256 {
             return Err(Error::Server(format!("hash mismatch: {}", file.path)));
+        }
+        if unchanged {
+            continue;
         }
         let target = local_path(saves_dir, &file.path);
         let mut part_name = target.as_os_str().to_os_string();
