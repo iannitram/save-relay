@@ -161,7 +161,7 @@ fn sign_in_browser_success_and_redirect_page() {
 }
 
 #[test]
-fn sign_in_browser_ignores_favicon() {
+fn sign_in_browser_ignores_stray_requests() {
     let transport = MockTransport::new(|req: &Request| {
         if req.url == GOOGLE.token_url {
             return Ok(Response::new(
@@ -176,12 +176,13 @@ fn sign_in_browser_ignores_favicon() {
         panic!("unexpected request");
     });
 
+    let worker = Mutex::new(None);
     let open = |url: &str| {
         let params = parse_query(url);
         let redirect_uri = params.get("redirect_uri").unwrap().clone();
         let state = params.get("state").unwrap().clone();
 
-        std::thread::spawn(move || {
+        *worker.lock().unwrap() = Some(std::thread::spawn(move || {
             let addr = redirect_uri
                 .strip_prefix("http://")
                 .and_then(|s| s.strip_suffix('/'))
@@ -198,57 +199,54 @@ fn sign_in_browser_ignores_favicon() {
             fav_stream.read_to_string(&mut fav_resp).unwrap();
             assert!(fav_resp.starts_with("HTTP/1.1 404 Not Found"));
 
-            // Second request: the real redirect
+            // Wrong paths, absent state, and another sign-in's state are all unrelated.
+            for target in [
+                format!("/stray?code=wrong&state={state}"),
+                "/".into(),
+                "/?code=wrong".into(),
+                "/?code=wrong&state=wrong-state".into(),
+                "/?error=access_denied&state=wrong-state".into(),
+                "/?error=access_denied".into(),
+            ] {
+                let mut stream = TcpStream::connect(addr).expect("connect for stray request");
+                stream
+                    .write_all(
+                        format!(
+                            "GET {target} HTTP/1.1\r\nHost: loopback\r\nConnection: close\r\n\r\n"
+                        )
+                        .as_bytes(),
+                    )
+                    .unwrap();
+                let mut response = String::new();
+                stream.read_to_string(&mut response).unwrap();
+                assert!(
+                    response.starts_with("HTTP/1.1 404 Not Found"),
+                    "{target}: {response}"
+                );
+            }
+
+            // Then the real redirect still completes.
             let mut code_stream = TcpStream::connect(addr).expect("connect for code");
             let req = format!("GET /?code=valid-code&state={state} HTTP/1.1\r\nHost: loopback\r\nConnection: close\r\n\r\n");
             code_stream.write_all(req.as_bytes()).unwrap();
             let mut code_resp = String::new();
             code_stream.read_to_string(&mut code_resp).unwrap();
             assert!(code_resp.starts_with("HTTP/1.1 200 OK"));
-        });
+        }));
         Ok(())
     };
 
-    let tokens = sign_in_browser(&GOOGLE, GOOGLE_CLIENT, &transport, &open, || 500)
-        .expect("sign_in_browser succeeds after ignoring favicon");
+    let tokens = sign_in_browser_timeout(
+        &GOOGLE,
+        GOOGLE_CLIENT,
+        &transport,
+        &open,
+        || 500,
+        Duration::from_secs(2),
+    )
+    .expect("sign_in_browser succeeds after ignoring stray requests");
+    worker.into_inner().unwrap().unwrap().join().unwrap();
     assert_eq!(tokens.access.expose(), "fav-access");
-}
-
-#[test]
-fn sign_in_browser_refuses_wrong_state() {
-    let (tx, rx) = std::sync::mpsc::channel::<String>();
-    let transport = MockTransport::new(|_| panic!("transport should not be called on wrong state"));
-
-    let open = |url: &str| {
-        let tx = tx.clone();
-        let params = parse_query(url);
-        let redirect_uri = params.get("redirect_uri").unwrap().clone();
-
-        std::thread::spawn(move || {
-            let addr = redirect_uri
-                .strip_prefix("http://")
-                .and_then(|s| s.strip_suffix('/'))
-                .unwrap();
-            let mut stream = TcpStream::connect(addr).unwrap();
-            let req = format!("GET /?code=some-code&state=wrong-state HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
-            stream.write_all(req.as_bytes()).unwrap();
-            let mut resp = String::new();
-            let _ = stream.read_to_string(&mut resp);
-            let _ = tx.send(resp);
-        });
-        Ok(())
-    };
-
-    let err = sign_in_browser(&GOOGLE, GOOGLE_CLIENT, &transport, &open, || 1000)
-        .expect_err("sign_in_browser must refuse wrong state");
-    assert_eq!(
-        err,
-        Error::SignInFailed("the answer did not match this sign-in".into())
-    );
-    assert_failed_page(
-        &rx.recv_timeout(Duration::from_secs(5))
-            .expect("browser got a response"),
-    );
 }
 
 #[test]
@@ -261,6 +259,7 @@ fn sign_in_browser_refuses_access_denied() {
         let tx = tx.clone();
         let params = parse_query(url);
         let redirect_uri = params.get("redirect_uri").unwrap().clone();
+        let state = params.get("state").unwrap().clone();
 
         std::thread::spawn(move || {
             let addr = redirect_uri
@@ -269,7 +268,7 @@ fn sign_in_browser_refuses_access_denied() {
                 .unwrap();
             let mut stream = TcpStream::connect(addr).unwrap();
             let req = format!(
-                "GET /?error=access_denied HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
+                "GET /?error=access_denied&state={state} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
             );
             stream.write_all(req.as_bytes()).unwrap();
             let mut resp = String::new();

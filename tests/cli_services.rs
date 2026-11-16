@@ -269,6 +269,80 @@ fn dropbox() -> (Arc<FakeDropbox>, Arc<dyn Transport>) {
     (fake, transport)
 }
 
+struct TransientTokenFailure {
+    inner: Arc<FakeDropbox>,
+    failure: Mutex<Option<Result<Response>>>,
+}
+
+impl Transport for TransientTokenFailure {
+    fn send(&self, request: &Request) -> Result<Response> {
+        if request.url.ends_with("/oauth2/token") {
+            if let Some(failure) = self.failure.lock().unwrap().take() {
+                return failure;
+            }
+        }
+        self.inner.send(request)
+    }
+}
+
+#[test]
+fn setup_finish_keeps_pending_sign_in_after_transient_failures() {
+    for (failure, error_code) in [
+        (
+            Err(Error::Unreachable("network unavailable".into())),
+            "server_unreachable",
+        ),
+        (
+            Err(Error::Unreachable("request timed out".into())),
+            "server_unreachable",
+        ),
+        (
+            Ok(Response::new(500, r#"{"error":"invalid_grant"}"#)),
+            "server_error",
+        ),
+        (
+            Ok(Response::new(503, "temporarily unavailable")),
+            "server_error",
+        ),
+    ] {
+        let fault = Arc::new(TransientTokenFailure {
+            inner: Arc::new(FakeDropbox::new()),
+            failure: Mutex::new(None),
+        });
+        let transport: Arc<dyn Transport> = fault.clone();
+        let machine = Machine::new();
+        let (code, _) = machine.json(
+            &transport,
+            "setup --service dropbox --no-browser --device desk",
+            "",
+        );
+        assert_eq!(code, 0);
+        let account = pending_account(Service::Dropbox);
+        let before = machine.creds.get(&account).unwrap().unwrap();
+        *fault.failure.lock().unwrap() = Some(failure);
+        let (code, envelope) = machine.json(
+            &transport,
+            "setup --service dropbox --finish --device desk",
+            &format!("{SIGN_IN_CODE}\n"),
+        );
+        assert_eq!(code, 5, "{envelope}");
+        assert_eq!(envelope["error"]["code"], error_code);
+        let after = machine
+            .creds
+            .get(&account)
+            .unwrap()
+            .expect("pending sign-in kept");
+        assert_eq!(after.expose(), before.expose());
+        let (code, envelope) = machine.json(
+            &transport,
+            "setup --service dropbox --finish --device desk",
+            &format!("{SIGN_IN_CODE}\n"),
+        );
+        assert_eq!(code, 0, "{envelope}");
+        assert!(machine.creds.get(&account).unwrap().is_none());
+    }
+}
+
 // `FakeDrive` is not `Send` (its test hook is a plain closure). These tests run it on one thread;
 // `Net` takes an `Arc<dyn Transport>` by design, so the handle is an `Arc` all the same.
 #[allow(clippy::arc_with_non_send_sync)]

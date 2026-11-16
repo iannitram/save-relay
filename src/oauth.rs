@@ -185,6 +185,22 @@ pub fn authorize_url(
 /// refused: `error=access_denied`) is `Error::SignInFailed("<error value>")`, checked before
 /// the state. No `code` is `Error::SignInFailed("no code in the answer")`.
 pub fn parse_redirect(target: &str, want_state: &str) -> Result<String> {
+    let (code, state, error) = redirect_parameters(target);
+    if let Some(error) = error {
+        return Err(crate::error::Error::SignInFailed(error));
+    }
+    match state {
+        Some(state) if state == want_state => {}
+        _ => {
+            return Err(crate::error::Error::SignInFailed(
+                "the answer did not match this sign-in".into(),
+            ));
+        }
+    }
+    code.ok_or_else(|| crate::error::Error::SignInFailed("no code in the answer".into()))
+}
+
+fn redirect_parameters(target: &str) -> (Option<String>, Option<String>, Option<String>) {
     fn hex(b: u8) -> Option<u8> {
         match b {
             b'0'..=b'9' => Some(b - b'0'),
@@ -239,23 +255,7 @@ pub fn parse_redirect(target: &str, want_state: &str) -> Result<String> {
         }
     }
 
-    if let Some(error) = error {
-        return Err(crate::error::Error::SignInFailed(error));
-    }
-    match state {
-        Some(state) if state == want_state => {}
-        _ => {
-            return Err(crate::error::Error::SignInFailed(
-                "the answer did not match this sign-in".into(),
-            ));
-        }
-    }
-    match code {
-        Some(code) => Ok(code),
-        None => Err(crate::error::Error::SignInFailed(
-            "no code in the answer".into(),
-        )),
-    }
+    (code, state, error)
 }
 
 /// Tokens from a token endpoint. `Debug` shows `***` for both secrets.
@@ -613,14 +613,19 @@ pub fn sign_in_browser_timeout(
             continue;
         }
 
-        // A request that carries no sign-in parameters at all (a port scan, a stray tab) is
-        // answered and ignored: it is not the provider's answer, so it must not end the sign-in.
-        let query = target.split_once('?').map_or("", |(_, query)| query);
-        let has_answer = query.split('&').any(|pair| {
-            let key = pair.split('=').next().unwrap_or("");
-            matches!(key, "code" | "state" | "error")
-        });
-        if !has_answer {
+        // Both providers redirect to the listener root. A stray request on another path is
+        // unrelated, even if it happens to include OAuth-looking query parameters.
+        if target.split(['?', '#']).next() != Some("/") {
+            let resp = b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            let _ = stream.write_all(resp);
+            let _ = stream.flush();
+            continue;
+        }
+
+        // Only the state from this sign-in identifies the provider's answer. Stray
+        // requests, including errors for a different sign-in, must not end the wait.
+        let (_, received_state, _) = redirect_parameters(target);
+        if received_state.as_deref() != Some(state.as_str()) {
             let resp = b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
             let _ = stream.write_all(resp);
             let _ = stream.flush();
