@@ -14,13 +14,12 @@
 //! - `POST /api/<command>` with a JSON object body: runs the same code as the command line
 //!   (`api_args`, then `cli::run`) and answers its `--json` envelope with status 200, failures
 //!   included. A refused request (an unknown or missing field, a command the panel does not run)
-//!   is a usage envelope with status 400. A picture is not an API call: `POST /api/picture` is
-//!   refused the same way.
+//!   is a usage envelope with status 400; an unknown command is 404. Pictures use GET only.
 //! - `GET /picture/<game>/<entry>` (or `.../<game>/<entry>/<file>`, which the front end sends):
 //!   a save card's picture, as `image/jpeg` or `image/png` by its magic bytes.
 //!
-//! A random token is in the URL that is opened (`/?token=...`) and must come with every request
-//! (`X-Save-Relay-Token` header or `token` query): the page, its files, the API and the pictures.
+//! A random token is injected into the initial page (the opened URL contains no secret) and must
+//! come with every later request (`X-Save-Relay-Token` header or `token` query for GET).
 //! So other pages in the browser cannot call it; a missing or wrong token is 403. The browser
 //! opens like `oauth::open_browser`. Each connection is handled on its own thread.
 
@@ -69,20 +68,17 @@ pub mod assets {
 /// The header that carries the token.
 pub const TOKEN_HEADER: &str = "X-Save-Relay-Token";
 
-/// The commands `POST /api/<command>` may run. `setup` only for Google Drive with `no-browser`
-/// or `finish`, and for Dropbox with `no-browser` (its `finish` needs a terminal); never `wrap`,
+/// The commands `POST /api/<command>` may run. `setup` only starts Google Drive or Dropbox
+/// sign-in with `no-browser`; never `wrap`,
 /// `panel` or a Nextcloud setup (its password stays on standard input). Steam game commands are
 /// available to the M16 panel, which delegates launch-option writes to Steam's own client.
-pub const API_COMMANDS: [&str; 13] = [
+pub const API_COMMANDS: [&str; 10] = [
     "status",
     "history",
     "restore",
     "pull",
-    "push",
     "answer",
     "where",
-    "which",
-    "picture",
     "setup",
     "steam-games",
     "install-wrap",
@@ -96,15 +92,7 @@ const MAX_BODY: usize = 1024 * 1024;
 /// A connection that sends nothing for this long is dropped.
 const READ_TIMEOUT: Duration = Duration::from_secs(10);
 /// The flags of `api_args` that are switches (`true` adds the flag, `false` leaves it out).
-const SWITCHES: [&str; 7] = [
-    "anyway",
-    "no-browser",
-    "finish",
-    "no-steam-cloud",
-    "refresh",
-    "remove",
-    "dry-run",
-];
+const SWITCHES: [&str; 4] = ["anyway", "no-browser", "refresh", "remove"];
 const TEXT: &str = "text/plain; charset=utf-8";
 const JSON: &str = "application/json; charset=utf-8";
 
@@ -216,12 +204,35 @@ pub enum Route {
     NotFound,
 }
 
-/// Route `request`. Every request is checked for the token first: the header when it is there,
-/// else the `token` query. Then `/` and `/index.html` are the page, `GET /<file>` is one of the
+/// Route `request`. The initial page supplies the token; other requests check the header,
+/// or the `token` query for GET only. Then `/` and `/index.html` are the page, `GET /<file>` is one of the
 /// front end's other files, `POST /api/<command>` runs a command and `GET /picture/<game>/<entry>`
 /// (with or without a file segment) is a picture. Pure.
 pub fn route(request: &Request, token: &str) -> Route {
-    let given = header(request, TOKEN_HEADER).or_else(|| query_value(request, "token"));
+    // A token-bearing document must only be readable through the loopback origin, including
+    // when a hostile site's DNS changes to loopback after its page has loaded.
+    if !header(request, "Host").is_some_and(|host| {
+        host == "127.0.0.1"
+            || host.strip_prefix("127.0.0.1:").is_some_and(|port| {
+                !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit())
+            })
+    }) {
+        return Route::Forbidden;
+    }
+    // The initial document is the sole unauthenticated request. It injects the token into the
+    // page without putting it in the browser URL or in the browser launch arguments.
+    if request.method == "GET"
+        && (request.path == "/" || request.path == "/index.html")
+        && query_value(request, "token").is_none()
+        && header(request, TOKEN_HEADER).is_none()
+    {
+        return Route::Asset("index.html");
+    }
+    let given = header(request, TOKEN_HEADER).or_else(|| {
+        (request.method == "GET")
+            .then(|| query_value(request, "token"))
+            .flatten()
+    });
     if !given.is_some_and(|given| same_token(given, token)) {
         return Route::Forbidden;
     }
@@ -252,12 +263,15 @@ fn asset_named(path: &str) -> Option<&'static str> {
         .map(|entry| entry.0)
 }
 
-/// The page as it is served: its `./app.js` and `./app.css` references carry the token
-/// (`./app.js?token=...`). A relative reference drops the page's own query, so without this the
-/// browser would ask for the files with no token. The token is base64url, which needs no escaping
-/// in an attribute. A page without those references (the placeholder) is returned unchanged.
+/// Inject the token for the front end and its asset requests. The opened URL has no token.
 pub fn served_page(token: &str, html: &[u8]) -> Vec<u8> {
     let mut page = String::from_utf8_lossy(html).into_owned();
+    if page.contains("</head>") {
+        page = page.replace(
+            "</head>",
+            &format!("<meta name=\"save-relay-token\" content=\"{token}\"></head>"),
+        );
+    }
     for file in ["app.js", "app.css"] {
         page = page.replace(
             &format!("\"./{file}\""),
@@ -270,8 +284,8 @@ pub fn served_page(token: &str, html: &[u8]) -> Vec<u8> {
 /// The command-line arguments for an API call: `<command>` with its fields as flags
 /// (`{"game":"g","entry":"e"}` for `restore` -> `["restore","g","e","--json"]`), always ending
 /// in `--json`. An empty body is `{}`. A field the command does not take, or a missing one, is
-/// `Error::Usage`; so is a Nextcloud setup, a setup without `no-browser` (Google Drive may use
-/// `finish`), a Dropbox `finish`, and any command not in `API_COMMANDS`.
+/// `Error::Usage`; so is a Nextcloud setup, a setup without `no-browser`,
+/// and any command not in `API_COMMANDS`.
 pub fn api_args(command: &str, body: &[u8]) -> Result<Vec<String>> {
     if !API_COMMANDS.contains(&command) {
         return Err(usage_error(format!("'{command}' is not a panel command")));
@@ -375,7 +389,7 @@ pub fn response(status: u16, content_type: &str, body: &[u8]) -> Vec<u8> {
 /// stdout; `cli::run` behind a closure.
 pub type RunCommand = dyn Fn(&[String]) -> (i32, Vec<u8>) + Sync;
 
-/// Listen on `127.0.0.1:<port>` (any free port when `None`), announce the URL with its token
+/// Listen on `127.0.0.1:<port>` (any free port when `None`), announce the URL without a token
 /// (`api::PanelData`: printed as the `--json` envelope or as text by the caller) through
 /// `announce`, open it unless `open` is false, and answer requests on separate threads until the
 /// process is stopped. `run` runs one command line and returns (exit code, its stdout);
@@ -394,7 +408,7 @@ pub fn serve(
         .map_err(|error| Error::Io(error.to_string()))?
         .port();
     let token = token_from_bytes(&oauth::random_bytes()?);
-    let url = format!("http://127.0.0.1:{bound}/?token={token}");
+    let url = format!("http://127.0.0.1:{bound}/");
     announce(&PanelData {
         url: url.clone(),
         port: bound,
@@ -475,10 +489,6 @@ fn answer(request: &Request, token: &str, run: &RunCommand) -> Answer {
 }
 
 fn api_answer(command: &str, body: &[u8], run: &RunCommand) -> Answer {
-    if command == "picture" {
-        let error = usage_error("read a picture with GET /picture/<game>/<entry>");
-        return (400, JSON, api::failure(command, &error).into_bytes());
-    }
     let argv = match api_args(command, body) {
         Ok(argv) => argv,
         Err(error) => return (400, JSON, api::failure(command, &error).into_bytes()),
@@ -506,22 +516,18 @@ fn picture_bytes(
     ));
     fs::create_dir(&folder).ok()?;
     let out = folder.join("picture");
-    let body = serde_json::json!({ "game": game, "entry": entry }).to_string();
-    let bytes = match api_args("picture", body.as_bytes()) {
-        Ok(mut argv) => {
-            argv.pop(); // `--json`, added again after `--out`
-            argv.push("--out".to_string());
-            argv.push(out.to_string_lossy().into_owned());
-            argv.push("--json".to_string());
-            let (code, _) = run(&argv);
-            if code == 0 {
-                fs::read(&out).ok()
-            } else {
-                None
-            }
-        }
-        Err(_) => None,
-    };
+    // The picture GET route has already validated these identifiers. This internal command
+    // is deliberately separate from the public POST allowlist.
+    let argv = vec![
+        "picture".to_string(),
+        game.to_string(),
+        entry.to_string(),
+        "--out".to_string(),
+        out.to_string_lossy().into_owned(),
+        "--json".to_string(),
+    ];
+    let (code, _) = run(&argv);
+    let bytes = if code == 0 { fs::read(&out).ok() } else { None };
     let _ = fs::remove_dir_all(&folder);
     let bytes = bytes?;
     let kind = card::check_picture(&bytes).ok()?;
@@ -659,46 +665,33 @@ fn body_fields(body: &[u8]) -> Result<serde_json::Map<String, Value>> {
 fn fields_of(command: &str) -> (&'static [&'static str], &'static [&'static str]) {
     match command {
         "history" => (&["game"], &[]),
-        "status" => (&["game"], &["manifest", "saves-dir"]),
-        "pull" => (&["game"], &["manifest", "saves-dir", "resolve", "anyway"]),
-        "push" => (&["game"], &["manifest", "saves-dir", "resolve"]),
-        "restore" => (&["game", "entry"], &["manifest", "saves-dir"]),
-        "picture" => (&["game", "entry"], &[]),
+        "status" => (&["game"], &[]),
+        "pull" => (&["game"], &["anyway"]),
+        "restore" => (&["game", "entry"], &[]),
         "answer" => (&["game", "answer"], &[]),
-        "which" => (&["appid"], &[]),
-        "steam-games" => (&[], &["no-steam-cloud", "refresh"]),
-        "install-wrap" => (&["app-ids"], &["no-steam-cloud", "remove", "dry-run"]),
+        "steam-games" => (&[], &["refresh"]),
+        "install-wrap" => (&["app-ids"], &["remove"]),
         "launch-option" => (&["appid"], &["remove", "current"]),
-        "setup" => (&[], &["service", "device", "root", "no-browser", "finish"]),
+        "setup" => (&[], &["service", "no-browser"]),
         _ => (&[], &[]),
     }
 }
 
-/// A panel setup signs in to Google Drive or Dropbox without a browser of its own: it needs
-/// `no-browser`, or `finish` for Google Drive. A Dropbox `finish` reads its code from standard
-/// input, which the panel cannot supply, so it is refused. The Nextcloud password is never sent
-/// through the panel.
+/// A panel setup starts Google Drive or Dropbox sign-in with `no-browser`. Finishing
+/// sign-in and supplying a Nextcloud password require the terminal.
 fn check_setup(fields: &serde_json::Map<String, Value>) -> Result<()> {
-    let service = match fields.get("service").and_then(Value::as_str) {
-        Some(service @ ("gdrive" | "dropbox")) => service,
+    match fields.get("service").and_then(Value::as_str) {
+        Some("gdrive" | "dropbox") => {}
         Some("nextcloud") => {
             return Err(usage_error(
                 "the Nextcloud password is read from standard input: run `save-relay setup` in a terminal",
             ));
         }
         _ => return Err(usage_error("setup needs service gdrive or dropbox")),
-    };
-    if service == "dropbox" && fields.get("finish") == Some(&Value::Bool(true)) {
-        return Err(usage_error(
-            "setup from the panel cannot finish a Dropbox sign-in: run `save-relay setup --service dropbox --finish` in a terminal",
-        ));
     }
-    let code_sign_in = ["no-browser", "finish"]
-        .iter()
-        .any(|key| fields.get(*key) == Some(&Value::Bool(true)));
-    if !code_sign_in {
+    if fields.get("no-browser") != Some(&Value::Bool(true)) {
         return Err(usage_error(
-            "setup from the panel needs no-browser or finish: it never opens a browser itself",
+            "setup from the panel needs no-browser: it never opens a browser itself",
         ));
     }
     Ok(())

@@ -1,4 +1,4 @@
-// The desktop entry: `save-relay panel` opens `/?token=...`; the token comes with every call.
+// The desktop entry reads the injected token; calls carry it in a header.
 // With no token (`pnpm --dir panel dev`) or `?fixtures`, the views run on the fixtures.
 
 /// <reference types="vite/client" />
@@ -22,7 +22,12 @@ if (typeof colorScheme?.addEventListener === "function") {
 }
 
 const params = new URLSearchParams(window.location.search);
-const token = params.get("token");
+const token = document.querySelector<HTMLMetaElement>('meta[name="save-relay-token"]')?.content ?? null;
+if (params.has("token")) {
+  params.delete("token");
+  const query = params.toString();
+  window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`);
+}
 // The fixtures are for `pnpm dev` only: `import.meta.env.DEV` is false in the release build, so
 // the bundler leaves the fixture bridge out and a token-less page just fails its calls.
 const root = document.getElementById("root");

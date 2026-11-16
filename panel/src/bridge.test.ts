@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { API_COMMANDS, httpBridge, TOKEN_HEADER, type ApiArgs, type ApiCommand } from "./bridge.ts";
 
@@ -45,4 +46,14 @@ describe("httpBridge with a reply that is not JSON", () => {
     expect(envelope.error.message).toContain("forbidden");
     expect(envelope.error.message).not.toContain("Unexpected token");
   });
+});
+
+it("exposes only the shared panel commands and matches the Rust HTTP contract", () => {
+  expect([...API_COMMANDS]).toEqual([
+    "status", "history", "restore", "pull", "answer", "where", "setup",
+    "steam-games", "install-wrap", "launch-option",
+  ]);
+  const rust = readFileSync(new URL("../../src/panel.rs", import.meta.url), "utf8");
+  const list = rust.match(/pub const API_COMMANDS[^=]*= \[([\s\S]*?)\];/)![1]!;
+  expect([...list.matchAll(/"([^"]+)"/g)].map((m) => m[1])).toEqual([...API_COMMANDS]);
 });
