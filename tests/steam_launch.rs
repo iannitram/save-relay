@@ -6,7 +6,7 @@
 use save_relay::platform::Platform;
 use save_relay::steam::launch::{
     backup_name, install, installed_among, is_wrapped, launch_options, set_launch_options,
-    steam_running, unwrapped, wrapped,
+    steam_running, steam_running_linux, unwrapped, wrapped,
 };
 use save_relay::steam::parse_libraries;
 use save_relay::steam::vdf::{parse, to_text};
@@ -18,6 +18,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 const BIN: &str = "/opt/save-relay/save-relay";
 const WRAP: &str = "/opt/save-relay/save-relay wrap -- %command%";
 const WINDOWS_BIN: &str = r"C:\Games\save-relay.exe";
+const LINUX_FLATPAK_PID_FILE: &str =
+    ".var/app/com.valvesoftware.Steam/.local/share/Steam/steam.pid";
 const NOW: u64 = 1_793_476_260; // 2026-10-31T19:51:00Z
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 
@@ -114,6 +116,15 @@ fn wrapping_twice_changes_nothing() {
     let once = wrapped(Some("gamemoderun %command% -fps"), BIN, Platform::Linux);
     assert!(is_wrapped(&once));
     assert_eq!(wrapped(Some(once.as_str()), BIN, Platform::Linux), once);
+}
+
+#[test]
+fn wrapped_recognises_wrap_options_before_steam_separator() {
+    let current = format!("{BIN} wrap --manifest saves.yaml -- %command% -fps");
+    assert!(is_wrapped(&current));
+    assert_eq!(wrapped(Some(&current), BIN, Platform::Linux), current);
+    // The same as without options: the game arguments as they were before the wrap.
+    assert_eq!(unwrapped(&current), Some("-fps".to_string()));
 }
 
 #[test]
@@ -305,6 +316,31 @@ fn install_wraps_the_picked_apps_and_keeps_the_rest() {
     assert_eq!(data.backups.len(), 1);
     assert!(data.backups[0].ends_with("localconfig.vdf.save-relay-20261031T195100Z.bak"));
     assert_eq!(fs::read(&data.backups[0]).unwrap(), LOCALCONFIG.as_bytes());
+}
+
+#[test]
+fn install_skips_numeric_userdata_without_localconfig() {
+    let root = temp_root();
+    add_user(&root, "42", LOCALCONFIG);
+    fs::create_dir_all(root.join("userdata/0")).unwrap();
+    let data = install(
+        &root,
+        &[480],
+        Path::new(BIN),
+        false,
+        true,
+        Platform::Linux,
+        NOW,
+    )
+    .unwrap();
+    assert_eq!(data.changed.len(), 1);
+    assert_eq!(data.changed[0].user_id, "42");
+    assert_eq!(data.skipped.len(), 1);
+    assert_eq!(data.skipped[0].name, "Steam user 0");
+    assert_eq!(
+        data.skipped[0].reason,
+        save_relay::api::InstallWrapSkipReason::NoLocalConfig
+    );
 }
 
 #[test]
@@ -623,41 +659,53 @@ fn install_remove_restores_the_file_byte_for_byte_when_the_key_was_there() {
 }
 
 #[test]
-fn install_refuses_a_user_with_no_file_and_writes_nothing() {
+fn install_skips_a_user_with_no_file_and_reports_it() {
     let root = temp_root();
     let first = add_user(&root, "42", LOCALCONFIG);
     let second = add_user(&root, "43", LOCALCONFIG);
     fs::create_dir_all(root.join("userdata").join("44")).unwrap();
-    let missing = root
-        .join("userdata")
-        .join("44")
-        .join("config")
-        .join("localconfig.vdf");
-
-    // Refused for a real run and a dry run alike, before any file is written.
-    for dry_run in [false, true] {
-        let error = install(
-            &root,
-            &[480],
-            Path::new(BIN),
-            false,
-            dry_run,
-            Platform::Linux,
-            NOW,
-        )
-        .unwrap_err();
-        assert!(matches!(error, Error::Io(_)), "{error:?}");
-        assert!(
-            error.to_string().contains(&missing.display().to_string()),
-            "{error}"
-        );
-    }
+    // Dry run reports the missing user without changing either usable user's file.
+    let dry_run = install(
+        &root,
+        &[480],
+        Path::new(BIN),
+        false,
+        true,
+        Platform::Linux,
+        NOW,
+    )
+    .unwrap();
+    assert!(dry_run.dry_run);
+    assert_eq!(dry_run.skipped.len(), 1);
+    assert_eq!(dry_run.skipped[0].name, "Steam user 44");
+    assert_eq!(
+        dry_run.skipped[0].reason,
+        save_relay::api::InstallWrapSkipReason::NoLocalConfig
+    );
     assert_eq!(fs::read(&first).unwrap(), LOCALCONFIG.as_bytes());
     assert_eq!(fs::read(&second).unwrap(), LOCALCONFIG.as_bytes());
     assert_eq!(fs::read_dir(first.parent().unwrap()).unwrap().count(), 1);
     assert!(!root.join("userdata/.save-relay-install-wrap.lock").exists());
 
-    // `--remove` skips the missing file; no option here is wrapped, so nothing changes.
+    let data = install(
+        &root,
+        &[480],
+        Path::new(BIN),
+        false,
+        false,
+        Platform::Linux,
+        NOW,
+    )
+    .unwrap();
+    assert_eq!(data.changed.len(), 2);
+    assert_eq!(option_in(&first, 480), Some(WRAP.to_string()));
+    assert_eq!(option_in(&second, 480), Some(WRAP.to_string()));
+    assert_eq!(data.skipped.len(), 1);
+    assert_eq!(data.skipped[0].name, "Steam user 44");
+    assert!(data.skipped[0].reason == save_relay::api::InstallWrapSkipReason::NoLocalConfig);
+    assert!(!root.join("userdata/.save-relay-install-wrap.lock").exists());
+
+    // `--remove` restores the usable users and still reports the missing user.
     let data = install(
         &root,
         &[480],
@@ -668,8 +716,12 @@ fn install_refuses_a_user_with_no_file_and_writes_nothing() {
         NOW,
     )
     .unwrap();
-    assert!(data.changed.is_empty());
+    assert_eq!(data.changed.len(), 2);
+    assert_eq!(data.skipped.len(), 1);
+    assert_eq!(data.skipped[0].name, "Steam user 44");
     assert_eq!(fs::read(&first).unwrap(), LOCALCONFIG.as_bytes());
+    assert_eq!(fs::read(&second).unwrap(), LOCALCONFIG.as_bytes());
+    assert!(!root.join("userdata/.save-relay-install-wrap.lock").exists());
 }
 
 #[test]
@@ -773,46 +825,108 @@ fn install_reads_every_file_before_it_writes_any() {
     assert_eq!(fs::read_dir(first.parent().unwrap()).unwrap().count(), 1);
 }
 
+/// A fake `/proc`: a folder per `(pid, comm)`, each with a `comm` file. Returns its path.
+fn fake_proc(processes: &[(&str, &str)]) -> PathBuf {
+    let proc_root = temp_root();
+    for (pid, comm) in processes {
+        let dir = proc_root.join(pid);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("comm"), format!("{comm}\n")).unwrap();
+    }
+    proc_root
+}
+
+/// Write `pid` into the pid file at `relative` under `home`.
+fn write_pid_file(home: &Path, relative: &str, pid: &str) {
+    let file = home.join(relative);
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(file, pid).unwrap();
+}
+
 #[test]
 fn steam_running_is_false_without_a_pid_file() {
     let home = temp_root();
-    assert!(!steam_running(Platform::Linux, &home).unwrap());
+    let proc_root = fake_proc(&[("1", "init"), ("4242", "bash")]);
+    assert!(!steam_running_linux(&home, &proc_root).unwrap());
     assert!(!steam_running(Platform::Android, &home).unwrap());
 }
 
 #[test]
 fn steam_running_refuses_a_pid_file_that_is_not_a_number() {
     let home = temp_root();
-    fs::create_dir_all(home.join(".steam")).unwrap();
-    fs::write(home.join(".steam/steam.pid"), "not a pid").unwrap();
+    let proc_root = fake_proc(&[]);
+    write_pid_file(&home, ".steam/steam.pid", "not a pid");
     assert!(matches!(
-        steam_running(Platform::Linux, &home),
+        steam_running_linux(&home, &proc_root),
         Err(Error::Io(_))
     ));
 }
 
-#[cfg(target_os = "linux")]
 #[test]
-fn steam_running_sees_a_live_pid_on_linux() {
+fn flatpak_steam_is_detected_as_running() {
+    // The Flatpak pid file holds the sandbox's pid 7; on the host, 7 is another process, and
+    // Steam is host pid 4242.
     let home = temp_root();
-    fs::create_dir_all(home.join(".steam")).unwrap();
-    fs::write(
-        home.join(".steam/steam.pid"),
-        std::process::id().to_string(),
-    )
-    .unwrap();
-    assert!(steam_running(Platform::Linux, &home).unwrap());
+    write_pid_file(&home, LINUX_FLATPAK_PID_FILE, "7");
+    let proc_root = fake_proc(&[("7", "bash"), ("4242", "steam")]);
+    assert!(steam_running_linux(&home, &proc_root).unwrap());
 }
 
-#[cfg(target_os = "linux")]
+#[test]
+fn a_host_steam_is_not_seen_from_a_home_without_flatpak_steam() {
+    // No Flatpak pid file in this home, so no scan: another home's Steam (the host's, seen from
+    // a test's home) does not count.
+    let home = temp_root();
+    let proc_root = fake_proc(&[("4242", "steam")]);
+    assert!(!steam_running_linux(&home, &proc_root).unwrap());
+}
+
+#[test]
+fn a_stale_pid_file_is_not_steam() {
+    // The classic pid file names 100, which is now a bash process; no process is Steam.
+    let home = temp_root();
+    write_pid_file(&home, ".steam/steam.pid", "100");
+    let proc_root = fake_proc(&[("100", "bash"), ("200", "sshd")]);
+    assert!(!steam_running_linux(&home, &proc_root).unwrap());
+}
+
+#[test]
+fn a_live_steam_pid_is_running() {
+    let home = temp_root();
+    write_pid_file(&home, ".steam/steam.pid", "55");
+    let proc_root = fake_proc(&[("55", "steam")]);
+    assert!(steam_running_linux(&home, &proc_root).unwrap());
+}
+
 #[test]
 fn steam_running_is_false_for_a_dead_pid_on_linux() {
+    // The pid file names 77, and no folder for 77 exists: not running, and no error.
     let home = temp_root();
-    fs::create_dir_all(home.join(".steam")).unwrap();
-    // A child that has exited and been reaped: its pid names no process any more.
-    let mut child = std::process::Command::new("true").spawn().unwrap();
-    let pid = child.id();
-    child.wait().unwrap();
-    fs::write(home.join(".steam/steam.pid"), pid.to_string()).unwrap();
-    assert!(!steam_running(Platform::Linux, &home).unwrap());
+    write_pid_file(&home, ".steam/steam.pid", "77");
+    let proc_root = fake_proc(&[("4242", "bash")]);
+    assert!(!steam_running_linux(&home, &proc_root).unwrap());
+}
+
+#[test]
+fn a_scan_skips_entries_that_are_not_pid_folders_or_have_no_comm() {
+    // `self` and `version` are not numeric; 300 has no comm file (its process is gone).
+    let home = temp_root();
+    write_pid_file(&home, LINUX_FLATPAK_PID_FILE, "7");
+    let proc_root = fake_proc(&[("9", "bash")]);
+    fs::create_dir_all(proc_root.join("300")).unwrap();
+    fs::create_dir_all(proc_root.join("self")).unwrap();
+    fs::write(proc_root.join("self").join("comm"), "steam\n").unwrap();
+    fs::write(proc_root.join("version"), "steam\n").unwrap();
+    assert!(!steam_running_linux(&home, &proc_root).unwrap());
+}
+
+#[test]
+fn a_proc_root_that_cannot_be_listed_is_an_io_error() {
+    let home = temp_root();
+    write_pid_file(&home, LINUX_FLATPAK_PID_FILE, "7");
+    let missing = temp_root().join("no-such-proc");
+    assert!(matches!(
+        steam_running_linux(&home, &missing),
+        Err(Error::Io(_))
+    ));
 }
