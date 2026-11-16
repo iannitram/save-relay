@@ -526,10 +526,14 @@ fn picture_bytes(
 fn picture_route(rest: &str) -> Route {
     let parts: Vec<&str> = rest.split('/').collect();
     match parts.as_slice() {
-        [game, entry] | [game, entry, _] if valid_id(game) && valid_id(entry) => Route::Picture {
-            game: game.to_string(),
-            entry: entry.to_string(),
-        },
+        [game, entry] | [game, entry, _]
+            if crate::manifest::check_id(game).is_ok() && valid_id(entry) =>
+        {
+            Route::Picture {
+                game: game.to_string(),
+                entry: entry.to_string(),
+            }
+        }
         _ => Route::NotFound,
     }
 }
@@ -695,6 +699,9 @@ fn check_setup(fields: &serde_json::Map<String, Value>) -> Result<()> {
 }
 
 fn check_value(name: &str, text: &str) -> Result<()> {
+    if name == "game" && crate::manifest::check_id(text).is_err() {
+        return Err(usage_error("invalid <game> id"));
+    }
     if text.is_empty() || text.starts_with('-') || text.contains('\0') {
         return Err(usage_error(format!("'{name}' is not a valid value")));
     }
