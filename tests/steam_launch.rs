@@ -334,6 +334,12 @@ fn install_skips_numeric_userdata_without_localconfig() {
     .unwrap();
     assert_eq!(data.changed.len(), 1);
     assert_eq!(data.changed[0].user_id, "42");
+    assert_eq!(data.skipped.len(), 1);
+    assert_eq!(data.skipped[0].name, "Steam user 0");
+    assert_eq!(
+        data.skipped[0].reason,
+        save_relay::api::InstallWrapSkipReason::NoLocalConfig
+    );
 }
 
 #[test]
@@ -652,41 +658,53 @@ fn install_remove_restores_the_file_byte_for_byte_when_the_key_was_there() {
 }
 
 #[test]
-fn install_refuses_a_user_with_no_file_and_writes_nothing() {
+fn install_skips_a_user_with_no_file_and_reports_it() {
     let root = temp_root();
     let first = add_user(&root, "42", LOCALCONFIG);
     let second = add_user(&root, "43", LOCALCONFIG);
     fs::create_dir_all(root.join("userdata").join("44")).unwrap();
-    let missing = root
-        .join("userdata")
-        .join("44")
-        .join("config")
-        .join("localconfig.vdf");
-
-    // Refused for a real run and a dry run alike, before any file is written.
-    for dry_run in [false, true] {
-        let error = install(
-            &root,
-            &[480],
-            Path::new(BIN),
-            false,
-            dry_run,
-            Platform::Linux,
-            NOW,
-        )
-        .unwrap_err();
-        assert!(matches!(error, Error::Io(_)), "{error:?}");
-        assert!(
-            error.to_string().contains(&missing.display().to_string()),
-            "{error}"
-        );
-    }
+    // Dry run reports the missing user without changing either usable user's file.
+    let dry_run = install(
+        &root,
+        &[480],
+        Path::new(BIN),
+        false,
+        true,
+        Platform::Linux,
+        NOW,
+    )
+    .unwrap();
+    assert!(dry_run.dry_run);
+    assert_eq!(dry_run.skipped.len(), 1);
+    assert_eq!(dry_run.skipped[0].name, "Steam user 44");
+    assert_eq!(
+        dry_run.skipped[0].reason,
+        save_relay::api::InstallWrapSkipReason::NoLocalConfig
+    );
     assert_eq!(fs::read(&first).unwrap(), LOCALCONFIG.as_bytes());
     assert_eq!(fs::read(&second).unwrap(), LOCALCONFIG.as_bytes());
     assert_eq!(fs::read_dir(first.parent().unwrap()).unwrap().count(), 1);
     assert!(!root.join("userdata/.save-relay-install-wrap.lock").exists());
 
-    // `--remove` skips the missing file; no option here is wrapped, so nothing changes.
+    let data = install(
+        &root,
+        &[480],
+        Path::new(BIN),
+        false,
+        false,
+        Platform::Linux,
+        NOW,
+    )
+    .unwrap();
+    assert_eq!(data.changed.len(), 2);
+    assert_eq!(option_in(&first, 480), Some(WRAP.to_string()));
+    assert_eq!(option_in(&second, 480), Some(WRAP.to_string()));
+    assert_eq!(data.skipped.len(), 1);
+    assert_eq!(data.skipped[0].name, "Steam user 44");
+    assert!(data.skipped[0].reason == save_relay::api::InstallWrapSkipReason::NoLocalConfig);
+    assert!(!root.join("userdata/.save-relay-install-wrap.lock").exists());
+
+    // `--remove` restores the usable users and still reports the missing user.
     let data = install(
         &root,
         &[480],
@@ -697,8 +715,12 @@ fn install_refuses_a_user_with_no_file_and_writes_nothing() {
         NOW,
     )
     .unwrap();
-    assert!(data.changed.is_empty());
+    assert_eq!(data.changed.len(), 2);
+    assert_eq!(data.skipped.len(), 1);
+    assert_eq!(data.skipped[0].name, "Steam user 44");
     assert_eq!(fs::read(&first).unwrap(), LOCALCONFIG.as_bytes());
+    assert_eq!(fs::read(&second).unwrap(), LOCALCONFIG.as_bytes());
+    assert!(!root.join("userdata/.save-relay-install-wrap.lock").exists());
 }
 
 #[test]

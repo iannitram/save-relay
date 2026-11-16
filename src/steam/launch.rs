@@ -8,7 +8,7 @@
 //! the file before the first change. An existing launch option is kept by wrapping it, the
 //! change is idempotent, and `--remove` undoes only save-relay's part. The text rules are pure.
 
-use crate::api::{InstallWrapApp, InstallWrapData};
+use crate::api::{InstallWrapApp, InstallWrapData, InstallWrapSkipReason, InstallWrapSkipped};
 use crate::error::{Error, Result};
 use crate::platform::Platform;
 use crate::stamp;
@@ -186,8 +186,8 @@ pub fn steam_running(platform: Platform, home: &Path) -> Result<bool> {
 /// `remove`); unless `dry_run`, write a backup (once per file per run) and then the file via a
 /// temp file and rename. Returns what changed, apps already in the wanted state left out.
 /// `binary` must be named `save-relay` or `save-relay.exe` (`Error::Usage` otherwise). A wrap
-/// refuses (`Error::Io`, naming the path, before any write) when there is no Steam user or a
-/// user has no `localconfig.vdf`; `remove` skips such a user. A real run with a Steam user holds
+/// refuses (`Error::Io`) when there is no Steam user; a user without `localconfig.vdf` is reported
+/// in `skipped`. A real run with a Steam user holds
 /// `<root>/userdata/.save-relay-install-wrap.lock` until it ends (`Error::Io` when it is already
 /// there).
 pub fn install(
@@ -219,6 +219,7 @@ pub fn install(
         Some(InstallLock::take(&root.join("userdata"))?)
     };
     let mut changed = Vec::new();
+    let mut skipped = Vec::new();
     let mut backups = Vec::new();
     let mut pending: Vec<(PathBuf, Vec<u8>, Vdf)> = Vec::new();
     for user_id in &users {
@@ -231,7 +232,14 @@ pub fn install(
             Ok(bytes) => bytes,
             // Steam may leave numeric userdata directories without a config (for example
             // userdata/0). They are not usable accounts; continue with the other users.
-            Err(error) if error.kind() == ErrorKind::NotFound => continue,
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                skipped.push(InstallWrapSkipped {
+                    app_id: 0,
+                    name: format!("Steam user {user_id}"),
+                    reason: InstallWrapSkipReason::NoLocalConfig,
+                });
+                continue;
+            }
             Err(error) => return Err(error.into()),
         };
         let text = String::from_utf8(bytes.clone())
@@ -286,7 +294,7 @@ pub fn install(
     Ok(InstallWrapData {
         dry_run,
         changed,
-        skipped: Vec::new(),
+        skipped,
         backups,
         message,
     })
@@ -304,23 +312,25 @@ fn no_user(root: &Path) -> Error {
 /// index of the `%command%` after the marker. Only the first occurrence with a save-relay
 /// program path counts.
 fn locate(current: &str) -> Option<(usize, usize)> {
-    let needle = format!("{MARKER} ");
+    let needle = "wrap";
     let mut from = 0;
     while let Some(offset) = current[from..].find(&needle) {
         let marker = from + offset;
-        // "wrap" is ASCII, so the byte after its `w` is a character boundary.
-        from = marker + 1;
-        let head = current[..marker].trim_end();
-        let gap = &current[head.len()..marker];
-        if gap.is_empty() || !gap.chars().all(char::is_whitespace) {
+        from = marker + needle.len();
+        if marker > 0 && !current[..marker].ends_with(char::is_whitespace) {
             continue;
         }
-        let command_from = marker + MARKER.len() + 1;
-        let Some(command_offset) = current[command_from..].find(COMMAND) else {
+        let head = current[..marker].trim_end();
+        let after_wrap = marker + needle.len();
+        let Some(separator) = current[after_wrap..].find(" -- ") else {
             continue;
         };
+        let command_from = after_wrap + separator + 4;
+        if !current[command_from..].starts_with(COMMAND) {
+            continue;
+        }
         if let Some(start) = program_start(head) {
-            return Some((start, command_from + command_offset));
+            return Some((start, command_from));
         }
     }
     None
