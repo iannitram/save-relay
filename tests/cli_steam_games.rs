@@ -266,14 +266,18 @@ fn missing_steam_root_keeps_the_existing_error_code() {
 #[cfg(target_os = "linux")]
 #[test]
 fn bulk_wrap_refuses_when_steam_starts_during_lookup() {
+    // Steam "starts" during the lookup: the pid file is written then, naming a live process
+    // whose comm is `steam` (a `sleep` started through a link named `steam`), because the Linux
+    // check counts a pid only when its comm is `steam`.
     struct StartsSteam {
         pid_file: PathBuf,
+        steam_pid: u32,
         transport: FakeTransport,
     }
 
     impl Transport for StartsSteam {
         fn send(&self, request: &Request) -> Result<Response> {
-            fs::write(&self.pid_file, std::process::id().to_string()).unwrap();
+            fs::write(&self.pid_file, self.steam_pid.to_string()).unwrap();
             self.transport.send(request)
         }
     }
@@ -285,8 +289,12 @@ fn bulk_wrap_refuses_when_steam_starts_during_lookup() {
     let before = fs::read(&config).unwrap();
     let pid_dir = machine.vars.home.join(".steam");
     fs::create_dir_all(&pid_dir).unwrap();
+    let link = machine.vars.home.join("steam");
+    std::os::unix::fs::symlink("/bin/sleep", &link).unwrap();
+    let mut steam_process = std::process::Command::new(&link).arg("60").spawn().unwrap();
     let transport = Arc::new(StartsSteam {
         pid_file: pid_dir.join("steam.pid"),
+        steam_pid: steam_process.id(),
         transport: FakeTransport::new(),
     });
     let (code, output) = run(
@@ -296,6 +304,8 @@ fn bulk_wrap_refuses_when_steam_starts_during_lookup() {
     );
     assert_eq!(code, 2, "{output}");
     let output: Value = serde_json::from_str(&output).unwrap();
+    let _ = steam_process.kill();
+    let _ = steam_process.wait();
     assert_eq!(output["error"]["code"], "steam_running");
     assert_eq!(fs::read(config).unwrap(), before);
 }

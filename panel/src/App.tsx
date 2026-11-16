@@ -31,7 +31,7 @@ export interface AppProps {
   bridge: Bridge;
   /** Where an entry's picture is served; the default is the panel server's, with the token. */
   pictureUrl?: (game: string, entry: string, file: string) => string | null;
-  /** The panel's token (the URL's `token`), which the default picture URL carries. */
+  /** The panel's injected token, which the default picture URL carries. */
   token?: string | null;
 }
 
@@ -299,8 +299,7 @@ function AddGamesRoute(props: {
 
 /**
  * An entry's picture on the panel server: `/picture/<game>/<entry>/<file>`, each segment
- * percent-encoded, with the token as `?token=` (an `<img>` cannot send the header; src/panel.rs
- * `route`). Without a token the path alone, which the server refuses.
+ * percent-encoded. Image requests use the token query because an `<img>` cannot send a header.
  */
 export function panelPicture(token: string | null | undefined) {
   return (game: string, entry: string, file: string): string => {
@@ -320,6 +319,8 @@ function Timeline(props: {
   const [opener, setOpener] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [restoring, setRestoring] = useState(false);
+  const restoreInFlight = useRef(false);
   const { bridge, game } = props;
 
   const load = useCallback(
@@ -341,25 +342,36 @@ function Timeline(props: {
       confirm={confirm}
       error={error}
       notice={notice}
+      restoring={restoring}
       initial={opener ? `restore:${opener}` : undefined}
       onAsk={(entry) => {
+        if (restoreInFlight.current) return;
         setError(null);
         setConfirm(entry);
         setOpener(entry);
       }}
       onCancel={() => setConfirm(null)}
       onConfirm={() => {
+        if (restoreInFlight.current) return;
         const entry = confirm;
         setConfirm(null);
-        if (entry)
-          restore(bridge, game, entry).then(
+        if (entry) {
+          restoreInFlight.current = true;
+          setRestoring(true);
+          setError(null);
+          setNotice(null);
+          void restore(bridge, game, entry).then(
             (r) => {
               setError(null);
               setNotice(r.message);
               return load();
             },
-            (e) => setError(message(e)),
-          );
+            (e) => { setNotice(null); setError(message(e)); },
+          ).finally(() => {
+            restoreInFlight.current = false;
+            setRestoring(false);
+          });
+        }
       }}
       onBack={props.onBack}
     />

@@ -86,4 +86,10 @@ Whether a Windows game runs under Proton comes from the launch (Steam sets `STEA
 
 On SIGTERM or SIGHUP (Steam's force exit, a logout, a shutdown) `wrap` stops waiting, passes the signal on to the game, runs the exit push and clears this device's `playing.json` mark, then exits with 128 plus the signal number. A second signal while it does this ends `wrap` at once and leaves the mark, so the next launch handles it as an interrupted session.
 
-What is not covered yet: `wrap` does not wait for a game that ignores the signal it was sent, so the exit push can run while that game is still writing (a half-written set can be pushed); a signal during the pull or the choice wait before the game starts is not handled; and on Windows the console close, logoff and shutdown events are not handled (#264 tracks the Windows half and a bounded wait).
+The game has 3 seconds to exit after the signal. If it is still running, `wrap` kills and reaps it before pushing. A signal during the pull or the choice wait before the game starts is not handled.
+
+## When the console closes (Windows)
+
+On console close, logoff or shutdown, `wrap` waits up to 1 second for the game to exit on its own. GUI games do not receive console events. If the game is still running, `wrap` leaves it alone, skips the exit push and leaves `playing.json` for the next launch. If the game exits, `wrap` pushes its saves. The console handler waits for cleanup, including storage of any rotated refresh token, within one shared 4.5 second budget. A second event or an expired budget ends `wrap` immediately.
+
+Manual acceptance check (#264): the automated tests call the handler directly. In a disposable Windows console with a fixture game, check that a real console close reaches the registered `SetConsoleCtrlHandler` handler. Check both a game that exits on its own within the stop wait (complete save uploaded, mark cleared) and a GUI game that keeps running (game survives, no upload, mark retained). Check logoff and shutdown on a test session as well. These OS delivery checks remain manual and have not been run by the automated suite.

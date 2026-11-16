@@ -11,7 +11,7 @@ use save_relay::error::Error;
 use save_relay::local::LocalStore;
 use save_relay::platform::{AppDirs, PathVars};
 use save_relay::sync::Resolve;
-use save_relay::wrap::{self, Engine};
+use save_relay::wrap::{self, Engine, STOP_WAIT_SECS};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus};
@@ -22,11 +22,13 @@ const HOST_GATE: &str = "SAVE_RELAY_SIGNAL_HOST";
 const GAME_GATE: &str = "SAVE_RELAY_SIGNAL_GAME";
 const DIR: &str = "SAVE_RELAY_SIGNAL_DIR";
 const SLOW_PUSH: &str = "SAVE_RELAY_SIGNAL_SLOW_PUSH";
+const IGNORE_STOP: &str = "SAVE_RELAY_SIGNAL_IGNORE_STOP";
 const SIGHUP: i32 = 1;
 const SIGTERM: i32 = 15;
 
 extern "C" {
     fn kill(pid: i32, sig: i32) -> i32;
+    fn signal(sig: i32, handler: usize) -> usize;
 }
 
 fn send(pid: u32, sig: i32) {
@@ -119,6 +121,14 @@ fn signal_game() {
         return;
     }
     let dir = PathBuf::from(std::env::var_os(DIR).expect("the scratch folder"));
+    if std::env::var_os(IGNORE_STOP).is_some() {
+        // SIG_IGN (1): the stop is ignored, so only `wrap`'s bounded wait can end this game.
+        // SAFETY: `signal` only sets the disposition of these two signals.
+        unsafe {
+            signal(SIGTERM, 1);
+            signal(SIGHUP, 1);
+        }
+    }
     // The game's pid, written whole before `started` (no /proc on macOS to find it by).
     fs::write(dir.join("game.tmp"), std::process::id().to_string()).expect("write the pid");
     fs::rename(dir.join("game.tmp"), dir.join("game.pid")).expect("publish the pid");
@@ -140,12 +150,19 @@ fn scratch(name: &str) -> PathBuf {
 }
 
 fn spawn_host(dir: &Path, slow: bool) -> Child {
+    spawn_host_with(dir, slow, false)
+}
+
+fn spawn_host_with(dir: &Path, slow: bool, ignore_stop: bool) -> Child {
     let mut host = Command::new(exe());
     host.args(["--exact", "signal_host", "--ignored"])
         .env(HOST_GATE, "1")
         .env(DIR, dir);
     if slow {
         host.env(SLOW_PUSH, "1");
+    }
+    if ignore_stop {
+        host.env(IGNORE_STOP, "1");
     }
     host.spawn().expect("start the wrap host")
 }
@@ -240,6 +257,36 @@ fn the_first_signal_reaches_the_game() {
     assert!(
         process_gone(pid),
         "the game {pid} is still running after the signal"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_game_that_ignores_the_stop_is_ended_after_the_bounded_wait_before_the_push() {
+    let dir = scratch("ignore");
+    let mut host = spawn_host_with(&dir, false, true);
+    assert!(wait_for(&dir.join("started"), 20), "the game did not start");
+    let pid: u32 = fs::read_to_string(dir.join("game.pid"))
+        .expect("the game's pid")
+        .parse()
+        .expect("a pid");
+    let asked = Instant::now();
+    send(host.id(), SIGTERM);
+    let status = wait_exit(&mut host, STOP_WAIT_SECS + 20);
+    assert_eq!(
+        status.code(),
+        Some(128 + SIGTERM),
+        "the exit code after SIGTERM"
+    );
+    assert!(
+        asked.elapsed() >= Duration::from_secs(STOP_WAIT_SECS),
+        "the game was ended before the bounded wait"
+    );
+    assert!(dir.join("pushed").exists(), "the exit push did not run");
+    assert!(!dir.join("mark").exists(), "playing.json mark is still set");
+    assert!(
+        process_gone(pid),
+        "the game {pid} still runs after the exit push"
     );
     let _ = fs::remove_dir_all(&dir);
 }

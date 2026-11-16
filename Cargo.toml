@@ -10,6 +10,9 @@ publish = false
 [lib]
 name = "save_relay"
 path = "src/lib.rs"
+# `staticlib` and `cdylib` are for the C interface (feature `ffi`, `src/ffi.rs`): a game port's
+# Android or iOS app links one of them. Without the feature they hold only the Rust library.
+crate-type = ["lib", "staticlib", "cdylib"]
 
 [[bin]]
 name = "save-relay"
@@ -28,6 +31,10 @@ keyring = ["dep:keyring"]
 # `save-relay panel`; off by default, so a plain `cargo build` needs no Node and serves a
 # placeholder page. Release builds turn it on.
 panel-dist = []
+# The C interface for Android and iOS apps (`src/ffi.rs`, `include/save_relay.h`). The app brings
+# its own network and credential store through callbacks, so a mobile build needs neither `http`
+# nor `keyring`: `--no-default-features --features ffi`.
+ffi = []
 # No system libraries, so the core builds for Linux, Windows, macOS, Android and iOS
 # (`ring`, under rustls, compiles its own bundled C: docs/code-map.md, rules).
 [dependencies]
@@ -42,3 +49,6 @@ sha2 = "0.10"
 # pure-Rust zbus Secret Service on Linux (no libdbus; keyring 3's sync backend needs it).
 keyring = { version = "4.2", optional = true }
 ureq = { version = "2.12", optional = true, default-features = false, features = ["tls"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_Com", "Win32_UI_Shell"] }

@@ -49,7 +49,6 @@ use crate::stamp::{self, Clock};
 use crate::steam;
 use crate::sync::{self, Game, Resolve, Session};
 use crate::webdav;
-#[cfg(feature = "http")]
 use crate::webdav::WebDav;
 use crate::wrap;
 use serde::Serialize;
@@ -877,6 +876,20 @@ pub fn connect_before(
     store: &LocalStore,
     creds: &dyn CredentialStore,
 ) -> Result<Box<dyn Remote>> {
+    connect_before_via(command, store, creds, &connect)
+}
+
+/// How a Nextcloud server is reached: server, user, password.
+pub type Connector = dyn Fn(&str, &str, Secret) -> Result<Box<dyn Remote>>;
+
+/// `connect_before` with the Nextcloud connection passed in, so the C interface (`ffi`) can
+/// connect through the host app's transport instead of the `http` feature's.
+pub fn connect_before_via(
+    command: &Command,
+    store: &LocalStore,
+    creds: &dyn CredentialStore,
+    connect: &Connector,
+) -> Result<Box<dyn Remote>> {
     if let Command::Answer { game, .. } = command {
         return if store.is_waiting(game)? || store.load_pending(game)?.is_none() {
             Ok(Box::new(NoRemote))
@@ -1005,7 +1018,13 @@ pub struct Net<'a> {
 /// credential store, the real network and browser, and this session's Game Mode. `run_with_env`
 /// does the work with the environment passed in, and `run_with_net` the rest.
 pub fn run(args: &[String], stdin: &mut dyn Read, stdout: &mut dyn Write) -> i32 {
-    run_with_env(args, stdin, stdout, &|name| std::env::var(name).ok())
+    run_with_paths(
+        args,
+        stdin,
+        stdout,
+        &|name| std::env::var(name).ok(),
+        PathVars::current(),
+    )
 }
 
 /// Report an argument that cannot be represented as UTF-8. The binary checks this before
@@ -1021,15 +1040,31 @@ pub fn non_utf8_argument(json: bool, stdout: &mut dyn Write) -> i32 {
 
 /// `run` with the environment passed in: the platform folders and Game Mode are read through
 /// `var`, not the process environment. A test passes its own (an empty one for the folders-not-
-/// found path); `run` passes the process environment.
+/// found path). Unlike `run`, this does not query Windows known folders.
 pub fn run_with_env(
     args: &[String],
     stdin: &mut dyn Read,
     stdout: &mut dyn Write,
     var: &dyn Fn(&str) -> Option<String>,
 ) -> i32 {
+    run_with_paths(
+        args,
+        stdin,
+        stdout,
+        var,
+        PathVars::from_env(Platform::current(), var),
+    )
+}
+
+fn run_with_paths(
+    args: &[String],
+    stdin: &mut dyn Read,
+    stdout: &mut dyn Write,
+    var: &dyn Fn(&str) -> Option<String>,
+    vars: Result<PathVars>,
+) -> i32 {
     let json = args.iter().any(|arg| arg == "--json");
-    let vars = match PathVars::from_env(Platform::current(), var) {
+    let vars = match vars {
         Ok(vars) => vars,
         Err(error) => return front_door_failure(stdout, json, args, &error),
     };
@@ -1423,6 +1458,10 @@ fn wrap_command(
     });
     match ran {
         Some(code) => {
+            // with_remote has now attempted to save any rotated refresh token. Keep that
+            // storage inside the console handler's original 4.5 s cleanup budget.
+            #[cfg(windows)]
+            wrap::finish_console_cleanup();
             if let Err(error) = synced {
                 eprintln!("save-relay: {error}");
             }
@@ -2533,6 +2572,7 @@ fn install_wrap_outcome(data: &InstallWrapData) -> Outcome {
         let reason = match skipped.reason {
             InstallWrapSkipReason::SteamCloudUnknown => "steam_cloud_unknown",
             InstallWrapSkipReason::NoSavesEntry => "no_saves_entry",
+            InstallWrapSkipReason::NoLocalConfig => "no_localconfig_vdf (sign in to Steam once)",
         };
         text.push_str(&format!(
             "\nskipped {} ({}): {reason}",
@@ -2765,15 +2805,25 @@ fn refuse_browser(_: &str) -> Result<()> {
     ))
 }
 
+/// A WebDAV remote for a Nextcloud `server` over `transport` (no feature needed).
+pub fn connect_with(
+    server: &str,
+    user: &str,
+    password: Secret,
+    transport: Arc<dyn Transport>,
+) -> Result<Box<dyn Remote>> {
+    let url = webdav::files_url(server, user)?;
+    Ok(Box::new(WebDav::new(&url, user, password, transport)))
+}
+
 #[cfg(feature = "http")]
 fn connect(server: &str, user: &str, password: Secret) -> Result<Box<dyn Remote>> {
-    let url = webdav::files_url(server, user)?;
-    Ok(Box::new(WebDav::new(
-        &url,
+    connect_with(
+        server,
         user,
         password,
-        std::sync::Arc::new(crate::http::UreqTransport::new()),
-    )))
+        Arc::new(crate::http::UreqTransport::new()),
+    )
 }
 
 #[cfg(not(feature = "http"))]

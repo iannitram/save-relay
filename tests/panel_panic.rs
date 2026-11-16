@@ -49,10 +49,17 @@ fn a_panicking_command_is_a_500_and_the_next_request_is_served() {
         let _ = panel::serve(Some(0), false, &announce, &run);
     });
     let data = receiver.recv_timeout(Duration::from_secs(10)).unwrap();
-    let token = data.url.split("token=").nth(1).unwrap().to_string();
+    let page = exchange(data.port, "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+    let token = page
+        .split("name=\"save-relay-token\" content=\"")
+        .nth(1)
+        .unwrap()
+        .split('"')
+        .next()
+        .unwrap();
 
-    let first = call(data.port, &token, "status");
+    let first = call(data.port, token, "status");
     assert!(first.starts_with("HTTP/1.1 500"), "{first}");
-    let second = call(data.port, &token, "where");
+    let second = call(data.port, token, "where");
     assert!(second.starts_with("HTTP/1.1 200"), "{second}");
 }

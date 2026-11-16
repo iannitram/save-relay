@@ -64,8 +64,7 @@ function pick(command: ApiCommand, args: ApiArgs, added: Set<number>): unknown {
     case "restore":
       return restore;
     case "pull":
-    case "push":
-      return args.resolve || args.anyway ? pullPulled : pullConflict;
+      return args.anyway ? pullPulled : pullConflict;
     case "answer":
       return answer;
     case "setup":
