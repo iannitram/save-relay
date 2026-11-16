@@ -15,7 +15,7 @@ it("reads the injected token, removes the legacy URL token, and uses the HTTP br
   document.head.insertAdjacentHTML("beforeend", '<meta name="save-relay-token" content="injected-secret">');
   document.body.innerHTML = '<div id="root"></div>';
   window.history.replaceState(null, "", "/?token=old-secret&other=keep#here");
-  const fetcher = vi.fn(async () => ({ json: async () => ({ ok: true }) }));
+  const fetcher = vi.fn(async () => ({ text: async () => JSON.stringify({ ok: true }) }));
   vi.stubGlobal("fetch", fetcher);
   await import("./main.tsx");
   expect(window.location.search).toBe("?other=keep");

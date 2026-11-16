@@ -16,7 +16,7 @@ describe("httpBridge", () => {
     const seen: { url: string; headers: Record<string, string>; body: string }[] = [];
     const bridge = httpBridge("http://127.0.0.1:4000", "t0k3n", async (url, init) => {
       seen.push({ url, headers: init.headers, body: init.body });
-      return { json: async () => ({ ok: true, command: "status", data: { game: "celeste" } }) };
+      return { text: async () => JSON.stringify({ ok: true, command: "status", data: { game: "celeste" } }) };
     });
 
     const envelope = await bridge.call<{ game: string }>("status", { game: "celeste" });
@@ -36,9 +36,6 @@ describe("httpBridge with a reply that is not JSON", () => {
   it("returns an error envelope that names the status, not 'Unexpected token'", async () => {
     const bridge = httpBridge("http://127.0.0.1:4000", "t", async () => ({
       status: 403,
-      json: async () => {
-        throw new SyntaxError("Unexpected token 'f', \"forbidden\" is not valid JSON");
-      },
       text: async () => "forbidden",
     }));
     const envelope = await bridge.call("status", { game: "g" });
@@ -46,6 +43,7 @@ describe("httpBridge with a reply that is not JSON", () => {
     if (envelope.ok) return;
     expect(envelope.command).toBe("status");
     expect(envelope.error.message).toContain("403");
+    expect(envelope.error.message).toContain("forbidden");
     expect(envelope.error.message).not.toContain("Unexpected token");
   });
 });
