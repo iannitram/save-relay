@@ -325,6 +325,7 @@ pub struct InstallWrapApp {
 pub enum InstallWrapSkipReason {
     SteamCloudUnknown,
     NoSavesEntry,
+    NoLocalConfig,
 }
 
 /// One game not selected by `install-wrap --no-steam-cloud`.

@@ -2546,6 +2546,7 @@ fn install_wrap_outcome(data: &InstallWrapData) -> Outcome {
         let reason = match skipped.reason {
             InstallWrapSkipReason::SteamCloudUnknown => "steam_cloud_unknown",
             InstallWrapSkipReason::NoSavesEntry => "no_saves_entry",
+            InstallWrapSkipReason::NoLocalConfig => "no_localconfig_vdf (sign in to Steam once)",
         };
         text.push_str(&format!(
             "\nskipped {} ({}): {reason}",
