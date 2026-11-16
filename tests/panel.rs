@@ -877,17 +877,20 @@ fn a_picture_is_served_as_its_image_type_or_not_found() {
 }
 
 #[test]
-fn history_and_picture_api_args_refuse_invalid_game_ids() {
-    for command in ["history", "picture"] {
-        let body = if command == "history" {
-            br#"{"game":"con"}"#.as_slice()
-        } else {
-            br#"{"game":"CON","entry":"e"}"#.as_slice()
-        };
-        let error = save_relay::panel::api_args(command, body).unwrap_err();
-        assert_eq!(error.code(), "usage");
-        assert_eq!(error.to_string(), "invalid <game> id");
-    }
+fn history_api_args_refuse_invalid_game_ids() {
+    let error = save_relay::panel::api_args("history", br#"{"game":"con"}"#).unwrap_err();
+    assert_eq!(error.code(), "usage");
+    assert_eq!(error.to_string(), "invalid <game> id");
+}
+
+#[test]
+fn picture_is_not_a_post_api_command() {
+    // Pictures are read only through `GET /picture/<game>/<entry>`, whose route checks the
+    // game id (see `picture_route_refuses_manifest_invalid_game_ids_before_running_cli`).
+    let error =
+        save_relay::panel::api_args("picture", br#"{"game":"CON","entry":"e"}"#).unwrap_err();
+    assert_eq!(error.code(), "usage");
+    assert_eq!(error.to_string(), "'picture' is not a panel command");
 }
 
 #[test]
