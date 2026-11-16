@@ -229,15 +229,9 @@ pub fn install(
             .join("localconfig.vdf");
         let bytes = match fs::read(&path) {
             Ok(bytes) => bytes,
-            // Nothing to take out of a missing file. A wrap cannot write one, so it refuses
-            // before any file is written: its launch option would be missing with no report.
-            Err(error) if error.kind() == ErrorKind::NotFound && remove => continue,
-            Err(error) if error.kind() == ErrorKind::NotFound => {
-                return Err(Error::Io(format!(
-                    "{}: no localconfig.vdf: sign in to Steam once, then run install-wrap again",
-                    path.display()
-                )));
-            }
+            // Steam may leave numeric userdata directories without a config (for example
+            // userdata/0). They are not usable accounts; continue with the other users.
+            Err(error) if error.kind() == ErrorKind::NotFound => continue,
             Err(error) => return Err(error.into()),
         };
         let text = String::from_utf8(bytes.clone())
@@ -310,7 +304,7 @@ fn no_user(root: &Path) -> Error {
 /// index of the `%command%` after the marker. Only the first occurrence with a save-relay
 /// program path counts.
 fn locate(current: &str) -> Option<(usize, usize)> {
-    let needle = format!("{MARKER} {COMMAND}");
+    let needle = format!("{MARKER} ");
     let mut from = 0;
     while let Some(offset) = current[from..].find(&needle) {
         let marker = from + offset;
@@ -321,8 +315,12 @@ fn locate(current: &str) -> Option<(usize, usize)> {
         if gap.is_empty() || !gap.chars().all(char::is_whitespace) {
             continue;
         }
+        let command_from = marker + MARKER.len() + 1;
+        let Some(command_offset) = current[command_from..].find(COMMAND) else {
+            continue;
+        };
         if let Some(start) = program_start(head) {
-            return Some((start, marker + MARKER.len() + 1));
+            return Some((start, command_from + command_offset));
         }
     }
     None

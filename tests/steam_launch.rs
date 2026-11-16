@@ -18,6 +18,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 const BIN: &str = "/opt/save-relay/save-relay";
 const WRAP: &str = "/opt/save-relay/save-relay wrap -- %command%";
 const WINDOWS_BIN: &str = r"C:\Games\save-relay.exe";
+const LINUX_FLATPAK_PID_FILE: &str =
+    ".var/app/com.valvesoftware.Steam/.local/share/Steam/steam.pid";
 const NOW: u64 = 1_793_476_260; // 2026-10-31T19:51:00Z
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 
@@ -114,6 +116,14 @@ fn wrapping_twice_changes_nothing() {
     let once = wrapped(Some("gamemoderun %command% -fps"), BIN, Platform::Linux);
     assert!(is_wrapped(&once));
     assert_eq!(wrapped(Some(once.as_str()), BIN, Platform::Linux), once);
+}
+
+#[test]
+fn wrapped_recognises_wrap_options_before_steam_separator() {
+    let current = format!("{BIN} wrap --manifest saves.yaml -- %command% -fps");
+    assert!(is_wrapped(&current));
+    assert_eq!(wrapped(Some(&current), BIN, Platform::Linux), current);
+    assert_eq!(unwrapped(&current), Some("%command% -fps".to_string()));
 }
 
 #[test]
@@ -305,6 +315,25 @@ fn install_wraps_the_picked_apps_and_keeps_the_rest() {
     assert_eq!(data.backups.len(), 1);
     assert!(data.backups[0].ends_with("localconfig.vdf.save-relay-20261031T195100Z.bak"));
     assert_eq!(fs::read(&data.backups[0]).unwrap(), LOCALCONFIG.as_bytes());
+}
+
+#[test]
+fn install_skips_numeric_userdata_without_localconfig() {
+    let root = temp_root();
+    add_user(&root, "42", LOCALCONFIG);
+    fs::create_dir_all(root.join("userdata/0")).unwrap();
+    let data = install(
+        &root,
+        &[480],
+        Path::new(BIN),
+        false,
+        true,
+        Platform::Linux,
+        NOW,
+    )
+    .unwrap();
+    assert_eq!(data.changed.len(), 1);
+    assert_eq!(data.changed[0].user_id, "42");
 }
 
 #[test]
@@ -801,6 +830,16 @@ fn steam_running_sees_a_live_pid_on_linux() {
         std::process::id().to_string(),
     )
     .unwrap();
+    assert!(steam_running(Platform::Linux, &home).unwrap());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn steam_running_sees_flatpak_pid_file_on_linux() {
+    let home = temp_root();
+    let pid_file = home.join(LINUX_FLATPAK_PID_FILE);
+    fs::create_dir_all(pid_file.parent().unwrap()).unwrap();
+    fs::write(pid_file, std::process::id().to_string()).unwrap();
     assert!(steam_running(Platform::Linux, &home).unwrap());
 }
 
