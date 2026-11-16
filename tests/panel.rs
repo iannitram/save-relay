@@ -147,9 +147,14 @@ fn the_token_line_carries_the_test_token() {
 }
 
 #[test]
-fn the_page_needs_the_token_in_the_header_or_the_query() {
+fn the_initial_page_supplies_the_token_but_wrong_tokens_are_refused() {
     let page = |headers: &[String]| parsed("GET", "/", headers, "");
-    assert_eq!(route(&page(&[]), TOKEN), Route::Forbidden);
+    assert_eq!(route(&page(&[]), TOKEN), Route::Asset("index.html"));
+    let mut rebound = page(&[]);
+    rebound.headers = vec![("Host".into(), "hostile.example:8080".into())];
+    assert_eq!(route(&rebound, TOKEN), Route::Forbidden);
+    rebound.headers.clear();
+    assert_eq!(route(&rebound, TOKEN), Route::Forbidden);
     assert_eq!(
         route(&page(&["X-Save-Relay-Token: wrong".to_string()]), TOKEN),
         Route::Forbidden
@@ -249,14 +254,14 @@ fn the_front_end_files_need_the_token_like_every_other_request() {
 
 #[test]
 fn the_served_page_carries_the_token_on_its_front_end_files() {
-    let html = br#"<script type="module" crossorigin src="./app.js"></script><link rel="stylesheet" crossorigin href="./app.css"><a href="./app.json">x</a>"#;
+    let html = br#"<head><script src="./app.js"></script><link href="./app.css"></head>"#;
     let served = String::from_utf8(panel::served_page(TOKEN, html)).expect("text");
-    assert_eq!(
-        served,
-        format!(
-            r#"<script type="module" crossorigin src="./app.js?token={TOKEN}"></script><link rel="stylesheet" crossorigin href="./app.css?token={TOKEN}"><a href="./app.json">x</a>"#
-        )
-    );
+    assert!(served.contains(&format!(
+        r#"<meta name="save-relay-token" content="{TOKEN}">"#
+    )));
+    for file in ["app.js", "app.css"] {
+        assert!(served.contains(&format!("./{file}?token={TOKEN}")));
+    }
     let placeholder = b"<p>this build has no panel</p>";
     assert_eq!(panel::served_page(TOKEN, placeholder), placeholder.to_vec());
 }
@@ -272,12 +277,15 @@ fn api_posts_run_the_known_commands_with_the_token() {
         );
     }
     let by_query = parsed("POST", &format!("/api/status?token={TOKEN}"), &[], "{}");
-    assert_eq!(route(&by_query, TOKEN), Route::Api("status".to_string()));
+    assert_eq!(route(&by_query, TOKEN), Route::Forbidden);
 }
 
 #[test]
 fn commands_outside_the_panel_list_and_malformed_api_paths_are_not_found() {
     for path in [
+        "/api/push",
+        "/api/picture",
+        "/api/which",
         "/api/wrap",
         "/api/panel",
         "/api/",
@@ -332,21 +340,7 @@ fn refused(command: &str, body: &str) {
 
 #[test]
 fn each_command_becomes_its_command_line_with_json_last() {
-    assert_eq!(
-        args(
-            "status",
-            r#"{"game":"g","manifest":"m.json","saves-dir":"d"}"#
-        ),
-        [
-            "status",
-            "g",
-            "--manifest",
-            "m.json",
-            "--saves-dir",
-            "d",
-            "--json"
-        ]
-    );
+    assert_eq!(args("status", r#"{"game":"g"}"#), ["status", "g", "--json"]);
     assert_eq!(
         args("history", r#"{"game":"g"}"#),
         ["history", "g", "--json"]
@@ -356,19 +350,12 @@ fn each_command_becomes_its_command_line_with_json_last() {
         ["restore", "g", "e", "--json"]
     );
     assert_eq!(
-        args(
-            "pull",
-            r#"{"game":"g","resolve":"keep-local","anyway":true}"#
-        ),
-        ["pull", "g", "--resolve", "keep-local", "--anyway", "--json"]
+        args("pull", r#"{"game":"g","anyway":true}"#),
+        ["pull", "g", "--anyway", "--json"]
     );
     assert_eq!(
         args("pull", r#"{"game":"g","anyway":false}"#),
         ["pull", "g", "--json"]
-    );
-    assert_eq!(
-        args("push", r#"{"game":"g","resolve":"keep-server"}"#),
-        ["push", "g", "--resolve", "keep-server", "--json"]
     );
     assert_eq!(
         args("answer", r#"{"game":"g","answer":"wait"}"#),
@@ -377,35 +364,12 @@ fn each_command_becomes_its_command_line_with_json_last() {
     assert_eq!(args("where", "{}"), ["where", "--json"]);
     assert_eq!(args("where", ""), ["where", "--json"]);
     assert_eq!(
-        args("which", r#"{"appid":105600}"#),
-        ["which", "105600", "--json"]
-    );
-    assert_eq!(
-        args("which", r#"{"appid":"105600"}"#),
-        ["which", "105600", "--json"]
-    );
-    assert_eq!(
-        args("picture", r#"{"game":"g","entry":"e"}"#),
-        ["picture", "g", "e", "--json"]
-    );
-    assert_eq!(
         args("setup", r#"{"service":"gdrive","no-browser":true}"#),
         ["setup", "--service", "gdrive", "--no-browser", "--json"]
     );
     assert_eq!(
-        args(
-            "setup",
-            r#"{"service":"dropbox","no-browser":true,"device":"deck"}"#
-        ),
-        [
-            "setup",
-            "--service",
-            "dropbox",
-            "--device",
-            "deck",
-            "--no-browser",
-            "--json"
-        ]
+        args("setup", r#"{"service":"dropbox","no-browser":true}"#),
+        ["setup", "--service", "dropbox", "--no-browser", "--json"]
     );
 }
 
@@ -414,10 +378,9 @@ fn every_panel_command_is_accepted_by_its_own_shape() {
     for command in API_COMMANDS {
         let line = match command {
             "where" => args(command, "{}"),
-            "which" => args(command, r#"{"appid":1}"#),
             "launch-option" => args(command, r#"{"appid":1}"#),
             "install-wrap" | "steam-games" => args(command, "{}"),
-            "restore" | "picture" => args(command, r#"{"game":"g","entry":"e"}"#),
+            "restore" => args(command, r#"{"game":"g","entry":"e"}"#),
             "answer" => args(command, r#"{"game":"g","answer":"wait"}"#),
             "setup" => args(command, r#"{"service":"gdrive","no-browser":true}"#),
             _ => args(command, r#"{"game":"g"}"#),
@@ -429,25 +392,21 @@ fn every_panel_command_is_accepted_by_its_own_shape() {
 
 #[test]
 fn appids_must_be_whole_numbers_in_range() {
-    refused("which", r#"{"appid":-1}"#);
-    refused("which", r#"{"appid":4294967296}"#);
-    refused("which", r#"{"appid":1.5}"#);
-    refused("which", r#"{"appid":true}"#);
+    refused("launch-option", r#"{"appid":-1}"#);
+    refused("launch-option", r#"{"appid":4294967296}"#);
+    refused("launch-option", r#"{"appid":1.5}"#);
+    refused("launch-option", r#"{"appid":true}"#);
     assert_eq!(
-        args("which", r#"{"appid":4294967295}"#),
-        ["which", "4294967295", "--json"]
+        args("launch-option", r#"{"appid":4294967295}"#),
+        ["launch-option", "4294967295", "--json"]
     );
     assert_eq!(
-        args("steam-games", r#"{"no-steam-cloud":true}"#),
-        ["steam-games", "--no-steam-cloud", "--json"]
+        args("steam-games", r#"{"refresh":true}"#),
+        ["steam-games", "--refresh", "--json"]
     );
     assert_eq!(
-        args("install-wrap", r#"{"app-ids":[42,43],"dry-run":true}"#),
-        ["install-wrap", "42", "43", "--dry-run", "--json"]
-    );
-    assert_eq!(
-        args("install-wrap", r#"{"no-steam-cloud":true}"#),
-        ["install-wrap", "--no-steam-cloud", "--json"]
+        args("install-wrap", r#"{"app-ids":[42,43],"remove":true}"#),
+        ["install-wrap", "42", "43", "--remove", "--json"]
     );
     assert_eq!(
         args(
@@ -469,7 +428,7 @@ fn appids_must_be_whole_numbers_in_range() {
 
 #[test]
 fn commands_outside_the_panel_are_refused() {
-    for command in ["wrap", "panel", "nope", ""] {
+    for command in ["push", "picture", "which", "wrap", "panel", "nope", ""] {
         refused(command, "{}");
     }
 }
@@ -529,6 +488,26 @@ fn a_body_that_is_not_a_json_object_is_refused() {
     refused("status", "\"game\"");
     refused("status", "not json");
     refused("status", "{");
+}
+
+#[test]
+fn unused_panel_parameters_are_refused() {
+    for command in ["status", "pull", "restore"] {
+        for field in ["manifest", "saves-dir", "resolve"] {
+            let body = serde_json::json!({"game":"g", "entry":"e", field:"x"});
+            let mut body = body.as_object().unwrap().clone();
+            if command != "restore" {
+                body.remove("entry");
+            }
+            refused(command, &Value::Object(body).to_string());
+        }
+    }
+    for field in ["root", "device", "finish"] {
+        refused("setup", &serde_json::json!({"service":"gdrive", "no-browser":true, field: if field == "finish" { Value::Bool(true) } else { Value::String("x".into()) }}).to_string());
+    }
+    refused("steam-games", r#"{"no-steam-cloud":true}"#);
+    refused("install-wrap", r#"{"app-ids":[42],"dry-run":true}"#);
+    refused("install-wrap", r#"{"app-ids":[42],"no-steam-cloud":true}"#);
 }
 
 // ---- responses ------------------------------------------------------------------------------
@@ -674,9 +653,24 @@ fn start(run: impl Fn(&[String]) -> (i32, Vec<u8>) + Send + 'static) -> PanelDat
 }
 
 fn token_in(url: &str) -> String {
-    url.split("token=")
+    let port = url
+        .strip_prefix("http://127.0.0.1:")
+        .unwrap()
+        .split('/')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let (status, page) = get(port, "/", None);
+    assert_eq!(status, "HTTP/1.1 200 OK");
+    String::from_utf8(page)
+        .unwrap()
+        .split("name=\"save-relay-token\" content=\"")
         .nth(1)
-        .expect("a token in the URL")
+        .expect("injected token")
+        .split('"')
+        .next()
+        .unwrap()
         .to_string()
 }
 
@@ -731,24 +725,22 @@ fn post(port: u16, target: &str, header: Option<String>, body: &str) -> (String,
 }
 
 #[test]
-fn the_server_announces_a_loopback_url_with_a_43_character_token() {
+fn the_server_announces_a_loopback_url_without_a_token() {
     let data = start(fake_run(Vec::new()));
-    assert!(data
-        .url
-        .starts_with(&format!("http://127.0.0.1:{}/?token=", data.port)));
+    assert_eq!(data.url, format!("http://127.0.0.1:{}/", data.port));
     assert_eq!(token_in(&data.url).len(), 43);
     assert_ne!(data.port, 0);
 }
 
 #[test]
-fn the_page_is_served_with_the_token_and_refused_without_it() {
+fn the_page_bootstraps_without_a_url_token() {
     let data = start(fake_run(Vec::new()));
     let token = token_in(&data.url);
     let (status, body) = get(data.port, &format!("/?token={token}"), None);
     assert_eq!(status, "HTTP/1.1 200 OK");
     assert!(String::from_utf8_lossy(&body).contains('<'));
     let (status, _) = get(data.port, "/", None);
-    assert_eq!(status, "HTTP/1.1 403 Forbidden");
+    assert_eq!(status, "HTTP/1.1 200 OK");
     let wrong = format!("{TOKEN_HEADER}: {}", "x".repeat(43));
     let (status, _) = get(data.port, "/", Some(wrong));
     assert_eq!(status, "HTTP/1.1 403 Forbidden");
@@ -782,13 +774,13 @@ fn steam_game_api_routes_run_with_numeric_ids_and_reject_extra_fields() {
     for (path, body, expected) in [
         (
             "/api/steam-games",
-            r#"{"no-steam-cloud":true}"#,
-            vec!["steam-games", "--no-steam-cloud", "--json"],
+            r#"{"refresh":true}"#,
+            vec!["steam-games", "--refresh", "--json"],
         ),
         (
             "/api/install-wrap",
-            r#"{"app-ids":[42,43],"dry-run":true}"#,
-            vec!["install-wrap", "42", "43", "--dry-run", "--json"],
+            r#"{"app-ids":[42,43],"remove":true}"#,
+            vec!["install-wrap", "42", "43", "--remove", "--json"],
         ),
         (
             "/api/launch-option",
@@ -831,10 +823,8 @@ fn an_api_refusal_is_a_400_failure_envelope_and_an_unknown_command_is_404() {
     assert_eq!(envelope["ok"], false);
     assert_eq!(envelope["error"]["code"], "usage");
 
-    let (status, body) = post(data.port, "/api/picture", Some(header.clone()), "{}");
-    assert_eq!(status, "HTTP/1.1 400 Bad Request");
-    let envelope: Value = serde_json::from_slice(&body).expect("JSON");
-    assert_eq!(envelope["error"]["code"], "usage");
+    let (status, _) = post(data.port, "/api/picture", Some(header.clone()), "{}");
+    assert_eq!(status, "HTTP/1.1 404 Not Found");
 
     let (status, _) = post(data.port, "/api/wrap", Some(header), "{}");
     assert_eq!(status, "HTTP/1.1 404 Not Found");
@@ -887,17 +877,20 @@ fn a_picture_is_served_as_its_image_type_or_not_found() {
 }
 
 #[test]
-fn history_and_picture_api_args_refuse_invalid_game_ids() {
-    for command in ["history", "picture"] {
-        let body = if command == "history" {
-            br#"{"game":"con"}"#.as_slice()
-        } else {
-            br#"{"game":"CON","entry":"e"}"#.as_slice()
-        };
-        let error = save_relay::panel::api_args(command, body).unwrap_err();
-        assert_eq!(error.code(), "usage");
-        assert_eq!(error.to_string(), "invalid <game> id");
-    }
+fn history_api_args_refuse_invalid_game_ids() {
+    let error = save_relay::panel::api_args("history", br#"{"game":"con"}"#).unwrap_err();
+    assert_eq!(error.code(), "usage");
+    assert_eq!(error.to_string(), "invalid <game> id");
+}
+
+#[test]
+fn picture_is_not_a_post_api_command() {
+    // Pictures are read only through `GET /picture/<game>/<entry>`, whose route checks the
+    // game id (see `picture_route_refuses_manifest_invalid_game_ids_before_running_cli`).
+    let error =
+        save_relay::panel::api_args("picture", br#"{"game":"CON","entry":"e"}"#).unwrap_err();
+    assert_eq!(error.code(), "usage");
+    assert_eq!(error.to_string(), "'picture' is not a panel command");
 }
 
 #[test]

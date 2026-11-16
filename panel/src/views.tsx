@@ -408,6 +408,7 @@ export function TimelineView(props: {
   confirm: string | null;
   error: string | null;
   notice: string | null;
+  restoring?: boolean;
   initial?: string;
   onAsk: (entry: string) => void;
   onConfirm: () => void;
@@ -464,6 +465,7 @@ export function TimelineView(props: {
                       data-focus={confirm ? undefined : `restore:${e.entry}`}
                       tabIndex={confirm ? -1 : undefined}
                       className="btn"
+                      disabled={props.restoring}
                       onClick={() => props.onAsk(e.entry)}
                     >
                       Restore
@@ -487,11 +489,11 @@ export function TimelineView(props: {
               are kept as a backup first.
             </p>
             <div className="dialog-actions">
-              <button data-focus="cancel" className="btn" onClick={props.onCancel}>
+              <button data-focus="cancel" className="btn" disabled={props.restoring} onClick={props.onCancel}>
                 Cancel
               </button>
-              <button data-focus="confirm" className="btn btn-primary" onClick={props.onConfirm}>
-                Restore
+              <button data-focus="confirm" className="btn btn-primary" disabled={props.restoring} onClick={props.onConfirm}>
+                {props.restoring ? "Restoring…" : "Restore"}
               </button>
             </div>
           </div>
