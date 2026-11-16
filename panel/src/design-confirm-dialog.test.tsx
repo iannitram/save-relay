@@ -6,6 +6,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { HistoryData } from "./api.ts";
 import historyFx from "./fixtures/history.json";
+import { pressKey as hostKey } from "./focus.ts";
 import { TimelineView } from "./views.tsx";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -247,6 +248,25 @@ describe("ConfirmDialog structure and focus (#175)", () => {
     // Back button and list restore buttons under scrim are never focused
     const back = host.querySelector<HTMLButtonElement>('header button');
     expect(document.activeElement).not.toBe(back);
+  });
+
+  it("a modal dialog keeps every D-pad press from the host, even at its edges (#267)", () => {
+    act(() => {
+      root.render(
+        <TimelineView history={history} pictureUrl={() => null} confirm={e1} error={null} notice={null}
+          onAsk={noop} onConfirm={noop} onCancel={noop} onBack={noop} />,
+      );
+    });
+    const cancel = host.querySelector<HTMLButtonElement>('button[data-focus="cancel"]')!;
+    const restore = host.querySelector<HTMLButtonElement>('button[data-focus="confirm"]')!;
+    act(() => restore.focus());
+    expect(hostKey("ArrowRight")).toBe(true);
+    expect(hostKey("ArrowDown")).toBe(true);
+    expect(document.activeElement).toBe(restore);
+    act(() => cancel.focus());
+    expect(hostKey("ArrowLeft")).toBe(true);
+    expect(hostKey("ArrowUp")).toBe(true);
+    expect(document.activeElement).toBe(cancel);
   });
 
   it("focus that lands behind the dialog is pulled back into it", async () => {

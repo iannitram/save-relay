@@ -127,7 +127,11 @@ export function useFocusScope(onBack: (() => void) | null, initial?: string) {
       k,
       latest.current.onBack !== null,
     );
-    if (move === null) return false;
+    if (move === null) {
+      // A modal dialog keeps every D-pad press: an edge press stays on the edge button (#175).
+      const modal = root.querySelector('[role="dialog"][aria-modal="true"]') !== null;
+      return modal && k.startsWith("Arrow");
+    }
     userMoved.current = true;
     if (move === "back") latest.current.onBack?.();
     else focusControl(all.find((el) => el.dataset.focus === move.focus));
