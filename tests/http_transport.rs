@@ -264,9 +264,16 @@ fn refused_connection_is_unreachable_and_quick() {
     assert!(elapsed.as_secs() < 6, "{elapsed:?}");
 }
 
-/// A server that reads the head, then the body in `chunk`-byte pieces with `pause` between
-/// them, so the whole upload takes far longer than any single read or write step.
-fn serve_slow_upload(chunk: usize, pause: Duration) -> (String, JoinHandle<(u16, usize)>) {
+/// A server that reads the head, then the body in `chunk`-byte pieces with `pause` before each
+/// piece while more than `tail` bytes remain, so the whole upload takes far longer than any
+/// single read or write step. The last `tail` bytes are read at full speed: once the client has
+/// written everything the socket buffers hold, it waits for the response, and that wait must
+/// not be a run of pauses.
+fn serve_slow_upload(
+    chunk: usize,
+    pause: Duration,
+    tail: usize,
+) -> (String, JoinHandle<(u16, usize)>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     let handle = thread::spawn(move || {
@@ -289,7 +296,9 @@ fn serve_slow_upload(chunk: usize, pause: Duration) -> (String, JoinHandle<(u16,
         let mut received = 0;
         let mut buffer = vec![0; chunk];
         while received < length {
-            thread::sleep(pause);
+            if length - received > tail {
+                thread::sleep(pause);
+            }
             let want = chunk.min(length - received);
             reader.read_exact(&mut buffer[..want]).unwrap();
             received += want;
@@ -305,21 +314,26 @@ fn serve_slow_upload(chunk: usize, pause: Duration) -> (String, JoinHandle<(u16,
 
 #[test]
 fn a_slow_large_upload_completes_when_each_step_is_within_the_idle_timeout() {
-    let idle = Duration::from_millis(600);
-    let (url, server) = serve_slow_upload(256 * 1024, Duration::from_millis(20));
-    let body = vec![7u8; 12 * 1024 * 1024];
+    // Each step is a 25 ms pause, so a step only comes near the 1 s idle timeout on a runner
+    // that stalls for most of a second. The paused part is 160 pauses (about 4 s), so the
+    // whole upload outlasts the idle timeout by a wide margin: only a per-step deadline lets
+    // it finish.
+    let idle = Duration::from_secs(1);
+    let tail = 24 * 1024 * 1024;
+    let (url, server) = serve_slow_upload(256 * 1024, Duration::from_millis(25), tail);
+    let body = vec![7u8; 64 * 1024 * 1024];
+    let length = body.len();
     let started = Instant::now();
     let answer = UreqTransport::with_idle_timeout(idle)
-        .send(&Request::new("PUT", &url).body(body.clone()))
+        .send(&Request::new("PUT", &url).body(body))
         .unwrap();
     assert_eq!(answer.status, 200);
     assert_eq!(answer.text(), "ok");
     let (status, received) = server.join().unwrap();
-    assert_eq!((status, received), (200, body.len()));
-    // The whole upload outlasted one idle timeout (48 pauses of 20 ms, then the server's
-    // drain of what the kernel buffered), so only a per-step deadline lets it finish.
+    assert_eq!((status, received), (200, length));
+    // The server sleeps through all 160 pauses before it answers, so this bound always holds.
     assert!(
-        started.elapsed() > idle,
+        started.elapsed() > idle * 3,
         "upload took {:?}",
         started.elapsed()
     );
