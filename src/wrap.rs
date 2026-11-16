@@ -121,24 +121,39 @@ fn spawn_child(command: &[String]) -> Result<Child> {
         .map_err(|error| Error::Io(format!("cannot start {program}: {error}")))
 }
 
-/// How the game ended: on its own, or stopped because `wrap` received a termination signal.
+/// How the game ended: on its own, or stopped because `wrap` received a termination request.
 #[derive(Debug, PartialEq, Eq)]
 enum Played {
     Exited(i32),
-    /// Only Unix forwards a signal; elsewhere this is never built.
-    #[cfg_attr(not(unix), allow(dead_code))]
+    /// The termination request: a signal on Unix, a console event on Windows.
+    #[cfg_attr(not(any(unix, windows)), allow(dead_code))]
     Signalled(i32),
 }
 
-/// Start the game and wait for it, or for a termination signal (F80, audit S3). On a signal the
-/// signal is forwarded to the game and the wait ends there: the game is not waited for, so the
-/// exit push can run at once. Unix only; elsewhere the game is waited for.
+/// How long a game that was asked to stop gets to exit on its own before `wrap` ends it (F80,
+/// the #262 review). A game that ignores the stop would otherwise keep writing its saves while
+/// the exit push runs, so the push waits for the game to be gone: after this many seconds the
+/// game is killed and then pushed. Windows ends a process whose console handler has not returned
+/// within its own window (about 5 s on close, 5 to 20 s on logoff and shutdown), so the stop, this
+/// wait and the push together must fit in that window; a push Windows cuts short leaves the mark
+/// for the next launch, as a second signal does.
+pub const STOP_WAIT_SECS: u64 = 3;
+
+#[cfg(windows)]
+use console as stop;
+#[cfg(unix)]
+use signals as stop;
+
+/// Start the game and wait for it, or for a termination request (F80, audit S3; #264 on
+/// Windows). On a request the game is asked to stop (`stop::forward`) and given `STOP_WAIT_SECS`
+/// to exit (`stop_game`); the exit push then runs. Unix and Windows only; elsewhere the game is
+/// waited for.
 fn play(command: &[String]) -> Result<Played> {
-    // Before the game starts: a signal sent once the game runs must find the handlers in place.
-    #[cfg(unix)]
-    signals::install();
+    // Before the game starts: a request sent once the game runs must find the handlers in place.
+    #[cfg(any(unix, windows))]
+    stop::install();
     let mut child = spawn_child(command)?;
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
         loop {
             if let Some(status) = child
@@ -147,20 +162,40 @@ fn play(command: &[String]) -> Result<Played> {
             {
                 return Ok(Played::Exited(exit_code(status)));
             }
-            if let Some(signal) = signals::received() {
-                signals::forward(child.id(), signal);
+            if let Some(signal) = stop::received() {
+                stop::forward(child.id(), signal);
+                stop_game(&mut child);
                 return Ok(Played::Signalled(signal));
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         let status = child
             .wait()
             .map_err(|error| Error::Io(format!("cannot wait for the game: {error}")))?;
         Ok(Played::Exited(exit_code(status)))
     }
+}
+
+/// After a stop request: wait up to `STOP_WAIT_SECS` for the game to exit, then end it and reap
+/// it, so the exit push never runs beside a game that is still writing. A game that has gone is
+/// the normal case; `kill` and `wait` on it are best effort.
+#[cfg(any(unix, windows))]
+fn stop_game(child: &mut Child) {
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(STOP_WAIT_SECS);
+    while std::time::Instant::now() < until {
+        if !matches!(child.try_wait(), Ok(None)) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    note(format!(
+        "the game did not stop within {STOP_WAIT_SECS} s; ending it"
+    ));
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// Unix termination signals: SIGHUP and SIGTERM (Steam's force exit, a logout, a shutdown). The
@@ -219,6 +254,96 @@ mod signals {
     }
 }
 
+/// Windows console events: the console window closing (CTRL_CLOSE_EVENT), logoff and shutdown
+/// (#264, split from #243). The console calls `on_event` on a thread of its own. The first event
+/// is recorded for the wait loop in `play`, and the handler returns only once the exit push has
+/// finished (`finished`) or `CONSOLE_WAIT_SECS` have passed: returning TRUE early lets Windows end
+/// the process. A later event ends `wrap` at once with `_exit`, which leaves `playing.json`.
+#[cfg(windows)]
+mod console {
+    use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+    use std::sync::Once;
+    use std::time::{Duration, Instant};
+
+    const CTRL_CLOSE_EVENT: u32 = 2;
+    const CTRL_LOGOFF_EVENT: u32 = 5;
+    const CTRL_SHUTDOWN_EVENT: u32 = 6;
+    const FALSE: i32 = 0;
+    const TRUE: i32 = 1;
+    /// The longest the handler waits for the exit push. Windows ends a process whose handler is
+    /// still running after its own window (about 5 s on close, 5 to 20 s on logoff and shutdown),
+    /// so this only keeps a hung push from holding the handler thread forever.
+    pub const CONSOLE_WAIT_SECS: u64 = 20;
+
+    /// The first event received; 0 while none has come.
+    static FIRST: AtomicU32 = AtomicU32::new(0);
+    /// Set once the exit push is done, releasing the handler.
+    static FINISHED: AtomicBool = AtomicBool::new(false);
+    static INSTALL: Once = Once::new();
+
+    type Handler = unsafe extern "system" fn(u32) -> i32;
+
+    extern "system" {
+        fn SetConsoleCtrlHandler(handler: Option<Handler>, add: i32) -> i32;
+    }
+
+    extern "C" {
+        fn _exit(status: i32) -> !;
+    }
+
+    /// The console's handler. Not one of the three events: FALSE, the next handler decides.
+    ///
+    /// # Safety
+    /// Called by the console only, as its handler routine.
+    pub unsafe extern "system" fn on_event(event: u32) -> i32 {
+        if !matches!(
+            event,
+            CTRL_CLOSE_EVENT | CTRL_LOGOFF_EVENT | CTRL_SHUTDOWN_EVENT
+        ) {
+            return FALSE;
+        }
+        if FIRST
+            .compare_exchange(0, event, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            // SAFETY: `_exit` ends the process and never returns.
+            unsafe { _exit(128 + event as i32) }
+        }
+        let until = Instant::now() + Duration::from_secs(CONSOLE_WAIT_SECS);
+        while !FINISHED.load(Ordering::SeqCst) && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        TRUE
+    }
+
+    /// Register `on_event` once (a second registration would run it twice per event).
+    pub fn install() {
+        INSTALL.call_once(|| {
+            // SAFETY: `on_event` is an `extern "system"` routine that only touches atomics,
+            // sleeps and `_exit`.
+            unsafe {
+                SetConsoleCtrlHandler(Some(on_event), TRUE);
+            }
+        });
+    }
+
+    /// The first event received, if any.
+    pub fn received() -> Option<i32> {
+        match FIRST.load(Ordering::SeqCst) {
+            0 => None,
+            event => Some(event as i32),
+        }
+    }
+
+    /// Nothing to send: the console delivers the same event to the game, which shares it.
+    pub fn forward(_pid: u32, _event: i32) {}
+
+    /// The exit push is done: release the handler.
+    pub fn finished() {
+        FINISHED.store(true, Ordering::SeqCst);
+    }
+}
+
 fn exit_code(status: ExitStatus) -> i32 {
     if let Some(code) = status.code() {
         return code;
@@ -262,6 +387,8 @@ pub fn run(
         }
     };
     after_play(engine, store, &game, now());
+    #[cfg(windows)]
+    console::finished();
     code
 }
 
@@ -508,4 +635,94 @@ fn report_note(report: &SyncReport) {
 
 fn note(text: impl std::fmt::Display) {
     eprintln!("save-relay: {text}");
+}
+
+/// #264: a console close event on a Windows host. The console cannot be asked for a close event
+/// from a test, so the event goes to the registered routine directly, on its own thread, as the
+/// console would call it. The game is `ping` (it does not stop on its own); the handler must
+/// return only after the exit push has run and cleared the mark.
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+    use crate::platform::{AppDirs, PathVars};
+    use std::fs;
+    use std::path::PathBuf;
+    use std::thread;
+
+    const CTRL_CLOSE_EVENT: u32 = 2;
+    const TRUE: i32 = 1;
+
+    /// The scripted engine: `pull` fails (no server, the game starts at once); the exit `push`
+    /// removes `mark` and writes `pushed`.
+    struct Scripted {
+        dir: PathBuf,
+    }
+
+    impl Engine for Scripted {
+        fn game(&self) -> &str {
+            "console-game"
+        }
+        fn pull(&self, _resolve: Option<Resolve>, _anyway: bool) -> Result<SyncReport> {
+            Err(Error::Io("no server in this test".into()))
+        }
+        fn push(&self, _resolve: Option<Resolve>) -> Result<SyncReport> {
+            let _ = fs::remove_file(self.dir.join("mark"));
+            fs::write(self.dir.join("pushed"), "").expect("write pushed");
+            Err(Error::Io("no server in this test".into()))
+        }
+    }
+
+    fn clock() -> u64 {
+        1_793_476_260
+    }
+
+    fn no_wait(_: u64) {}
+
+    #[test]
+    fn a_console_close_stops_the_game_runs_the_exit_push_and_clears_the_mark() {
+        let dir = std::env::temp_dir().join(format!("save-relay-console-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("the scratch folder");
+        fs::write(dir.join("mark"), "").expect("the mark");
+        let vars = PathVars {
+            home: dir.join("home"),
+            data: dir.join("data"),
+            config: dir.join("config"),
+            documents: None,
+        };
+        let store = LocalStore::new(AppDirs::from_vars(&vars));
+        let engine = Scripted { dir: dir.clone() };
+        let command: Vec<String> = ["ping", "-n", "60", "127.0.0.1"]
+            .into_iter()
+            .map(String::from)
+            .collect();
+
+        let host = thread::spawn(move || run(&engine, &store, &command, clock, &no_wait));
+        // SAFETY: the registered routine, called as the console calls it, on a thread of its own.
+        let began = std::time::Instant::now();
+        let handler = thread::spawn(|| unsafe { console::on_event(CTRL_CLOSE_EVENT) });
+        let returned = handler.join().expect("the handler thread");
+        // The handler returned: it must have waited for the push, which ran and cleared the mark,
+        // and not given up at its bound.
+        assert!(
+            began.elapsed() < std::time::Duration::from_secs(console::CONSOLE_WAIT_SECS),
+            "the handler gave up at its bound instead of waiting for the push"
+        );
+        assert!(
+            dir.join("pushed").exists(),
+            "the handler returned before the exit push ran"
+        );
+        assert!(!dir.join("mark").exists(), "playing.json mark is still set");
+        assert_eq!(
+            returned, TRUE,
+            "the handler must return TRUE after the push"
+        );
+        let code = host.join().expect("the wrap thread");
+        assert_eq!(
+            code,
+            128 + CTRL_CLOSE_EVENT as i32,
+            "the exit code after a close event"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
 }
