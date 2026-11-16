@@ -12,7 +12,6 @@ export const API_COMMANDS = [
   "pull",
   "answer",
   "where",
-  "which",
   "setup",
   "steam-games",
   "install-wrap",

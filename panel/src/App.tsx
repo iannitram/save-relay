@@ -31,7 +31,7 @@ export interface AppProps {
   bridge: Bridge;
   /** Where an entry's picture is served; the default is the panel server's, with the token. */
   pictureUrl?: (game: string, entry: string, file: string) => string | null;
-  /** The panel's token (the URL's `token`), which the default picture URL carries. */
+  /** The panel's injected token, which the default picture URL carries. */
   token?: string | null;
 }
 
@@ -320,6 +320,7 @@ function Timeline(props: {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [restoring, setRestoring] = useState(false);
+  const restoreInFlight = useRef(false);
   const { bridge, game } = props;
 
   const load = useCallback(
@@ -344,16 +345,18 @@ function Timeline(props: {
       restoring={restoring}
       initial={opener ? `restore:${opener}` : undefined}
       onAsk={(entry) => {
+        if (restoreInFlight.current) return;
         setError(null);
         setConfirm(entry);
         setOpener(entry);
       }}
       onCancel={() => setConfirm(null)}
       onConfirm={() => {
-        if (restoring) return;
+        if (restoreInFlight.current) return;
         const entry = confirm;
         setConfirm(null);
         if (entry) {
+          restoreInFlight.current = true;
           setRestoring(true);
           setError(null);
           setNotice(null);
@@ -364,7 +367,10 @@ function Timeline(props: {
               return load();
             },
             (e) => { setNotice(null); setError(message(e)); },
-          ).finally(() => setRestoring(false));
+          ).finally(() => {
+            restoreInFlight.current = false;
+            setRestoring(false);
+          });
         }
       }}
       onBack={props.onBack}

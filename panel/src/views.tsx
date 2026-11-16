@@ -148,7 +148,6 @@ export function AddGamesView(props: {
   busyAppId: number | null;
   error: string | null;
   notice: string | null;
-  restoring?: boolean;
   initial?: string;
   onRefresh: () => void;
   onAdd: (appId: number) => void;
@@ -466,6 +465,7 @@ export function TimelineView(props: {
                       data-focus={confirm ? undefined : `restore:${e.entry}`}
                       tabIndex={confirm ? -1 : undefined}
                       className="btn"
+                      disabled={props.restoring}
                       onClick={() => props.onAsk(e.entry)}
                     >
                       Restore
