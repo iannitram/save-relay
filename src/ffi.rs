@@ -17,14 +17,17 @@
 
 use crate::api;
 use crate::cli::{self, Args, Command};
-use crate::clients::ClientSet;
+use crate::clients::{self, Client, ClientSet};
 use crate::creds::{CredentialStore, Secret};
 use crate::error::{Error, Result};
 use crate::http::{Request, Response, Transport};
 use crate::local::LocalStore;
 use crate::manifest::Manifest;
+use crate::oauth::{self, PlatformSignIn};
 use crate::platform::{AppDirs, PathVars};
 use crate::remote::{MemoryRemote, Remote};
+use crate::service::Service;
+use crate::stamp;
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
@@ -89,6 +92,30 @@ struct Host {
     http: HttpSend,
     /// Tests: a remote used instead of connecting through `http`.
     remote: Option<Arc<dyn Remote + Send + Sync>>,
+    /// Tests: a transport used instead of the app's `http` callback (the app is never asked).
+    transport: Option<Arc<dyn Transport + Send + Sync>>,
+    /// The build's app registrations; tests may pass their own.
+    clients: ClientSet,
+}
+
+/// A platform browser sign-in (`save_relay_sign_in_start`) waiting for the app's redirect.
+static SIGN_IN: Mutex<Option<PendingSignIn>> = Mutex::new(None);
+
+struct PendingSignIn {
+    sign_in: PlatformSignIn,
+    device: Option<String>,
+    root: String,
+}
+
+/// The transport the core talks through: a test's, or the app's `http` callback.
+fn transport_for(host: &Arc<Host>) -> Arc<dyn Transport> {
+    match &host.transport {
+        Some(transport) => {
+            let transport: Arc<dyn Transport> = transport.clone();
+            transport
+        }
+        None => Arc::new(HostTransport(host.clone())),
+    }
 }
 
 static HOST: Mutex<Option<Arc<Host>>> = Mutex::new(None);
@@ -284,6 +311,8 @@ fn guard(command: &str, body: impl FnOnce() -> Result<String>) -> *mut c_char {
 fn build_host(
     native: &SaveRelayHost,
     remote: Option<Arc<dyn Remote + Send + Sync>>,
+    transport: Option<Arc<dyn Transport + Send + Sync>>,
+    clients: ClientSet,
 ) -> Result<Host> {
     // SAFETY: the app promises NUL-terminated strings (or null where allowed).
     let (home, data, config, documents) = unsafe {
@@ -308,6 +337,8 @@ fn build_host(
         cred_delete: native.cred_delete.ok_or_else(|| missing("cred_delete"))?,
         http: native.http.ok_or_else(|| missing("http"))?,
         remote,
+        transport,
+        clients,
     })
 }
 
@@ -327,7 +358,7 @@ pub unsafe extern "C" fn save_relay_init(host: *const SaveRelayHost) -> *mut c_c
         let native = host
             .as_ref()
             .ok_or_else(|| Error::Usage("host is null".into()))?;
-        install(build_host(native, None)?)
+        install(build_host(native, None, None, ClientSet::shipped())?)
     })
 }
 
@@ -341,7 +372,23 @@ pub unsafe fn init_with_remote(
     host: &SaveRelayHost,
     remote: Arc<dyn Remote + Send + Sync>,
 ) -> String {
-    match build_host(host, Some(remote)).and_then(install) {
+    init_with_net(host, Some(remote), None, ClientSet::shipped())
+}
+
+/// `save_relay_init` for tests: sync through `remote` and, when given, send the core's requests
+/// through `transport` instead of the app's `http` callback (the platform sign-in tests use a
+/// fake service transport).
+///
+/// # Safety
+/// As `save_relay_init`.
+#[doc(hidden)]
+pub unsafe fn init_with_net(
+    host: &SaveRelayHost,
+    remote: Option<Arc<dyn Remote + Send + Sync>>,
+    transport: Option<Arc<dyn Transport + Send + Sync>>,
+    clients: ClientSet,
+) -> String {
+    match build_host(host, remote, transport, clients).and_then(install) {
         Ok(line) => line,
         Err(error) => api::failure("init", &error),
     }
@@ -353,7 +400,7 @@ fn run_json(command: &str, args: Vec<String>, password: Option<String>) -> Resul
     let host = host()?;
     let store = LocalStore::new(AppDirs::from_vars(&host.vars));
     let creds = HostCreds(host.clone());
-    let transport: Arc<dyn Transport> = Arc::new(HostTransport(host.clone()));
+    let transport = transport_for(&host);
     let for_connect = transport.clone();
     let connect = move |server: &str, user: &str, secret: Secret| {
         cli::connect_with(server, user, secret, for_connect.clone())
@@ -390,7 +437,7 @@ fn run_json(command: &str, args: Vec<String>, password: Option<String>) -> Resul
                 "sign-in through a browser is the app's job".into(),
             ))
         },
-        clients: ClientSet::shipped(),
+        clients: host.clients,
         game_mode: false,
         clock: crate::stamp::now,
     };
@@ -508,10 +555,140 @@ pub unsafe extern "C" fn save_relay_status(
     })
 }
 
+/// The app registration and Google client kind a platform sign-in uses (the same public
+/// registrations as the desktop browser sign-in).
+fn platform_client(host: &Host, service: Service) -> Result<(Client, &'static str)> {
+    match service {
+        Service::Gdrive => Ok((
+            clients::registered(host.clients.google_desktop, "Google Drive")?,
+            "desktop",
+        )),
+        Service::Dropbox => Ok((clients::registered(host.clients.dropbox, "Dropbox")?, "")),
+        Service::Nextcloud => Err(Error::Usage(
+            "Nextcloud signs in with an app password, not a browser session".into(),
+        )),
+    }
+}
+
+/// Start a Google Drive or Dropbox sign-in in the app's own browser session (Android Custom
+/// Tabs, iOS `ASWebAuthenticationSession`): the same PKCE parts as the desktop browser sign-in.
+/// Returns the `--json` envelope (`setup`) with a `SignInPrompt` whose `url` is the page to open
+/// and whose `code` is null (the app receives the redirect at `redirect_uri` itself).
+///
+/// The app then hands the redirect URL to `save_relay_sign_in_finish`, which exchanges the code
+/// and writes the refresh token through `cred_set` only. `device` and `root` are the setup
+/// settings (null: the CLI's default name and root). No password is involved.
+///
+/// # Safety
+/// Each pointer is null (refused, except `device` and `root`) or a NUL-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn save_relay_sign_in_start(
+    service: *const c_char,
+    redirect_uri: *const c_char,
+    device: *const c_char,
+    root: *const c_char,
+) -> *mut c_char {
+    guard("setup", || {
+        let host = host()?;
+        let service = Service::parse(text(service, "service")?)?;
+        let redirect_uri = text(redirect_uri, "redirect_uri")?;
+        let device = optional_text(device, "device")?.map(str::to_string);
+        let root = optional_text(root, "root")?
+            .unwrap_or(cli::DEFAULT_ROOT)
+            .to_string();
+        let provider = oauth::provider(service)
+            .ok_or_else(|| Error::Usage("this service does not use a browser sign-in".into()))?;
+        let (client, _) = platform_client(&host, service)?;
+        let sign_in = oauth::start_platform_sign_in(provider, client, redirect_uri, stamp::now())?;
+        let data = api::SignInPrompt {
+            service: service.key().to_string(),
+            url: sign_in.url.clone(),
+            code: None,
+            expires_at: stamp::rfc3339(sign_in.expires_at),
+            message: format!(
+                "Open this page in the app's browser session, sign in to {}, then hand the redirect back to save_relay_sign_in_finish.",
+                service.label()
+            ),
+        };
+        *SIGN_IN
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(PendingSignIn {
+            sign_in,
+            device,
+            root,
+        });
+        Ok(api::success("setup", &data))
+    })
+}
+
+/// Finish the sign-in `save_relay_sign_in_start` began: `redirect_url` is the app's browser
+/// session's answer (the URL its redirect URI received). The `state` must match this sign-in's;
+/// the code is exchanged with the PKCE verifier through the app's network callback, and the
+/// refresh token goes to `cred_set` only. Returns the `--json` envelope (`setup`, `SetupData`).
+/// A transient network or server failure keeps the sign-in for another try; a refused, expired
+/// or mismatched answer ends it.
+///
+/// # Safety
+/// `redirect_url` is a NUL-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn save_relay_sign_in_finish(redirect_url: *const c_char) -> *mut c_char {
+    guard("setup", || {
+        let host = host()?;
+        let redirect = text(redirect_url, "redirect_url")?;
+        let pending = SIGN_IN
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
+            .ok_or_else(|| {
+                Error::SignInFailed(
+                    "no sign-in is waiting: call save_relay_sign_in_start first".into(),
+                )
+            })?;
+        let service = pending.sign_in.service;
+        let provider = oauth::provider(service)
+            .ok_or_else(|| Error::Usage("this service does not use a browser sign-in".into()))?;
+        let (client, kind) = platform_client(&host, service)?;
+        let transport = transport_for(&host);
+        let tokens = match oauth::finish_platform_sign_in(
+            provider,
+            client,
+            &pending.sign_in,
+            redirect,
+            &*transport,
+            stamp::now,
+        ) {
+            Ok(tokens) => tokens,
+            Err(error) => {
+                // A dropped link can be retried with the same redirect; a refusal cannot.
+                if matches!(error, Error::Unreachable(_) | Error::Server(_)) {
+                    *SIGN_IN
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(pending);
+                }
+                return Err(error);
+            }
+        };
+        let creds = HostCreds(host.clone());
+        let store = LocalStore::new(AppDirs::from_vars(&host.vars));
+        cli::finish_platform_setup(
+            service,
+            tokens,
+            client,
+            kind,
+            pending.device.as_deref(),
+            &pending.root,
+            &creds,
+            &store,
+            transport,
+            stamp::now,
+        )
+    })
+}
+
 /// Set this device up for a Nextcloud server (once per machine). The password goes to the app's
 /// `cred_set` callback and nowhere else. `device` and `root` may be null (device name from the
 /// CLI's default, root `save-relay`). Returns the `--json` envelope (`setup`). Signing in to
-/// Google Drive or Dropbox is the app's own browser session (#254), not this function.
+/// Google Drive or Dropbox is `save_relay_sign_in_start` / `_finish` (#254), not this function.
 ///
 /// # Safety
 /// Each pointer is null (refused, except `device` and `root`) or a NUL-terminated string.

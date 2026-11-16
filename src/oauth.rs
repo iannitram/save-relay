@@ -658,11 +658,34 @@ pub fn sign_in_browser_timeout(
         break code;
     };
 
+    exchange_code(
+        provider,
+        client,
+        &code,
+        &redirect_uri,
+        &verifier,
+        transport,
+        now,
+    )
+}
+
+/// Exchange an authorization code for tokens: the same request for the loopback and the
+/// platform browser sessions. Google sends its client secret only when one is registered
+/// (never `client_secret=`).
+fn exchange_code(
+    provider: &'static Provider,
+    client: Client,
+    code: &str,
+    redirect_uri: &str,
+    verifier: &str,
+    transport: &dyn Transport,
+    now: Clock,
+) -> Result<Tokens> {
     let mut pairs = vec![
         ("grant_type", "authorization_code"),
-        ("code", &code),
-        ("redirect_uri", &redirect_uri),
-        ("code_verifier", &verifier),
+        ("code", code),
+        ("redirect_uri", redirect_uri),
+        ("code_verifier", verifier),
         ("client_id", client.id),
     ];
     if provider.service == Service::Gdrive {
@@ -678,6 +701,90 @@ pub fn sign_in_browser_timeout(
         .body(body.into_bytes());
     let resp = transport.send(&req)?;
     parse_token_response(provider.service, resp.status, &resp.text(), (now)())
+}
+
+/// A sign-in the app's own browser session completes (Android Custom Tabs, iOS
+/// `ASWebAuthenticationSession`): the app opens `url` and receives the redirect at its own URI,
+/// then hands the redirect back to `finish_platform_sign_in`. The same PKCE parts as the desktop
+/// browser sign-in (`sign_in_browser`), with no loopback listener (#254).
+#[derive(Debug, Clone)]
+pub struct PlatformSignIn {
+    pub service: Service,
+    /// The page the app opens in its browser session.
+    pub url: String,
+    /// The app's redirect URI, sent in the sign-in request and in the code exchange.
+    pub redirect_uri: String,
+    /// The random `state` the redirect must repeat.
+    pub state: String,
+    verifier: Secret,
+    /// Unix seconds after which the sign-in has to start again.
+    pub expires_at: u64,
+}
+
+/// Start a platform browser sign-in: a PKCE verifier and a random `state`, the sign-in URL for
+/// the app's browser session to open, and the redirect URI it comes back to. Nothing is stored.
+pub fn start_platform_sign_in(
+    provider: &'static Provider,
+    client: Client,
+    redirect_uri: &str,
+    now: u64,
+) -> Result<PlatformSignIn> {
+    if redirect_uri.trim().is_empty() {
+        return Err(crate::error::Error::Usage(
+            "the app's sign-in redirect URI is empty".into(),
+        ));
+    }
+    let verifier = verifier_from_bytes(&random_bytes()?);
+    let state = base64url(&random_bytes()?);
+    let url = authorize_url(
+        provider,
+        client.id,
+        redirect_uri,
+        &challenge(&verifier),
+        &state,
+    );
+    Ok(PlatformSignIn {
+        service: provider.service,
+        url,
+        redirect_uri: redirect_uri.to_string(),
+        state,
+        verifier: Secret::new(verifier),
+        expires_at: now.saturating_add(SIGN_IN_TIMEOUT),
+    })
+}
+
+/// Finish a platform browser sign-in: check `redirect` against this sign-in's `state` (the same
+/// checks as the loopback redirect), then exchange its code with the PKCE verifier. A different
+/// service, an expired sign-in, a redirect that does not match, or a refused sign-in is
+/// `Error::SignInFailed`; the refresh token goes back to the caller and nowhere else.
+pub fn finish_platform_sign_in(
+    provider: &'static Provider,
+    client: Client,
+    sign_in: &PlatformSignIn,
+    redirect: &str,
+    transport: &dyn Transport,
+    now: Clock,
+) -> Result<Tokens> {
+    if provider.service != sign_in.service {
+        return Err(crate::error::Error::SignInFailed(
+            "the waiting sign-in is for another service: start it again".into(),
+        ));
+    }
+    if (now)() >= sign_in.expires_at {
+        return Err(crate::error::Error::SignInFailed(
+            "the sign-in expired: start it again".into(),
+        ));
+    }
+    let code = parse_redirect(redirect, &sign_in.state)?;
+    exchange_code(
+        provider,
+        client,
+        &code,
+        &sign_in.redirect_uri,
+        sign_in.verifier.expose(),
+        transport,
+        now,
+    )
 }
 
 /// Start a sign-in with no browser on this machine: Dropbox's code flow (the URL with no
