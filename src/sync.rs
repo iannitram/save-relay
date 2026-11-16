@@ -57,8 +57,9 @@ pub enum Resolve {
     KeepLocal,
 }
 
-/// Before Play (M1, M3, M5, M11). The mark is read first (`read_mark`: no file, or one that does
-/// not parse, is no mark), then `plan::decide_with_mark(Intent::Launch, ..)`: Noop; Adopt (record
+/// Before Play (M1, M3, M5, M11). Read the server state, then the mark when reachable
+/// (`read_mark`: no file, or one that does not parse, is no mark), then
+/// `plan::decide_with_mark(Intent::Launch, ..)`: Noop; Adopt (record
 /// only); Pull (download the current entry); Push (offline play caught up: upload as a new
 /// revision); Offline (touch nothing, `Action::Offline`); Conflict (touch nothing,
 /// `Action::Conflict`) unless `resolve` is given, which settles it as described on `Resolve`;
@@ -106,12 +107,13 @@ fn sync(
     anyway: bool,
 ) -> Result<SyncReport> {
     let id = &game.manifest.id;
-    // Only a launch reads the mark: a push decides without it.
-    let hold = match intent {
-        Intent::Launch => launch_hold(s, id)?,
-        Intent::Exit => Hold::Free,
-    };
     let (state, pre, reachable) = read_server(s, id)?;
+    // Offline is decided from this same state read: do not treat a failed mark read as free
+    // and then retry state, which could recover and allow a launch to publish without a mark.
+    let hold = match intent {
+        Intent::Launch if reachable => launch_hold(s, id)?,
+        _ => Hold::Free,
+    };
     let local = scan(
         &game.saves_dir,
         &game.manifest.include,
@@ -166,11 +168,15 @@ fn sync(
                 // The kept backup carries this machine's card too; it is no session's push, so no playtime.
                 let card = card_of(s, &found, None);
                 write_card(s, id, &entry, &card, &mut found);
+                mark_conflict_loser(s, id, &entry)?;
                 data.backup = Some(entry);
                 decision = Decision::Pull;
             }
             Some(Resolve::KeepLocal) => {
                 data.backup = state.as_ref().map(|state| state.entry.clone());
+                if let Some(entry) = data.backup.as_deref() {
+                    mark_conflict_loser(s, id, entry)?;
+                }
                 decision = Decision::Push;
             }
             None => {}
@@ -503,16 +509,11 @@ fn read_mark(s: &Session, game: &str) -> Result<Option<Mark>> {
     fetch_mark(s, game)
 }
 
-/// The hold a launch (or `status`) sees. An unreachable mark read is "no mark" only when the
-/// server is unreachable as a whole (the launch then goes offline); if `state.json` answers, a
-/// failed mark read was a blip and the other machine's mark may be there, so it is an error.
+/// The hold a reachable launch (or `status`) sees. A failed mark read is an error, even
+/// when the state read succeeded: the other machine's mark may still be there.
 fn launch_hold(s: &Session, game: &str) -> Result<Hold> {
     match read_mark(s, game) {
         Ok(mark) => Ok(presence::check(mark.as_ref(), &s.device)),
-        Err(error @ Error::Unreachable(_)) => match read_server(s, game)? {
-            (_, _, false) => Ok(Hold::Free),
-            _ => Err(error),
-        },
         Err(error) => Err(error),
     }
 }
@@ -775,13 +776,40 @@ fn prune_after_publish(s: &Session, id: &str, backup: Option<&str>, newest: &str
     let _ = prune_markers(s, id, revision);
 }
 
+/// Durable marker inside a history entry whose revision lost a conflict and must outlive normal
+/// count-based retention.
+const CONFLICT_LOSER: &str = ".save-relay-conflict-loser";
+
+fn mark_conflict_loser(s: &Session, id: &str, entry: &str) -> Result<()> {
+    s.remote.put(
+        &format!("{}/{CONFLICT_LOSER}", s.layout.entry_dir(id, entry)),
+        b"1",
+        &Precondition::Any,
+    )?;
+    Ok(())
+}
+
 /// Drops the oldest history entries beyond `retention::KEEP`. The backup (the conflict's losing
 /// side, or a restore's backup) takes a slot, even with an old clock.
 fn retain_entries(s: &Session, id: &str, backup: Option<&str>, newest: &str) -> Result<()> {
     let entries = history_children(s, id)?
         .into_iter()
-        .filter(|child| child.is_dir && backup != Some(child.name.as_str()))
-        .map(|child| child.name)
+        .filter(|child| child.is_dir)
+        .filter_map(|child| {
+            let is_loser = match s.remote.get(&format!(
+                "{}/{CONFLICT_LOSER}",
+                s.layout.entry_dir(id, &child.name)
+            )) {
+                Ok(_) => true,
+                Err(Error::NotFound(_)) => false,
+                Err(_) => true,
+            };
+            if is_loser || backup == Some(child.name.as_str()) {
+                None
+            } else {
+                Some(child.name)
+            }
+        })
         .collect::<Vec<_>>();
     let keep = retention::KEEP - usize::from(backup.is_some());
     for old in retention::to_drop(&entries, keep, newest) {
@@ -906,8 +934,12 @@ fn canonical_saves_folder(folder: &Path) -> String {
 /// `held` is another machine's mark; `pending` is this machine's pending choice, if any.
 pub fn status(s: &Session, game: &Game, store: &LocalStore) -> Result<StatusData> {
     let id = &game.manifest.id;
-    let hold = launch_hold(s, id)?;
     let (state, _, reachable) = read_server(s, id)?;
+    let hold = if reachable {
+        launch_hold(s, id)?
+    } else {
+        Hold::Free
+    };
     let local = scan(
         &game.saves_dir,
         &game.manifest.include,
@@ -1361,8 +1393,8 @@ pub fn where_open(s: &Session, games: &[String]) -> Result<WhereData> {
     Ok(WhereData { games: rows })
 }
 
-/// This game's mark for `where`: no file, or one that is not a valid `Mark`, is `None`. Unlike
-/// `read_mark`, it does not turn an unreachable mark read into "no mark" for an offline launch.
+/// This game's mark: no file, or one that is not a valid `Mark`, is `None`.
+/// Failed reads remain errors for every caller, including `where` and reachable launches.
 fn fetch_mark(s: &Session, game: &str) -> Result<Option<Mark>> {
     match s.remote.get(&s.layout.playing_path(game)) {
         Ok((bytes, _)) => Ok(std::str::from_utf8(&bytes)

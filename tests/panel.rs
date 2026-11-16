@@ -886,6 +886,33 @@ fn a_picture_is_served_as_its_image_type_or_not_found() {
     assert_eq!(status, "HTTP/1.1 403 Forbidden");
 }
 
+#[test]
+fn history_and_picture_api_args_refuse_invalid_game_ids() {
+    for command in ["history", "picture"] {
+        let body = if command == "history" {
+            br#"{"game":"con"}"#.as_slice()
+        } else {
+            br#"{"game":"CON","entry":"e"}"#.as_slice()
+        };
+        let error = save_relay::panel::api_args(command, body).unwrap_err();
+        assert_eq!(error.code(), "usage");
+        assert_eq!(error.to_string(), "invalid <game> id");
+    }
+}
+
+#[test]
+fn picture_route_refuses_manifest_invalid_game_ids_before_running_cli() {
+    let (seen, calls) = mpsc::channel();
+    let data = start(fake_run_seen(Vec::new(), Some(seen)));
+    let (status, _) = get(
+        data.port,
+        &format!("/picture/con/e?token={}", token_in(&data.url)),
+        None,
+    );
+    assert_eq!(status, "HTTP/1.1 404 Not Found");
+    assert!(calls.recv_timeout(Duration::from_millis(20)).is_err());
+}
+
 /// The picture command gets the game and the entry from the URL, and no file segment: a swap of
 /// the two, or a file name in its command line, fails here.
 #[test]

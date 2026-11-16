@@ -1021,6 +1021,17 @@ pub fn run(args: &[String], stdin: &mut dyn Read, stdout: &mut dyn Write) -> i32
     run_with_env(args, stdin, stdout, &|name| std::env::var(name).ok())
 }
 
+/// Report an argument that cannot be represented as UTF-8. The binary checks this before
+/// converting `args_os`, so malformed arguments never get lossy-normalized into a command.
+pub fn non_utf8_argument(json: bool, stdout: &mut dyn Write) -> i32 {
+    print_failure(
+        stdout,
+        json,
+        "unknown",
+        &Error::Usage("arguments must be valid UTF-8".into()),
+    )
+}
+
 /// `run` with the environment passed in: the platform folders and Game Mode are read through
 /// `var`, not the process environment. A test passes its own (an empty one for the folders-not-
 /// found path); `run` passes the process environment.
@@ -2028,9 +2039,12 @@ fn setup_service(
                 transport,
                 clock,
             );
-            // The waiting sign-in is used up whether or not it worked, except when the network
-            // was unreachable: nothing reached the service, so the person can run `--finish` again.
-            if !matches!(finished, Err(Error::Unreachable(_))) {
+            // Keep the waiting sign-in after transport or server failures so `--finish`
+            // can be retried. Only success or a definite refusal/expiry uses it up.
+            if matches!(
+                finished,
+                Ok(_) | Err(Error::ReauthNeeded(_) | Error::SignInFailed(_))
+            ) {
                 cx.creds.delete(&account)?;
             }
             let tokens = finished.map_err(sign_in_refused)?;

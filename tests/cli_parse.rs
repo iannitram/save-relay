@@ -50,6 +50,12 @@ fn pull_and_push_with_every_flag_in_any_order() {
 }
 
 #[test]
+fn history_and_picture_refuse_ids_outside_the_manifest_rule() {
+    usage_err("history con", "invalid <game> id");
+    usage_err("picture CON entry --out image", "invalid <game> id");
+}
+
+#[test]
 fn slot_ids_are_independent_and_default_id_is_unchanged() {
     assert_eq!(
         p("pull uncharted-2 --slot 3 --saves-dir slot3"),

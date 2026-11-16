@@ -114,6 +114,13 @@ fn classify_missing_paths() {
 
 #[test]
 fn header_json_escapes_delete_u007f() {
-    let text = header_json(&json!("a\u{7f}b"));
-    assert_eq!(text, r#""a\u007fb""#);
+    let value = json!("a\u{7f}\u{80}\u{100}\u{1f600}\u{10ffff}b");
+    let text = header_json(&value);
+    assert!(text.is_ascii(), "{text}");
+    assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), value);
+    assert!(text.contains(r"\u007f"));
+    assert!(text.contains(r"\u0080"));
+    assert!(text.contains(r"\u0100"));
+    assert!(text.contains(r"\ud83d\ude00"));
+    assert!(text.contains(r"\udbff\udfff"));
 }
