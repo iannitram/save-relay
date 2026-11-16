@@ -19,8 +19,8 @@
 //! - `GET /picture/<game>/<entry>` (or `.../<game>/<entry>/<file>`, which the front end sends):
 //!   a save card's picture, as `image/jpeg` or `image/png` by its magic bytes.
 //!
-//! A random token is in the URL that is opened (`/?token=...`) and must come with every request
-//! (`X-Save-Relay-Token` header or `token` query): the page, its files, the API and the pictures.
+//! A random token is injected into the initial page (the opened URL contains no secret) and must
+//! come with every later request (`X-Save-Relay-Token` header or `token` query for pictures).
 //! So other pages in the browser cannot call it; a missing or wrong token is 403. The browser
 //! opens like `oauth::open_browser`. Requests are answered one at a time.
 
@@ -72,16 +72,14 @@ pub const TOKEN_HEADER: &str = "X-Save-Relay-Token";
 /// or `finish`, and for Dropbox with `no-browser` (its `finish` needs a terminal); never `wrap`,
 /// `panel` or a Nextcloud setup (its password stays on standard input). Steam game commands are
 /// available to the M16 panel, which delegates launch-option writes to Steam's own client.
-pub const API_COMMANDS: [&str; 13] = [
+pub const API_COMMANDS: [&str; 12] = [
     "status",
     "history",
     "restore",
     "pull",
-    "push",
     "answer",
     "where",
     "which",
-    "picture",
     "setup",
     "steam-games",
     "install-wrap",
@@ -220,7 +218,19 @@ pub enum Route {
 /// front end's other files, `POST /api/<command>` runs a command and `GET /picture/<game>/<entry>`
 /// (with or without a file segment) is a picture. Pure.
 pub fn route(request: &Request, token: &str) -> Route {
-    let given = header(request, TOKEN_HEADER).or_else(|| query_value(request, "token"));
+    // The initial document is the sole unauthenticated request. It injects the token into the
+    // page without putting it in the browser URL or in the browser launch arguments.
+    if request.method == "GET"
+        && (request.path == "/" || request.path == "/index.html")
+        && query_value(request, "token").is_none()
+    {
+        return Route::Asset("index.html");
+    }
+    let given = header(request, TOKEN_HEADER).or_else(|| {
+        (request.method == "GET")
+            .then(|| query_value(request, "token"))
+            .flatten()
+    });
     if !given.is_some_and(|given| same_token(given, token)) {
         return Route::Forbidden;
     }
@@ -251,16 +261,13 @@ fn asset_named(path: &str) -> Option<&'static str> {
         .map(|entry| entry.0)
 }
 
-/// The page as it is served: its `./app.js` and `./app.css` references carry the token
-/// (`./app.js?token=...`). A relative reference drops the page's own query, so without this the
-/// browser would ask for the files with no token. The token is base64url, which needs no escaping
-/// in an attribute. A page without those references (the placeholder) is returned unchanged.
+/// Inject the token in a meta element for the front end to read. It is never part of the opened URL.
 pub fn served_page(token: &str, html: &[u8]) -> Vec<u8> {
     let mut page = String::from_utf8_lossy(html).into_owned();
-    for file in ["app.js", "app.css"] {
+    if page.contains("</head>") {
         page = page.replace(
-            &format!("\"./{file}\""),
-            &format!("\"./{file}?token={token}\""),
+            "</head>",
+            &format!("<meta name=\"save-relay-token\" content=\"{token}\"></head>"),
         );
     }
     page.into_bytes()
@@ -393,7 +400,7 @@ pub fn serve(
         .map_err(|error| Error::Io(error.to_string()))?
         .port();
     let token = token_from_bytes(&oauth::random_bytes()?);
-    let url = format!("http://127.0.0.1:{bound}/?token={token}");
+    let url = format!("http://127.0.0.1:{bound}/");
     announce(&PanelData {
         url: url.clone(),
         port: bound,
@@ -653,17 +660,14 @@ fn body_fields(body: &[u8]) -> Result<serde_json::Map<String, Value>> {
 fn fields_of(command: &str) -> (&'static [&'static str], &'static [&'static str]) {
     match command {
         "history" => (&["game"], &[]),
-        "status" => (&["game"], &["manifest", "saves-dir"]),
-        "pull" => (&["game"], &["manifest", "saves-dir", "resolve", "anyway"]),
-        "push" => (&["game"], &["manifest", "saves-dir", "resolve"]),
-        "restore" => (&["game", "entry"], &["manifest", "saves-dir"]),
-        "picture" => (&["game", "entry"], &[]),
+        "status" => (&["game"], &[]),
+        "pull" => (&["game"], &["anyway"]),
+        "restore" => (&["game", "entry"], &[]),
         "answer" => (&["game", "answer"], &[]),
         "which" => (&["appid"], &[]),
         "steam-games" => (&[], &["no-steam-cloud", "refresh"]),
-        "install-wrap" => (&["app-ids"], &["no-steam-cloud", "remove", "dry-run"]),
         "launch-option" => (&["appid"], &["remove", "current"]),
-        "setup" => (&[], &["service", "device", "root", "no-browser", "finish"]),
+        "setup" => (&[], &["service", "device", "no-browser"]),
         _ => (&[], &[]),
     }
 }

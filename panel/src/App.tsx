@@ -299,8 +299,7 @@ function AddGamesRoute(props: {
 
 /**
  * An entry's picture on the panel server: `/picture/<game>/<entry>/<file>`, each segment
- * percent-encoded, with the token as `?token=` (an `<img>` cannot send the header; src/panel.rs
- * `route`). Without a token the path alone, which the server refuses.
+ * percent-encoded. Image requests use the token query because an `<img>` cannot send a header.
  */
 export function panelPicture(token: string | null | undefined) {
   return (game: string, entry: string, file: string): string => {
@@ -320,6 +319,7 @@ function Timeline(props: {
   const [opener, setOpener] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [restoring, setRestoring] = useState(false);
   const { bridge, game } = props;
 
   const load = useCallback(
@@ -341,6 +341,7 @@ function Timeline(props: {
       confirm={confirm}
       error={error}
       notice={notice}
+      restoring={restoring}
       initial={opener ? `restore:${opener}` : undefined}
       onAsk={(entry) => {
         setError(null);
@@ -349,17 +350,22 @@ function Timeline(props: {
       }}
       onCancel={() => setConfirm(null)}
       onConfirm={() => {
+        if (restoring) return;
         const entry = confirm;
         setConfirm(null);
-        if (entry)
-          restore(bridge, game, entry).then(
+        if (entry) {
+          setRestoring(true);
+          setError(null);
+          setNotice(null);
+          void restore(bridge, game, entry).then(
             (r) => {
               setError(null);
               setNotice(r.message);
               return load();
             },
-            (e) => setError(message(e)),
-          );
+            (e) => { setNotice(null); setError(message(e)); },
+          ).finally(() => setRestoring(false));
+        }
       }}
       onBack={props.onBack}
     />
