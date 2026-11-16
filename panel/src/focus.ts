@@ -7,16 +7,16 @@ import type { KeyboardEvent } from "react";
 
 export type FocusMove = { focus: string } | "back" | null;
 
-/** The pure rule: which control gets focus after `key`, among `order` (wraps around). */
-export function nextFocus(order: string[], current: string | null, key: string): FocusMove {
-  if (key === "Escape") return "back";
+/** The pure view rule: null leaves an unused key (including list edges) to the host. */
+export function nextFocus(order: string[], current: string | null, key: string, hasBack = true): FocusMove {
+  if (key === "Escape") return hasBack ? "back" : null;
   if (order.length === 0) return null;
   const at = current === null ? -1 : order.indexOf(current);
   if (key === "ArrowDown" || key === "ArrowRight") {
-    return { focus: order[(at + 1) % order.length]! };
+    return at === order.length - 1 ? null : { focus: order[at + 1]! };
   }
   if (key === "ArrowUp" || key === "ArrowLeft") {
-    return { focus: order[(at <= 0 ? order.length : at) - 1]! };
+    return at === 0 ? null : { focus: order[at < 0 ? order.length - 1 : at - 1]! };
   }
   if (key === "Home") return { focus: order[0]! };
   if (key === "End") return { focus: order[order.length - 1]! };
@@ -125,6 +125,7 @@ export function useFocusScope(onBack: (() => void) | null, initial?: string) {
       all.map((el) => el.dataset.focus ?? ""),
       current,
       k,
+      latest.current.onBack !== null,
     );
     if (move === null) return false;
     userMoved.current = true;

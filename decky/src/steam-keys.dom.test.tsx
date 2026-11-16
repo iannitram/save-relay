@@ -98,6 +98,7 @@ async function press(button: number) {
   const event = new CustomEvent("vgp_onbuttondown", { detail: { button }, cancelable: true }) as GamepadEvent;
   await act(async () => host.button!(event));
   await settle();
+  return event;
 }
 
 async function mountPlugin() {
@@ -184,5 +185,36 @@ describe("pressKey on the focus scope, with no Decky (#201)", () => {
     await settle();
     expect(pressKey("q")).toBe(false);
     expect(focused()).toBe("game:celeste");
+  });
+});
+
+describe("unused Game Mode buttons pass through to Steam (#267)", () => {
+  it("passes B on Games through, but consumes B on history", async () => {
+    await mountPlugin();
+    const unused = await press(CANCEL);
+    expect(unused.defaultPrevented).toBe(false);
+    expect(unused.cancelBubble).toBe(false);
+    expect(focused()).toBe("game:celeste");
+    await press(OK);
+    const used = await press(CANCEL);
+    expect(used.defaultPrevented).toBe(true);
+    expect(used.cancelBubble).toBe(true);
+    expect(container.querySelector('[aria-label="Games"]')).not.toBeNull();
+  });
+
+  it.each([9, 10, 11, 12])("passes direction %s at its edge and consumes it within the list", async (button) => {
+    await mountPlugin();
+    const forward = button === 10 || button === 12;
+    const edge = forward ? "add-games" : "game:celeste";
+    act(() => container.querySelector<HTMLElement>(`[data-focus="${edge}"]`)!.focus());
+    const unused = await press(button);
+    expect(unused.defaultPrevented).toBe(false);
+    expect(unused.cancelBubble).toBe(false);
+    expect(focused()).toBe(edge);
+    act(() => container.querySelector<HTMLElement>('[data-focus="game:hades"]')!.focus());
+    const used = await press(button);
+    expect(used.defaultPrevented).toBe(true);
+    expect(used.cancelBubble).toBe(true);
+    expect(focused()).toBe(forward ? "game:hollow-knight" : "game:celeste");
   });
 });

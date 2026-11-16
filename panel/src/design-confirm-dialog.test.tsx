@@ -193,7 +193,7 @@ describe("ConfirmDialog structure and focus (#175)", () => {
     expect(cancel.hasAttribute("data-focused")).toBe(true);
   });
 
-  it("focus cannot leave the dialog via Tab or D-pad", () => {
+  it("Tab wraps within the dialog; D-pad stops at its edges", () => {
     act(() => {
       root.render(
         <TimelineView
@@ -228,8 +228,10 @@ describe("ConfirmDialog structure and focus (#175)", () => {
     pressKey(cancel, "Tab", true);
     expect(document.activeElement).toBe(restore);
 
-    // ArrowRight / ArrowDown moves to Cancel
+    // D-pad does not wrap at either edge (#267).
     pressKey(restore, "ArrowRight");
+    expect(document.activeElement).toBe(restore);
+    pressKey(restore, "ArrowLeft");
     expect(document.activeElement).toBe(cancel);
 
     pressKey(cancel, "ArrowDown");
@@ -240,7 +242,7 @@ describe("ConfirmDialog structure and focus (#175)", () => {
     expect(document.activeElement).toBe(cancel);
 
     pressKey(cancel, "ArrowLeft");
-    expect(document.activeElement).toBe(restore);
+    expect(document.activeElement).toBe(cancel);
 
     // Back button and list restore buttons under scrim are never focused
     const back = host.querySelector<HTMLButtonElement>('header button');
