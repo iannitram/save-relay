@@ -166,11 +166,15 @@ fn sync(
                 // The kept backup carries this machine's card too; it is no session's push, so no playtime.
                 let card = card_of(s, &found, None);
                 write_card(s, id, &entry, &card, &mut found);
+                mark_conflict_loser(s, id, &entry)?;
                 data.backup = Some(entry);
                 decision = Decision::Pull;
             }
             Some(Resolve::KeepLocal) => {
                 data.backup = state.as_ref().map(|state| state.entry.clone());
+                if let Some(entry) = data.backup.as_deref() {
+                    mark_conflict_loser(s, id, entry)?;
+                }
                 decision = Decision::Push;
             }
             None => {}
@@ -509,10 +513,6 @@ fn read_mark(s: &Session, game: &str) -> Result<Option<Mark>> {
 fn launch_hold(s: &Session, game: &str) -> Result<Hold> {
     match read_mark(s, game) {
         Ok(mark) => Ok(presence::check(mark.as_ref(), &s.device)),
-        Err(error @ Error::Unreachable(_)) => match read_server(s, game)? {
-            (_, _, false) => Ok(Hold::Free),
-            _ => Err(error),
-        },
         Err(error) => Err(error),
     }
 }
@@ -775,13 +775,40 @@ fn prune_after_publish(s: &Session, id: &str, backup: Option<&str>, newest: &str
     let _ = prune_markers(s, id, revision);
 }
 
+/// Durable marker inside a history entry whose revision lost a conflict and must outlive normal
+/// count-based retention.
+const CONFLICT_LOSER: &str = ".save-relay-conflict-loser";
+
+fn mark_conflict_loser(s: &Session, id: &str, entry: &str) -> Result<()> {
+    s.remote.put(
+        &format!("{}/{CONFLICT_LOSER}", s.layout.entry_dir(id, entry)),
+        b"1",
+        &Precondition::Any,
+    )?;
+    Ok(())
+}
+
 /// Drops the oldest history entries beyond `retention::KEEP`. The backup (the conflict's losing
 /// side, or a restore's backup) takes a slot, even with an old clock.
 fn retain_entries(s: &Session, id: &str, backup: Option<&str>, newest: &str) -> Result<()> {
     let entries = history_children(s, id)?
         .into_iter()
-        .filter(|child| child.is_dir && backup != Some(child.name.as_str()))
-        .map(|child| child.name)
+        .filter(|child| child.is_dir)
+        .filter_map(|child| {
+            let is_loser = match s.remote.get(&format!(
+                "{}/{CONFLICT_LOSER}",
+                s.layout.entry_dir(id, &child.name)
+            )) {
+                Ok(_) => true,
+                Err(Error::NotFound(_)) => false,
+                Err(_) => true,
+            };
+            if is_loser || backup == Some(child.name.as_str()) {
+                None
+            } else {
+                Some(child.name)
+            }
+        })
         .collect::<Vec<_>>();
     let keep = retention::KEEP - usize::from(backup.is_some());
     for old in retention::to_drop(&entries, keep, newest) {

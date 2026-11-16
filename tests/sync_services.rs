@@ -206,6 +206,58 @@ fn resolve_keep_local_keeps_server_in_history(r: &dyn Remote, _online: &dyn Fn(b
     assert_eq!(one.saves(), "two-edited");
 }
 
+/// A conflict loser remains protected through later publications and ordinary retention passes.
+fn conflict_loser_survives_later_retention(r: &dyn Remote, _online: &dyn Fn(bool)) {
+    let (_one, two) = conflict(r);
+    let loser = state(r).entry;
+    two.push(r, Some(Resolve::KeepLocal)).unwrap();
+    for i in 0..11 {
+        two.write(&format!("later {i}"));
+        two.push(r, None).unwrap();
+    }
+    assert!(history_names(&two, r).contains(&loser));
+    assert_eq!(entry_saves(r, &loser), "one-edited");
+}
+
+/// A corrupt restore entry is rejected before any server publication or local replacement.
+fn restore_checks_record_and_hashes_before_publishing(r: &dyn Remote, _online: &dyn Fn(bool)) {
+    let one = Machine::new("device-one");
+    one.write("original");
+    one.push(r, None).unwrap();
+    let entry = state(r).entry;
+    one.write("local edit");
+    one.push(r, None).unwrap();
+    let before = state(r);
+    let record = format!(
+        "{}/{}",
+        layout().entry_dir(GAME, &entry),
+        save_relay::transfer::RECORD
+    );
+    r.put(&record, b"not json", &Precondition::Any).unwrap();
+    assert!(sync::restore(&one.session(r), &one.game, &one.store, &entry).is_err());
+    assert_eq!(state(r).entry, before.entry);
+    assert_eq!(one.saves(), "local edit");
+
+    // Restore a fresh valid entry after corrupting its payload: this must also fail before publish.
+    one.write("valid payload");
+    one.push(r, None).unwrap();
+    let hash_entry = state(r).entry;
+    let payload = format!("{}/{hash_entry}/a.sav", layout().history_dir(GAME));
+    r.put(&payload, b"tampered", &Precondition::Any).unwrap();
+    let before = state(r);
+    assert!(sync::restore(&one.session(r), &one.game, &one.store, &hash_entry).is_err());
+    assert_eq!(state(r).entry, before.entry);
+    assert_eq!(one.saves(), "valid payload");
+}
+
+/// A failed playing mark read is an error even when the server is otherwise offline.
+fn unreachable_mark_read_is_not_absence(r: &dyn Remote, online: &dyn Fn(bool)) {
+    let one = Machine::new("device-one");
+    one.write("local");
+    online(false);
+    assert!(matches!(one.pull(r, None), Err(Error::Unreachable(_))));
+}
+
 /// M3: `--resolve keep-server` takes the server's saves; the local side is kept in history as
 /// a backup entry first, and the revision does not change.
 fn resolve_keep_server_keeps_local_in_history(r: &dyn Remote, _online: &dyn Fn(bool)) {
@@ -274,7 +326,7 @@ fn offline_pull_and_deferred_push(r: &dyn Remote, online: &dyn Fn(bool)) {
     assert_eq!(two.pull(r, None).unwrap().action, Action::Pulled);
 
     online(false);
-    assert_eq!(two.pull(r, None).unwrap().action, Action::Offline);
+    assert!(matches!(two.pull(r, None), Err(Error::Unreachable(_))));
     assert_eq!(two.saves(), "base");
     two.write("offline-edit");
     assert_eq!(two.push(r, None).unwrap().action, Action::Deferred);
@@ -408,6 +460,9 @@ scenarios!(
     push_then_pull,
     both_changed_conflicts,
     resolve_keep_local_keeps_server_in_history,
+    conflict_loser_survives_later_retention,
+    restore_checks_record_and_hashes_before_publishing,
+    unreachable_mark_read_is_not_absence,
     resolve_keep_server_keeps_local_in_history,
     eleven_pushes_keep_ten_and_restore,
     offline_pull_and_deferred_push,
