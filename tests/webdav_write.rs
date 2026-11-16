@@ -104,11 +104,29 @@ fn put_accepts_200_201_and_204() {
 }
 
 #[test]
-fn put_without_an_etag_header_is_a_server_error() {
-    let (webdav, _) = dav(vec![Ok(Response::new(201, ""))]);
+fn put_without_an_etag_reads_it_back_with_propfind() {
+    let listing = r#"<d:multistatus xmlns:d="DAV:">
+      <d:response><d:href>/remote.php/dav/files/alex/a/</d:href>
+      <d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop>
+      <d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>
+      <d:response><d:href>/remote.php/dav/files/alex/a/f</d:href>
+      <d:propstat><d:prop><d:resourcetype/><d:getetag>"read-back"</d:getetag></d:prop>
+      <d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>
+    </d:multistatus>"#;
+    let (webdav, fake) = dav(vec![
+        Ok(Response::new(201, "")),
+        Ok(Response::new(207, listing)),
+    ]);
     assert_eq!(
-        webdav.put("a/f", b"", &Precondition::Any).unwrap_err(),
-        Error::Server("PUT a/f: no ETag".into())
+        webdav.put("a/f", b"", &Precondition::Any).unwrap(),
+        "\"read-back\""
+    );
+    assert_eq!(
+        sent(&fake)
+            .iter()
+            .map(|r| r.method.as_str())
+            .collect::<Vec<_>>(),
+        ["PUT", "PROPFIND"]
     );
 }
 
