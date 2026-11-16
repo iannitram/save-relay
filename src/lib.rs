@@ -12,6 +12,8 @@ pub mod creds;
 pub mod dropbox;
 pub mod error;
 pub mod fake;
+#[cfg(feature = "ffi")]
+pub mod ffi;
 pub mod gdrive;
 pub mod glob;
 pub mod http;
