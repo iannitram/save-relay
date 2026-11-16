@@ -57,8 +57,9 @@ pub enum Resolve {
     KeepLocal,
 }
 
-/// Before Play (M1, M3, M5, M11). The mark is read first (`read_mark`: no file, or one that does
-/// not parse, is no mark), then `plan::decide_with_mark(Intent::Launch, ..)`: Noop; Adopt (record
+/// Before Play (M1, M3, M5, M11). Read the server state, then the mark when reachable
+/// (`read_mark`: no file, or one that does not parse, is no mark), then
+/// `plan::decide_with_mark(Intent::Launch, ..)`: Noop; Adopt (record
 /// only); Pull (download the current entry); Push (offline play caught up: upload as a new
 /// revision); Offline (touch nothing, `Action::Offline`); Conflict (touch nothing,
 /// `Action::Conflict`) unless `resolve` is given, which settles it as described on `Resolve`;
@@ -106,12 +107,13 @@ fn sync(
     anyway: bool,
 ) -> Result<SyncReport> {
     let id = &game.manifest.id;
-    // Only a launch reads the mark: a push decides without it.
-    let hold = match intent {
-        Intent::Launch => launch_hold(s, id)?,
-        Intent::Exit => Hold::Free,
-    };
     let (state, pre, reachable) = read_server(s, id)?;
+    // Offline is decided from this same state read: do not treat a failed mark read as free
+    // and then retry state, which could recover and allow a launch to publish without a mark.
+    let hold = match intent {
+        Intent::Launch if reachable => launch_hold(s, id)?,
+        _ => Hold::Free,
+    };
     let local = scan(
         &game.saves_dir,
         &game.manifest.include,
@@ -507,9 +509,8 @@ fn read_mark(s: &Session, game: &str) -> Result<Option<Mark>> {
     fetch_mark(s, game)
 }
 
-/// The hold a launch (or `status`) sees. An unreachable mark read is "no mark" only when the
-/// server is unreachable as a whole (the launch then goes offline); if `state.json` answers, a
-/// failed mark read was a blip and the other machine's mark may be there, so it is an error.
+/// The hold a reachable launch (or `status`) sees. A failed mark read is an error, even
+/// when the state read succeeded: the other machine's mark may still be there.
 fn launch_hold(s: &Session, game: &str) -> Result<Hold> {
     match read_mark(s, game) {
         Ok(mark) => Ok(presence::check(mark.as_ref(), &s.device)),
@@ -933,8 +934,12 @@ fn canonical_saves_folder(folder: &Path) -> String {
 /// `held` is another machine's mark; `pending` is this machine's pending choice, if any.
 pub fn status(s: &Session, game: &Game, store: &LocalStore) -> Result<StatusData> {
     let id = &game.manifest.id;
-    let hold = launch_hold(s, id)?;
     let (state, _, reachable) = read_server(s, id)?;
+    let hold = if reachable {
+        launch_hold(s, id)?
+    } else {
+        Hold::Free
+    };
     let local = scan(
         &game.saves_dir,
         &game.manifest.include,
@@ -1388,8 +1393,8 @@ pub fn where_open(s: &Session, games: &[String]) -> Result<WhereData> {
     Ok(WhereData { games: rows })
 }
 
-/// This game's mark for `where`: no file, or one that is not a valid `Mark`, is `None`. Unlike
-/// `read_mark`, it does not turn an unreachable mark read into "no mark" for an offline launch.
+/// This game's mark: no file, or one that is not a valid `Mark`, is `None`.
+/// Failed reads remain errors for every caller, including `where` and reachable launches.
 fn fetch_mark(s: &Session, game: &str) -> Result<Option<Mark>> {
     match s.remote.get(&s.layout.playing_path(game)) {
         Ok((bytes, _)) => Ok(std::str::from_utf8(&bytes)

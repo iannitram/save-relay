@@ -208,15 +208,32 @@ fn resolve_keep_local_keeps_server_in_history(r: &dyn Remote, _online: &dyn Fn(b
 
 /// A conflict loser remains protected through later publications and ordinary retention passes.
 fn conflict_loser_survives_later_retention(r: &dyn Remote, _online: &dyn Fn(bool)) {
+    check_conflict_loser_retention(r, Resolve::KeepLocal);
+}
+
+fn keep_server_conflict_loser_survives_later_retention(r: &dyn Remote, _online: &dyn Fn(bool)) {
+    check_conflict_loser_retention(r, Resolve::KeepServer);
+}
+
+fn check_conflict_loser_retention(r: &dyn Remote, resolve: Resolve) {
     let (_one, two) = conflict(r);
-    let loser = state(r).entry;
-    two.push(r, Some(Resolve::KeepLocal)).unwrap();
+    let (loser, content) = match resolve {
+        Resolve::KeepLocal => {
+            let loser = state(r).entry;
+            two.push(r, Some(resolve)).unwrap();
+            (loser, "one-edited")
+        }
+        Resolve::KeepServer => {
+            let backup = two.pull(r, Some(resolve)).unwrap().backup.unwrap();
+            (backup, "two-edited")
+        }
+    };
     for i in 0..11 {
         two.write(&format!("later {i}"));
         two.push(r, None).unwrap();
     }
     assert!(history_names(&two, r).contains(&loser));
-    assert_eq!(entry_saves(r, &loser), "one-edited");
+    assert_eq!(entry_saves(r, &loser), content);
 }
 
 /// A corrupt restore entry is rejected before any server publication or local replacement.
@@ -234,9 +251,14 @@ fn restore_checks_record_and_hashes_before_publishing(r: &dyn Remote, _online: &
         save_relay::transfer::RECORD
     );
     r.put(&record, b"not json", &Precondition::Any).unwrap();
+    one.write("unsynced local edit");
+    let before_history = r.list(&layout().history_dir(GAME)).unwrap();
+    let before_last = one.store.load_last(GAME).unwrap();
     assert!(sync::restore(&one.session(r), &one.game, &one.store, &entry).is_err());
-    assert_eq!(state(r).entry, before.entry);
-    assert_eq!(one.saves(), "local edit");
+    assert_eq!(state(r).to_json(), before.to_json());
+    assert_eq!(one.saves(), "unsynced local edit");
+    assert_eq!(r.list(&layout().history_dir(GAME)).unwrap(), before_history);
+    assert_eq!(one.store.load_last(GAME).unwrap(), before_last);
 
     // Restore a fresh valid entry after corrupting its payload: this must also fail before publish.
     one.write("valid payload");
@@ -245,17 +267,31 @@ fn restore_checks_record_and_hashes_before_publishing(r: &dyn Remote, _online: &
     let payload = format!("{}/{hash_entry}/a.sav", layout().history_dir(GAME));
     r.put(&payload, b"tampered", &Precondition::Any).unwrap();
     let before = state(r);
+    let before_history = r.list(&layout().history_dir(GAME)).unwrap();
+    let before_last = one.store.load_last(GAME).unwrap();
     assert!(sync::restore(&one.session(r), &one.game, &one.store, &hash_entry).is_err());
-    assert_eq!(state(r).entry, before.entry);
+    assert_eq!(state(r).to_json(), before.to_json());
+    assert_eq!(r.list(&layout().history_dir(GAME)).unwrap(), before_history);
+    assert_eq!(one.store.load_last(GAME).unwrap(), before_last);
     assert_eq!(one.saves(), "valid payload");
 }
 
-/// A failed playing mark read is an error even when the server is otherwise offline.
-fn unreachable_mark_read_is_not_absence(r: &dyn Remote, online: &dyn Fn(bool)) {
+/// An unreachable server remains offline, without publishing saves or writing a mark.
+fn unreachable_server_stays_offline(r: &dyn Remote, online: &dyn Fn(bool)) {
     let one = Machine::new("device-one");
     one.write("local");
     online(false);
-    assert!(matches!(one.pull(r, None), Err(Error::Unreachable(_))));
+    assert_eq!(one.pull(r, None).unwrap().action, Action::Offline);
+    assert_eq!(one.push(r, None).unwrap().action, Action::Deferred);
+    online(true);
+    assert!(matches!(
+        r.get(&layout().state_path(GAME)),
+        Err(Error::NotFound(_))
+    ));
+    assert!(matches!(
+        r.get(&layout().playing_path(GAME)),
+        Err(Error::NotFound(_))
+    ));
 }
 
 /// M3: `--resolve keep-server` takes the server's saves; the local side is kept in history as
@@ -326,7 +362,7 @@ fn offline_pull_and_deferred_push(r: &dyn Remote, online: &dyn Fn(bool)) {
     assert_eq!(two.pull(r, None).unwrap().action, Action::Pulled);
 
     online(false);
-    assert!(matches!(two.pull(r, None), Err(Error::Unreachable(_))));
+    assert_eq!(two.pull(r, None).unwrap().action, Action::Offline);
     assert_eq!(two.saves(), "base");
     two.write("offline-edit");
     assert_eq!(two.push(r, None).unwrap().action, Action::Deferred);
@@ -461,8 +497,9 @@ scenarios!(
     both_changed_conflicts,
     resolve_keep_local_keeps_server_in_history,
     conflict_loser_survives_later_retention,
+    keep_server_conflict_loser_survives_later_retention,
     restore_checks_record_and_hashes_before_publishing,
-    unreachable_mark_read_is_not_absence,
+    unreachable_server_stays_offline,
     resolve_keep_server_keeps_local_in_history,
     eleven_pushes_keep_ten_and_restore,
     offline_pull_and_deferred_push,
