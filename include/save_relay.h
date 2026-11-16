@@ -55,7 +55,8 @@ typedef struct SaveRelayHost {
 } SaveRelayHost;
 
 /* For the `http` callback: hand over the answer. `headers` is "Name: value" lines or NULL;
- * `body` may be NULL with body_len 0. Returns 0 (1 when `sink` is NULL). */
+ * `body` may be NULL with body_len 0. Returns 0, or 1 on invalid input or panic.
+ * Non-UTF-8 headers and NULL bodies with nonzero lengths are refused. */
 int save_relay_http_respond(SaveRelayHttpSink *sink, uint16_t status, const char *headers,
                             const uint8_t *body, size_t body_len);
 

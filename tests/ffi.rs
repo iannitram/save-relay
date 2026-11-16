@@ -74,6 +74,32 @@ unsafe extern "C" fn http(
     request: *const SaveRelayHttpRequest,
     sink: *mut SaveRelayHttpSink,
 ) -> c_int {
+    // Invalid callback answers must be refused, without populating the response sink.
+    let invalid_headers = [0xffu8, 0];
+    assert_eq!(
+        save_relay_http_respond(
+            sink,
+            200,
+            invalid_headers.as_ptr().cast(),
+            std::ptr::null(),
+            0
+        ),
+        1
+    );
+    assert_eq!(
+        save_relay_http_respond(sink, 200, std::ptr::null(), std::ptr::null(), 1),
+        1
+    );
+    assert_eq!(
+        save_relay_http_respond(
+            std::ptr::null_mut(),
+            200,
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+        ),
+        1
+    );
     let mut state = app(ud);
     let request = &*request;
     state.requests.push((

@@ -226,7 +226,7 @@ impl Transport for HostTransport {
 }
 
 /// The app's `http` callback hands its answer here. `headers` is `Name: value` lines (may be
-/// null); `body` may be null with `body_len` 0. Returns 0, or 1 when `sink` is null.
+/// null); `body` may be null with `body_len` 0. Returns 0, or 1 on invalid input or panic.
 ///
 /// # Safety
 /// `sink` must be the pointer the callback received; `headers` a NUL-terminated string or null;
@@ -239,24 +239,34 @@ pub unsafe extern "C" fn save_relay_http_respond(
     body: *const u8,
     body_len: usize,
 ) -> c_int {
-    let Some(sink) = sink.as_mut() else { return 1 };
-    let mut response = Response::new(
-        status,
-        if body.is_null() || body_len == 0 {
-            Vec::new()
-        } else {
-            std::slice::from_raw_parts(body, body_len).to_vec()
-        },
-    );
-    if !headers.is_null() {
-        for line in CStr::from_ptr(headers).to_string_lossy().lines() {
-            if let Some((name, value)) = line.split_once(':') {
-                response = response.header(name.trim(), value.trim());
+    catch_unwind(AssertUnwindSafe(|| {
+        let Some(sink) = sink.as_mut() else { return 1 };
+        if (body.is_null() && body_len != 0) || body_len > isize::MAX as usize {
+            return 1;
+        }
+        let headers = match optional_text(headers, "headers") {
+            Ok(headers) => headers,
+            Err(_) => return 1,
+        };
+        let mut response = Response::new(
+            status,
+            if body_len == 0 {
+                Vec::new()
+            } else {
+                std::slice::from_raw_parts(body, body_len).to_vec()
+            },
+        );
+        if let Some(headers) = headers {
+            for line in headers.lines() {
+                if let Some((name, value)) = line.split_once(':') {
+                    response = response.header(name.trim(), value.trim());
+                }
             }
         }
-    }
-    sink.response = Some(response);
-    0
+        sink.response = Some(response);
+        0
+    }))
+    .unwrap_or(1)
 }
 
 /// Run a closure for one command and turn any failure or panic into its error envelope.
@@ -546,7 +556,9 @@ pub unsafe extern "C" fn save_relay_setup(
 /// `pointer` is null or came from this library and has not been freed.
 #[no_mangle]
 pub unsafe extern "C" fn save_relay_free(pointer: *mut c_char) {
-    if !pointer.is_null() {
-        drop(CString::from_raw(pointer));
-    }
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        if !pointer.is_null() {
+            drop(CString::from_raw(pointer));
+        }
+    }));
 }
