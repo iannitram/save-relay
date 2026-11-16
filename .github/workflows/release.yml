@@ -99,31 +99,41 @@ jobs:
         shell: bash
         env:
           CARGO_PROFILE_RELEASE_STRIP: "true"
-          # The public app registrations that `src/clients.rs` reads (#36). The Google secrets are
-          # public by design too, but they stay secrets so GitHub masks them in logs.
+          # The app registrations `src/clients.rs` reads (#36). The ids and the Dropbox key are
+          # optional overrides of the values pasted there (unset, they reach cargo empty and the
+          # pasted values are built in). The Google secrets are public by design too, but they are
+          # only here, as secrets, so GitHub masks them in logs.
           SAVE_RELAY_GOOGLE_DESKTOP_ID: ${{ vars.SAVE_RELAY_GOOGLE_DESKTOP_ID }}
           SAVE_RELAY_GOOGLE_DESKTOP_SECRET: ${{ secrets.SAVE_RELAY_GOOGLE_DESKTOP_SECRET }}
           SAVE_RELAY_GOOGLE_DEVICE_ID: ${{ vars.SAVE_RELAY_GOOGLE_DEVICE_ID }}
           SAVE_RELAY_GOOGLE_DEVICE_SECRET: ${{ secrets.SAVE_RELAY_GOOGLE_DEVICE_SECRET }}
           SAVE_RELAY_DROPBOX_APP_KEY: ${{ vars.SAVE_RELAY_DROPBOX_APP_KEY }}
         run: |
-          # A tag is a release, so it refuses to build without the registrations. A dry run builds
-          # with empty ids: Nextcloud works, and Google Drive and Dropbox say they are not registered.
-          # Each id is tested as it will be compiled: an empty id, or one with whitespace anywhere in
-          # it, is refused. Nothing is trimmed, so a padded id never reaches cargo.
+          # The ids and the Dropbox key are built in; the two Google secrets come only from this
+          # repository's Actions secrets (GitHub's secret scanning refuses them in the code). A tag
+          # is a release, so it refuses to build without them; a dry run without them builds with
+          # Google Drive saying it is not registered. Every value that is set is tested as it will
+          # be compiled, and one with whitespace anywhere in it is refused. Nothing is trimmed, so a
+          # padded value never reaches cargo.
           if [ "$GITHUB_EVENT_NAME" = "push" ]; then
-            for name in SAVE_RELAY_GOOGLE_DESKTOP_ID SAVE_RELAY_GOOGLE_DESKTOP_SECRET \
-                        SAVE_RELAY_GOOGLE_DEVICE_ID SAVE_RELAY_GOOGLE_DEVICE_SECRET \
-                        SAVE_RELAY_DROPBOX_APP_KEY; do
-              value="${!name:-}"
-              case "$value" in
-                ""|*[[:space:]]*)
-                  echo "::error::$name is empty or has whitespace: a release needs the app registrations (#36)"
-                  exit 1
-                  ;;
-              esac
+            for name in SAVE_RELAY_GOOGLE_DESKTOP_SECRET SAVE_RELAY_GOOGLE_DEVICE_SECRET; do
+              if [ -z "${!name:-}" ]; then
+                echo "::error::$name is not set: a release needs the Google app registration (#36)"
+                exit 1
+              fi
             done
           fi
+          for name in SAVE_RELAY_GOOGLE_DESKTOP_ID SAVE_RELAY_GOOGLE_DESKTOP_SECRET \
+                      SAVE_RELAY_GOOGLE_DEVICE_ID SAVE_RELAY_GOOGLE_DEVICE_SECRET \
+                      SAVE_RELAY_DROPBOX_APP_KEY; do
+            value="${!name:-}"
+            case "$value" in
+              *[[:space:]]*)
+                echo "::error::$name has whitespace: an app registration override must be one token (#36)"
+                exit 1
+                ;;
+            esac
+          done
           cargo build --locked --release --target "$TARGET" --features panel-dist
       - name: Smoke test (the runner runs this target)
         shell: bash
