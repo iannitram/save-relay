@@ -314,7 +314,7 @@ fn no_user(root: &Path) -> Error {
 fn locate(current: &str) -> Option<(usize, usize)> {
     let needle = "wrap";
     let mut from = 0;
-    while let Some(offset) = current[from..].find(&needle) {
+    while let Some(offset) = current[from..].find(needle) {
         let marker = from + offset;
         from = marker + needle.len();
         if marker > 0 && !current[..marker].ends_with(char::is_whitespace) {

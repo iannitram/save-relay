@@ -123,7 +123,8 @@ fn wrapped_recognises_wrap_options_before_steam_separator() {
     let current = format!("{BIN} wrap --manifest saves.yaml -- %command% -fps");
     assert!(is_wrapped(&current));
     assert_eq!(wrapped(Some(&current), BIN, Platform::Linux), current);
-    assert_eq!(unwrapped(&current), Some("%command% -fps".to_string()));
+    // The same as without options: the game arguments as they were before the wrap.
+    assert_eq!(unwrapped(&current), Some("-fps".to_string()));
 }
 
 #[test]
