@@ -128,6 +128,8 @@ jobs:
           curl -fsSL -o "$RUNNER_TEMP/kotlin.zip" "https://github.com/JetBrains/kotlin/releases/download/v$version/kotlin-compiler-$version.zip"
           unzip -q "$RUNNER_TEMP/kotlin.zip" -d "$RUNNER_TEMP/kotlin"
           chmod +x "$RUNNER_TEMP/kotlin/kotlinc/bin/kotlinc"
+          # kotlinc 2.0.21 cannot parse the runner's default Java version; the image also ships JDK 17.
+          export JAVA_HOME="$JAVA_HOME_17_X64"
           "$RUNNER_TEMP/kotlin/kotlinc/bin/kotlinc" \
             bindings/android/src/main/kotlin/org/saverelay/*.kt \
             -d build/bindings/save-relay-android.jar
@@ -140,7 +142,7 @@ jobs:
           set -euo pipefail
           sdk="$(xcrun --sdk iphoneos --show-sdk-path)"
           mkdir -p build/bindings
-          swiftc -target arm64-apple-ios -sdk "$sdk" -parse-as-library \
+          swiftc -target arm64-apple-ios15.0 -sdk "$sdk" -parse-as-library \
             -I bindings/ios \
             -c bindings/ios/SaveRelay.swift \
             -o build/bindings/SaveRelay.o
