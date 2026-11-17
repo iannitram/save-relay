@@ -3,6 +3,8 @@
 //! app's credential callback.
 #![cfg(feature = "ffi")]
 
+use save_relay::clients::ClientSet;
+use save_relay::fake::{FakeDropbox, REFRESH_TOKEN, SIGN_IN_CODE};
 use save_relay::ffi::*;
 use save_relay::remote::MemoryRemote;
 use serde_json::Value;
@@ -148,6 +150,16 @@ impl Device {
 
     /// Make this device the one the C functions act for.
     fn init(&self, remote: Option<Arc<MemoryRemote>>) -> Value {
+        self.init_with(remote, None)
+    }
+
+    /// `init`, with the core's requests going through `transport` instead of the `http`
+    /// callback (a fake service transport for the sign-in test).
+    fn init_with(
+        &self,
+        remote: Option<Arc<MemoryRemote>>,
+        transport: Option<Arc<dyn save_relay::http::Transport + Send + Sync>>,
+    ) -> Value {
         let path = |sub: &str| CString::new(self.root.join(sub).to_str().unwrap()).unwrap();
         let (home, data, config) = (path("home"), path("data"), path("config"));
         let host = SaveRelayHost {
@@ -161,11 +173,16 @@ impl Device {
             cred_delete: Some(cred_delete),
             http: Some(http),
         };
-        match remote {
-            Some(remote) => {
-                serde_json::from_str(&unsafe { init_with_remote(&host, remote) }).unwrap()
-            }
-            None => envelope(unsafe { save_relay_init(&host) }),
+        match (remote, transport) {
+            (Some(remote), transport) => serde_json::from_str(&unsafe {
+                init_with_net(&host, Some(remote), transport, ClientSet::shipped())
+            })
+            .unwrap(),
+            (None, None) => envelope(unsafe { save_relay_init(&host) }),
+            (None, transport) => serde_json::from_str(&unsafe {
+                init_with_net(&host, None, transport, ClientSet::shipped())
+            })
+            .unwrap(),
         }
     }
 }
@@ -381,4 +398,111 @@ fn the_network_goes_through_the_apps_http_callback() {
     device.state.lock().unwrap().http_status = None;
     let down = setup("phone");
     assert_eq!(down["error"]["code"], "server_unreachable", "{down}");
+}
+
+fn start_dropbox_sign_in() -> Value {
+    envelope(unsafe {
+        save_relay_sign_in_start(
+            c("dropbox").as_ptr(),
+            c("saverelay://oauth").as_ptr(),
+            c("phone").as_ptr(),
+            std::ptr::null(),
+        )
+    })
+}
+
+/// The `state` a sign-in URL carries.
+fn state_of(url: &str) -> String {
+    url.split("state=")
+        .nth(1)
+        .and_then(|rest| rest.split('&').next())
+        .expect("a state in the sign-in URL")
+        .to_string()
+}
+
+#[test]
+fn platform_sign_in_takes_the_apps_browser_session_and_stores_the_token_only_there() {
+    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let fake = Arc::new(FakeDropbox::new());
+    let device = Device::new("platform-sign-in");
+    assert_eq!(
+        device.init_with(Some(Arc::new(MemoryRemote::new())), Some(fake.clone()))["ok"],
+        true
+    );
+
+    // The app opens data.url in its browser session; it carries the same PKCE parts as the
+    // desktop sign-in and the app's own redirect URI.
+    let started = start_dropbox_sign_in();
+    assert_eq!(started["ok"], true, "{started}");
+    assert_eq!(started["command"], "setup");
+    assert_eq!(started["data"]["service"], "dropbox");
+    assert!(started["data"]["code"].is_null(), "{started}");
+    let url = started["data"]["url"].as_str().unwrap();
+    assert!(
+        url.starts_with("https://www.dropbox.com/oauth2/authorize?"),
+        "{url}"
+    );
+    assert!(url.contains("code_challenge_method=S256"), "{url}");
+    assert!(
+        url.contains("redirect_uri=saverelay%3A%2F%2Foauth"),
+        "{url}"
+    );
+    assert!(url.contains("token_access_type=offline"), "{url}");
+
+    // A redirect for another sign-in is refused before any network call, and uses it up.
+    let wrong = envelope(unsafe {
+        save_relay_sign_in_finish(
+            c("saverelay://oauth?code=fake-sign-in-code&state=another-sign-in").as_ptr(),
+        )
+    });
+    assert_eq!(wrong["ok"], false, "{wrong}");
+    assert_eq!(wrong["error"]["code"], "sign_in_failed", "{wrong}");
+    assert!(fake.requests().is_empty(), "{:?}", fake.requests());
+
+    // Start again; the app hands back the redirect it received.
+    let started = start_dropbox_sign_in();
+    let state = state_of(started["data"]["url"].as_str().unwrap());
+    let redirect = format!("saverelay://oauth?code={SIGN_IN_CODE}&state={state}");
+    let finished = envelope(unsafe { save_relay_sign_in_finish(c(&redirect).as_ptr()) });
+    assert_eq!(finished["ok"], true, "{finished}");
+    assert_eq!(finished["command"], "setup");
+    assert_eq!(finished["data"]["service"], "dropbox");
+    assert_eq!(finished["data"]["user"], "fake@example.com");
+    assert_eq!(finished["data"]["device"], "phone");
+
+    // The refresh token is only in the app's credential callback, never in a file or envelope.
+    {
+        let state = device.state.lock().unwrap();
+        assert_eq!(
+            state
+                .secrets
+                .values()
+                .filter(|value| value.as_str() == REFRESH_TOKEN)
+                .count(),
+            1,
+            "{:?}",
+            state.secrets.keys().collect::<Vec<_>>()
+        );
+        assert!(!state
+            .secrets
+            .values()
+            .any(|value| value.contains(SIGN_IN_CODE)));
+    }
+    let mut files = Vec::new();
+    files_under(&device.root, &mut files);
+    for file in files {
+        let bytes = std::fs::read(&file).unwrap();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(
+            !text.contains(REFRESH_TOKEN) && !text.contains(SIGN_IN_CODE),
+            "a sign-in secret is in {}",
+            file.display()
+        );
+    }
+    assert!(!started.to_string().contains(REFRESH_TOKEN));
+    assert!(!finished.to_string().contains(REFRESH_TOKEN));
+
+    // A second finish has no waiting sign-in.
+    let again = envelope(unsafe { save_relay_sign_in_finish(c(&redirect).as_ptr()) });
+    assert_eq!(again["error"]["code"], "sign_in_failed", "{again}");
 }

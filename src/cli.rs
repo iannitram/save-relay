@@ -114,7 +114,7 @@ impl GameArg {
         let saves_dir = match &self.saves_dir {
             Some(folder) => folder.clone(),
             None if manifest.saves_from.is_some() => {
-                return Err(crate::manifest::saves_dir_required(&manifest.id))
+                return Err(crate::manifest::saves_dir_required(&manifest.id));
             }
             None => match record.and_then(|record| record.saves_dir) {
                 Some(folder) => folder,
@@ -1927,11 +1927,16 @@ fn answer_text(game: &str, answer: Answer) -> String {
 /// Switching service or account starts fresh (docs/adr/0002-storage-backends.md): the credentials
 /// of the config being replaced are deleted, nothing is moved. The same server and user keep what
 /// is stored (a new password or refresh token replaces it).
-fn forget_other_sign_in(cx: &Context, server: &str, user: &str) -> Result<()> {
-    if let Some(old) = cx.store.load_config()? {
+fn forget_other_sign_in(
+    store: &LocalStore,
+    creds: &dyn CredentialStore,
+    server: &str,
+    user: &str,
+) -> Result<()> {
+    if let Some(old) = store.load_config()? {
         if old.server != server || old.user != user {
             for account in service::credential_accounts(&old)? {
-                cx.creds.delete(&account)?;
+                creds.delete(&account)?;
             }
         }
     }
@@ -1958,7 +1963,7 @@ fn setup(
 
     cx.remote.list("")?;
     remote::ensure_dir(cx.remote, layout.root())?;
-    forget_other_sign_in(cx, server, user)?;
+    forget_other_sign_in(cx.store, cx.creds, server, user)?;
     cx.creds.set(&account, &Secret::new(password))?;
     let config = Config {
         format: local::FORMAT,
@@ -2036,7 +2041,17 @@ fn setup_service(
             let tokens =
                 oauth::sign_in_browser(provider, client, transport, cx.net.open_browser, clock)
                     .map_err(sign_in_refused)?;
-            finish_setup(service, tokens, client, kind, &device, &layout, cx)
+            finish_setup(FinishSetup {
+                service,
+                tokens,
+                client,
+                kind,
+                device: &device,
+                layout: &layout,
+                creds: cx.creds,
+                store: cx.store,
+                net: cx.net,
+            })
         }
         SignInStep::Finish => {
             let account = service::pending_account(service);
@@ -2074,7 +2089,17 @@ fn setup_service(
                 cx.creds.delete(&account)?;
             }
             let tokens = finished.map_err(sign_in_refused)?;
-            finish_setup(service, tokens, client, kind, &device, &layout, cx)
+            finish_setup(FinishSetup {
+                service,
+                tokens,
+                client,
+                kind,
+                device: &device,
+                layout: &layout,
+                creds: cx.creds,
+                store: cx.store,
+                net: cx.net,
+            })
         }
     }
 }
@@ -2127,19 +2152,35 @@ fn sign_in_refused(error: Error) -> Error {
     }
 }
 
+/// Everything `finish_setup` needs: the sign-in's result and the machine it is set up for.
+struct FinishSetup<'a> {
+    service: Service,
+    tokens: Tokens,
+    client: Client,
+    kind: &'a str,
+    device: &'a str,
+    layout: &'a Layout,
+    creds: &'a dyn CredentialStore,
+    store: &'a LocalStore,
+    net: &'a Net<'a>,
+}
+
 /// The last step of a sign-in: the account's e-mail address and its folder, then the refresh
 /// token under `service::token_account` (the newest one, if the service rotated it), the Google
 /// client kind, and the config whose `server` is the service key. Only then is the old sign-in
 /// forgotten, so a failure above leaves the machine as it was.
-fn finish_setup(
-    service: Service,
-    tokens: Tokens,
-    client: Client,
-    kind: &str,
-    device: &str,
-    layout: &Layout,
-    cx: &Context,
-) -> Result<Outcome> {
+fn finish_setup(finish: FinishSetup<'_>) -> Result<Outcome> {
+    let FinishSetup {
+        service,
+        tokens,
+        client,
+        kind,
+        device,
+        layout,
+        creds,
+        store,
+        net,
+    } = finish;
     let provider = oauth::provider(service)
         .ok_or_else(|| Error::Usage("this service does not sign in with OAuth".into()))?;
     let refresh = tokens.refresh.ok_or_else(|| {
@@ -2148,25 +2189,22 @@ fn finish_setup(
             service.label()
         ))
     })?;
-    let transport = cx.net.transport.clone();
+    let transport = net.transport.clone();
     let source = TokenSource::new(
         provider,
         client,
         refresh.clone(),
         transport.clone(),
-        cx.net.clock,
+        net.clock,
     );
-    let (email, remote) =
-        service::sign_in_account(service, source.clone(), transport, cx.net.clock)?;
+    let (email, remote) = service::sign_in_account(service, source.clone(), transport, net.clock)?;
     remote::ensure_dir(&*remote, layout.root())?;
     let refresh = source.rotated().unwrap_or(refresh);
 
-    forget_other_sign_in(cx, service.key(), &email)?;
-    cx.creds
-        .set(&service::token_account(service, &email)?, &refresh)?;
+    forget_other_sign_in(store, creds, service.key(), &email)?;
+    creds.set(&service::token_account(service, &email)?, &refresh)?;
     if service == Service::Gdrive {
-        cx.creds
-            .set(&service::google_client_account(&email), &Secret::new(kind))?;
+        creds.set(&service::google_client_account(&email), &Secret::new(kind))?;
     }
     let config = Config {
         format: local::FORMAT,
@@ -2175,7 +2213,7 @@ fn finish_setup(
         root: layout.root().to_string(),
         device: device.to_string(),
     };
-    cx.store.save_config(&config)?;
+    store.save_config(&config)?;
 
     let data = SetupData {
         service: service.key().to_string(),
@@ -2183,7 +2221,7 @@ fn finish_setup(
         user: config.user.clone(),
         device: config.device.clone(),
         root: config.root.clone(),
-        credential_store: cx.creds.kind().to_string(),
+        credential_store: creds.kind().to_string(),
     };
     let text = format!(
         "Set up: this machine ({}) syncs through {} as {}, in the folder '{}'.\nThe sign-in is kept in the {} credential store.",
@@ -2194,6 +2232,49 @@ fn finish_setup(
         data.credential_store
     );
     Ok(outcome("setup", &data, text, 0))
+}
+
+/// Finish a Google Drive or Dropbox sign-in that the app's own browser session completed
+/// (`src/ffi.rs`, #254): the same last step as `setup --service`, with the app's transport and
+/// credential store. The refresh token goes to `creds` only. `kind` is the Google client kind
+/// the sign-in used ("desktop" for the platform browser session). Returns the `setup` envelope.
+#[allow(clippy::too_many_arguments)]
+pub fn finish_platform_setup(
+    service: Service,
+    tokens: Tokens,
+    client: Client,
+    kind: &str,
+    device: Option<&str>,
+    root: &str,
+    creds: &dyn CredentialStore,
+    store: &LocalStore,
+    transport: Arc<dyn Transport>,
+    clock: Clock,
+) -> Result<String> {
+    let layout = Layout::new(root)?;
+    let device = layout::device_slug(&match device {
+        Some(name) => name.to_string(),
+        None => default_device_name(),
+    });
+    let net = Net {
+        transport,
+        open_browser: &|_| Ok(()),
+        clients: ClientSet::shipped(),
+        game_mode: false,
+        clock,
+    };
+    finish_setup(FinishSetup {
+        service,
+        tokens,
+        client,
+        kind,
+        device: &device,
+        layout: &layout,
+        creds,
+        store,
+        net: &net,
+    })
+    .map(|outcome| outcome.json)
 }
 
 /// `setup` with no `--service`: asks on standard input which service, as `1`, `2`, `3` or the key.
@@ -2209,7 +2290,7 @@ fn choose_service(stdin: &mut dyn Read, stdout: &mut dyn Write) -> Result<Servic
         "" => {
             return Err(Error::Usage(
                 "no service chosen: answer 1, 2 or 3, or nextcloud, gdrive or dropbox".into(),
-            ))
+            ));
         }
         "1" | "nextcloud" => Service::Nextcloud,
         "2" | "gdrive" => Service::Gdrive,
@@ -2217,7 +2298,7 @@ fn choose_service(stdin: &mut dyn Read, stdout: &mut dyn Write) -> Result<Servic
         other => {
             return Err(Error::Usage(format!(
                 "unknown service '{other}': answer 1, 2 or 3, or nextcloud, gdrive or dropbox"
-            )))
+            )));
         }
     };
     if service == Service::Nextcloud {
