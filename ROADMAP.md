@@ -11,6 +11,7 @@ From `SPEC.md` (re-approved 2026-11-01) to 1.0: Uncharted on the AMD handheld, t
 - **Audit blockers:** B1–B6 are done on main (rows below). The audit's should-fix items S1–S17 and its Minor list are now issues F79–F87 (#242–#250), milestone `1.0`.
 - **Release and acceptance:** Cargo, `decky/package.json` and `panel/package.json` are at `1.0.0-rc.1` on main (#236) and GitHub has no release. Google and Dropbox are registered: the ids and the Dropbox key are in `src/clients.rs`, and the two Google secrets are this repo's Actions secrets (#36). The release candidate (#205) is next (#236 is merged).
 - **Open question for me:** which save-slot option for #240. Answered 2026-11-12: #49 (Android and iOS) is in 1.0 and the bindings (#254) are a Should; macOS is a Should for 1.0 (a supported, signed Mac build is #238; CI already signs and notarizes one, #239).
+- **Mac and iOS for the game ports (2026-11-17):** my rulings in the question tool: "Fold the save relay into the Mac app via a step in the roadmap. Should be a 1.0 that exists in every universal app with and ios and Mac component. Revise all roadmaps if you need to."; where a port's iPhone/iPad app comes after its 1.0, "Ships with iOS app (Recommended)"; then "Update the mac and ios save relay connection in all of the universal apps". The ports' Mac and iOS steps wait on run-order rows A1-A4 below. #49 and #254 are closed; `v1.0.0-rc.1` (2026-11-17) has an unsigned Mac binary and no iOS library, and no round trip on a Mac or an iPhone is recorded yet (#238, #49).
 
 ### Run order to 1.0
 
@@ -33,6 +34,10 @@ Each step is one issue. An automated run takes the **agent** steps whose "Waits 
 | B4 | agent | #225 | Wire the Steam screenshot into a wrapped game's card (`src/steam.rs`, `src/sync.rs`) | nothing | Done (29cf845, #233; #225 closed). the audit's "Expected" for B4 holds, with tests |
 | B5 | agent | #228 | Refuse a ludusavi saves folder that is a root, the home folder or a bare platform folder; cap the download size (`src/ludusavi.rs`, `src/manifest.rs`, `src/http.rs`) | nothing | Done (729e43d, #234; #228 closed). the audit's "Expected" for B5 holds, with tests |
 | B6 | agent | #227 | Google Drive: `clean_claims` never deletes the claim `state.json` names; `repair` recovers a game already stuck (`src/gdrive.rs`) | nothing | Done (58c6bbb and daec880, #237; #227 closed). the audit's "Expected" for B6 holds, with tests |
+| A1 | owner, on the Mac mini | #287 (F91) | Put the Apple signing secrets in this repo's Actions secrets (the names are in `scripts/macos-sign.sh`), so the release workflow signs and notarizes the Mac binary (#239); then a real pull and push round trip on the Mac against my Nextcloud with that binary | nothing (`v1.0.0-rc.1` is out) | `gh secret list` shows the Apple secrets; a release dry run signs and notarizes the Mac binary; the round trip is written up on #287 and #238 |
+| A2 | agent | #238 (F88) | The supported Mac build: the README platform table and the code map's macOS row say supported, and the release notes name the version Mac ports pin | step A1 | the next tag (`v1.0.0-rc.2` or `v1.0.0`) has the signed, notarized Mac binary and its notes name it as the Mac ports' pin; #238's "Done when" holds |
+| A3 | agent | #288 (F92) | Ship the iOS library as a release asset, `save-relay-<version>-aarch64-apple-ios.zip`: the `aarch64-apple-ios` staticlib, `include/save_relay.h`, `bindings/ios/SaveRelay.swift` and `module.modulemap`, so iOS ports pin a tag instead of building from source | nothing (#49 and #254 are closed) | a release dry run has the zip and its `SHA256SUMS` line, and the job compiles `SaveRelay.swift` against the unzipped files; the next tag carries it |
+| A4 | owner, an agent may drive the Mac side and build the test app | #289 (F93) | iOS device round trip: a save pushed from the Mac CLI pulls on an iPhone through the C interface, and a save pushed on the iPhone pulls on the Mac (a small test app in `bindings/ios/example/`) | steps A1, A3 | the `pushed` and `pulled` envelopes from both sides, with matching file hashes, are written up on #289 |
 | 10 | agent | #205 (F71) | Cut `v1.0.0-rc.1`: version bump, release dry run, tag, checksum check | step 8 (#36) (steps 7 and B1-B6 are done, and #236 is merged) | the GitHub release holds the three binaries, `SHA256SUMS`, the Decky zip and the panel zip |
 | 11 | owner, an agent may drive with the owner signing in | #47 (F46) | Real round trips on Dropbox and Google Drive; Game Mode sign-in | step 10 | `cargo test --test live_services -- --ignored` passes on Windows and a handheld; written up on #47 |
 | 12 | owner | #72 (F67) | Device checks: suspend hand-off, wrap and install-wrap, the panel in Game Mode, adding a game without Steam Cloud | steps 9, 10 | written up on #72 |
@@ -42,7 +47,9 @@ Each step is one issue. An automated run takes the **agent** steps whose "Waits 
 
 Rows B1-B6 were the audit's blockers (2026-11-11), filed as #223-#228 from the drafts in `docs/audit-2026-11-11.md`; all six are merged and closed. The audit's should-fix items are F79-F87 below (milestone `1.0`); none of them gates `rc.1`, except that F85 (pin the release actions) is done before the first public tag.
 
-A bug found in steps 11, 12 or 14 becomes its own issue, is fixed by an agent, and ships in the next `rc` before the step is run again. Before step 10, a device can try a build from the release workflow's dry run (`gh workflow run release.yml --ref main`): it has the app registrations, so it can sign in to all three services (Google Drive only while the two Google secrets are set).
+Rows A1-A4 are the Mac and iOS steps (my rulings of 2026-11-17, quoted under "Where it stands"). They run beside the numbered steps: A1 and A3 wait on nothing. A game port's Mac save-relay step pins the first tag that has A2; its iOS save-relay step pins the first tag that has A3, and runs after A4. macOS and iOS are Shoulds in `SPEC.md`, so A1-A4 do not gate step 15 unless I move them to Musts; A2 and A3 ship in the next tag after them (an `rc`, or `v1.0.0` at step 15).
+
+A bug found in steps 11, 12, 14, A1 or A4 becomes its own issue, is fixed by an agent, and ships in the next `rc` before the step is run again. Before step 10, a device can try a build from the release workflow's dry run (`gh workflow run release.yml --ref main`): it has the app registrations, so it can sign in to all three services (Google Drive only while the two Google secrets are set).
 
 ## Features
 
@@ -117,6 +124,7 @@ A bug found in steps 11, 12 or 14 becomes its own issue, is fixed by an agent, a
 | F67 | Device checks: suspend hand-off on a handheld, wrap and install-wrap on a PC and a handheld, the panel in Game Mode (`needs-owner-device`) | — | M11-M15 | #72 |
 | F68 | Design pass on the panel (stage 8, `design-pass`) | `panel/`, `decky/` | M15 | #73 |
 | F69 | Manifest "saves_from": "launcher" (TotK) | manifest, cli | M7 | #48 |
+| F70 | Android and iOS library builds with a C interface, for game ports that embed save-relay (TotK) | `ffi`, `include/save_relay.h` | Should (Android, iOS) | #49 |
 | F71 | The first release candidate, `v1.0.0-rc.1`, for the device checks | `Cargo.toml`, `.github/workflows/release.yml` (run) | M8 | #205 |
 | F72 | Steam store answer parser (Steam Cloud yes, no, not a game, unknown); a game's name from its appmanifest | `steam::cloud` (pure), `steam` | M16 | #207 |
 | F73 | The Steam Cloud answer cache: one request per installed game, kept a week | `steam::cloud::Cache` | M16 | #208 |
@@ -134,12 +142,17 @@ A bug found in steps 11, 12 or 14 becomes its own issue, is fixed by an agent, a
 | F85 | Pin release-workflow actions to SHAs; `permissions:` in `check.yml` (audit S13) | `.github/workflows/` | M8 | #248 |
 | F86 | Panel token and API surface, restore in-flight state, Game Mode B and D-pad, `install-wrap` edge cases (audit S14-S17) | `panel`, `panel/`, `decky/`, `steam::launch` | M13, M15 | #266 (S14, S15), #267 (S16), #268 (S17); split from #249 |
 | F87 | The audit's Minor list, split into four issues (owner ruling 2026-11-16) | various | various | #269 (items 2, 3, 5), #270 (4, 8, 9), #271 (1, 6, 7, 14), #272 (11, 12, 13); split from #250 |
+| F88 | Supported macOS build (signed CLI and library) for the Mac game ports | `.github/workflows/release.yml`, `README.md` | Should (macOS) | #238 |
+| F89 | Android and iOS bindings with platform browser sign-in | `bindings/`, `ffi`, `oauth` | Should (Android, iOS) | #254 |
+| F91 | Apple signing secrets and a real Mac round trip against Nextcloud (`needs-owner-device`, the owner's clicks) | — | Should (macOS) | #287 |
+| F92 | The iOS library as a release asset | `.github/workflows/release.yml` | Should (iOS) | #288 |
+| F93 | iOS device round trip through the C interface (`needs-owner-device`) | `bindings/ios/example/` | Should (iOS) | #289 |
 
-Every Must has an issue: M1 (F07, F11, F19, F20, F23, F43), M2 (F02, F03, F20, F23, F43), M3 (F07, F19, F20, F23, F43), M4 (F08, F21, F23, F43), M5 (F07, F12, F20, F23, F43), M6 (F13, F14, F18, F22, F27-F30, F35, F37, F42, F44-F47), M7 (F01, F05, F23, F25, F69), M8 (F09, F10, F22, F24, F26, F44, F71), M9 (F12, F27, F31-F34, F36, F38-F41, F43, F46), M10 (F28, F29, F33, F40-F42, F44-F47), M11 (F48-F52, F65, F67), M12 (F52-F54, F57, F58, F65-F67), M13 (F52-F56, F59, F65-F67), M14 (F52, F54, F60, F61, F65-F67), M15 (F52, F62-F64, F66-F68), M16 (F67, F72-F78).
+Every Must has an issue: M1 (F07, F11, F19, F20, F23, F43), M2 (F02, F03, F20, F23, F43), M3 (F07, F19, F20, F23, F43), M4 (F08, F21, F23, F43), M5 (F07, F12, F20, F23, F43), M6 (F13, F14, F18, F22, F27-F30, F35, F37, F42, F44-F47), M7 (F01, F05, F23, F25, F69), M8 (F09, F10, F22, F24, F26, F44, F71), M9 (F12, F27, F31-F34, F36, F38-F41, F43, F46), M10 (F28, F29, F33, F40-F42, F44-F47), M11 (F48-F52, F65, F67), M12 (F52-F54, F57, F58, F65-F67), M13 (F52-F56, F59, F65-F67), M14 (F52, F54, F60, F61, F65-F67), M15 (F52, F62-F64, F66-F68), M16 (F67, F72-F78). The Shoulds: macOS (F88, F91), Android and iOS (F70, F89, F92, F93).
 
 ## Mac, PC and Linux (R04)
 
-- **Linux** (SteamOS on the two handhelds) and **Windows** (the desktop) are the 1.0 platforms; **macOS** is a Should for 1.0 (my ruling of 2026-11-12; a supported, signed Mac build is #238), and CI builds and tests it on every push because it is free on a public repo. All three run the same `cargo fmt`, `clippy` (default and no features), `build` and `test`.
+- **Linux** (SteamOS on the two handhelds) and **Windows** (the desktop) are the 1.0 platforms; **macOS** is a Should for 1.0 (my ruling of 2026-11-12; a supported, signed Mac build is #238, run-order rows A1 and A2), and CI builds and tests it on every push because it is free on a public repo. All three run the same `cargo fmt`, `clippy` (default and no features), `build` and `test`.
 - What differs per OS is kept in three places: `platform` (folders), `creds::KeyringStore` (Secret Service, Credential Manager, Keychain), and the file system edge of `scan` and `transfer` (paths in a save set are always `/`; Windows file names that cannot exist are an `io` error, not a silent skip).
 - **Linux risk:** a launcher started from Steam's Game Mode may find no unlocked Secret Service. F18 finds out on the handhelds first; if the store is missing there, it stops and asks, because a fallback store would change M6. The same store holds the Google Drive and Dropbox refresh tokens, so the answer covers every service.
 - **Game Mode sign-in risk (Linux):** a browser started from a Game Mode launcher may never show on screen, so Drive and Dropbox setup there defaults to the code flows (`--no-browser`, then `--finish`; Google: a short code typed on a phone; Dropbox: a code typed back, or Steam's own browser). Recommended: set up once in Desktop Mode. F42 builds it, F46 checks it on a handheld.
@@ -147,7 +160,7 @@ Every Must has an issue: M1 (F07, F11, F19, F20, F23, F43), M2 (F02, F03, F20, F
 - **The M11-M15 parts:** the mark, the cards and the ludusavi translation are pure and the same on all three. `wrap` is checked on Linux (native games and Proton, Steam native and Flatpak) and Windows; macOS builds and tests it (Steam for Mac's folder is known) but is no 1.0 device check. `install-wrap` is checked on Linux and Windows; the macOS path is handled but untried on a device. The Decky plugin is Linux Game Mode only; `save-relay panel` runs on all three and opens the browser the same way sign-in does.
 - **Proton risk (Linux):** a Windows game's saves live inside its Proton prefix, whose user folder is always `steamuser`; F55 maps there, and F67 checks one Proton game on a handheld. A game that keeps saves in the prefix's registry is not covered (ludusavi's registry entries are not read).
 - **Steam file risk:** `install-wrap` edits `localconfig.vdf`, which Steam rewrites when it runs; so it refuses while Steam runs (`steam_running`) and keeps a dated backup.
-- **Android and iOS** (a Should for 1.0, my ruling of 2026-11-12: "Bindings into 1.0 too"; #49 and #254): no platform-only dependency in the core; the network and the credential store are traits (`http::Transport`, `CredentialStore`) with their real implementations behind the `http` and `keyring` features, and the three backends are plain Rust over `Transport`, so a mobile app links the library and brings its own transport, store and browser session.
+- **Android and iOS** (a Should for 1.0, my ruling of 2026-11-12: "Bindings into 1.0 too"; #49 and #254): no platform-only dependency in the core; the network and the credential store are traits (`http::Transport`, `CredentialStore`) with their real implementations behind the `http` and `keyring` features, and the three backends are plain Rust over `Transport`, so a mobile app links the library and brings its own transport, store and browser session. For iOS, the release asset is #288 and the first device round trip #289 (run-order rows A3 and A4).
 
 ## Open-source pieces
 
@@ -203,10 +216,6 @@ Stages 1-7 are done (2026-11-06); the "free now" and "after" notes below are the
 9. **1.0 acceptance** (F26, and F67 for M11-M15), last: the Uncharted launcher calls the released binary around Play (Uncharted-Universal #163); a save made on each of the three PCs loads on the others (`needs-owner-device`).
 
 ## After 1.0
-
-#49 (F70: Android and iOS library builds with a C interface, for game ports that embed save-relay; TotK) is in 1.0 (my ruling of 2026-11-12: "Before 1.0").
-
-#238 (F88: a supported, signed macOS build of the CLI and the library, for the Mac game ports; platform: macOS) is a Should for 1.0 (my ruling of 2026-11-12). CI already builds the macOS arm64 binary and signs and notarizes it when the Apple secrets are set (#239, `97db787`); what #238 adds is the supported claim, the README platform table and a real Mac round trip.
 
 #240 (save slots: a changed saves folder under one game id must not push or pull across slots; M7) gets its row when I pick one of its three options.
 
