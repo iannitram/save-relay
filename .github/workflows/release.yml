@@ -253,7 +253,33 @@ jobs:
         with:
           cache-bin: false
       - name: Build the library
-        run: cargo build --locked --release --lib --target aarch64-apple-ios --no-default-features --features ffi
+        shell: bash
+        env:
+          SAVE_RELAY_GOOGLE_DESKTOP_ID: ${{ vars.SAVE_RELAY_GOOGLE_DESKTOP_ID }}
+          SAVE_RELAY_GOOGLE_DESKTOP_SECRET: ${{ secrets.SAVE_RELAY_GOOGLE_DESKTOP_SECRET }}
+          SAVE_RELAY_GOOGLE_DEVICE_ID: ${{ vars.SAVE_RELAY_GOOGLE_DEVICE_ID }}
+          SAVE_RELAY_GOOGLE_DEVICE_SECRET: ${{ secrets.SAVE_RELAY_GOOGLE_DEVICE_SECRET }}
+          SAVE_RELAY_DROPBOX_APP_KEY: ${{ vars.SAVE_RELAY_DROPBOX_APP_KEY }}
+        run: |
+          # The FFI uses ClientSet::shipped(), so embed the same registrations as the binaries.
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            for name in SAVE_RELAY_GOOGLE_DESKTOP_SECRET SAVE_RELAY_GOOGLE_DEVICE_SECRET; do
+              if [ -z "${!name:-}" ]; then
+                echo "::error::$name is not set: a release needs the Google app registration (#36)"
+                exit 1
+              fi
+            done
+          fi
+          for name in SAVE_RELAY_GOOGLE_DESKTOP_ID SAVE_RELAY_GOOGLE_DESKTOP_SECRET \
+                      SAVE_RELAY_GOOGLE_DEVICE_ID SAVE_RELAY_GOOGLE_DEVICE_SECRET \
+                      SAVE_RELAY_DROPBOX_APP_KEY; do
+            case "${!name:-}" in
+              *[[:space:]]*)
+                echo "::error::$name has whitespace: an app registration override must be one token (#36)"
+                exit 1 ;;
+            esac
+          done
+          cargo build --locked --release --lib --target aarch64-apple-ios --no-default-features --features ffi
       - name: Zip the library
         shell: bash
         run: |
