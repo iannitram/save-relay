@@ -1,7 +1,7 @@
 name: release
 
 # Release binaries (#24, M8, M15). A `v*` tag builds the binaries, writes SHA256SUMS and attaches
-# them, with the Decky plugin zip and the panel zip, to a GitHub release. A workflow_dispatch run
+# them, with the Decky plugin zip, the panel zip and the iOS library zip, to a GitHub release. A workflow_dispatch run
 # does the same builds and uploads the files as run artifacts only: the dry run, and it makes no
 # release. A pull request that changes this file gets the same dry run, so its head is built.
 
@@ -234,10 +234,69 @@ jobs:
           path: dist/save-relay-panel-${{ needs.prepare.outputs.version }}.zip
           if-no-files-found: error
 
+  ios:
+    # The iOS library (#288, F92, M18): the C interface as a static library for aarch64-apple-ios,
+    # with the header, the Swift wrapper and the module map in the repo's own layout (the module
+    # map's `../../include/save_relay.h` resolves), so an iOS port pins a tag instead of building
+    # from source. Needs no panel: the `ffi` build leaves out the embedded front end. The job checks
+    # its own zip before it uploads it.
+    needs: prepare
+    runs-on: macos-latest
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          targets: aarch64-apple-ios
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          cache-bin: false
+      - name: Build the library
+        run: cargo build --locked --release --lib --target aarch64-apple-ios --no-default-features --features ffi
+      - name: Zip the library
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$PWD/dist"
+          mkdir -p "$out" stage/lib stage/include stage/bindings/ios
+          cp target/aarch64-apple-ios/release/libsave_relay.a stage/lib/
+          cp include/save_relay.h stage/include/
+          cp bindings/ios/SaveRelay.swift bindings/ios/module.modulemap stage/bindings/ios/
+          cp LICENSE stage/
+          (cd stage && zip -r -X "$out/save-relay-${VERSION}-aarch64-apple-ios.zip" lib include bindings LICENSE)
+          unzip -l "$out/save-relay-${VERSION}-aarch64-apple-ios.zip"
+      - name: Check the zip
+        shell: bash
+        run: |
+          set -euo pipefail
+          check="$(mktemp -d)"
+          unzip -q "dist/save-relay-${VERSION}-aarch64-apple-ios.zip" -d "$check"
+          for f in lib/libsave_relay.a include/save_relay.h bindings/ios/SaveRelay.swift bindings/ios/module.modulemap LICENSE; do
+            test -f "$check/$f" || { echo "::error::the zip lacks $f"; exit 1; }
+          done
+          info="$(lipo -info "$check/lib/libsave_relay.a")"
+          echo "$info"
+          case "$info" in
+            *"is architecture: arm64"*) ;;
+            *) echo "::error::the library is not arm64: $info"; exit 1 ;;
+          esac
+          sdk="$(xcrun --sdk iphoneos --show-sdk-path)"
+          mkdir -p "$check/obj"
+          swiftc -target arm64-apple-ios15.0 -sdk "$sdk" -parse-as-library \
+            -I "$check/bindings/ios" \
+            -c "$check/bindings/ios/SaveRelay.swift" \
+            -o "$check/obj/SaveRelay.o"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: save-relay-${{ needs.prepare.outputs.version }}-aarch64-apple-ios
+          path: dist/save-relay-${{ needs.prepare.outputs.version }}-aarch64-apple-ios.zip
+          if-no-files-found: error
+
   publish:
     # Runs on a dry run too: the SHA256SUMS file is part of what the dry run must produce. Only a
     # tag attaches the files to a release.
-    needs: [prepare, build, decky]
+    needs: [prepare, build, decky, ios]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -263,7 +322,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         with:
-          # The glob also takes the Decky plugin zip and the panel zip (save-relay-decky-*, save-relay-panel-*).
+          # The glob also takes the Decky plugin zip and the panel zip (save-relay-decky-*, save-relay-panel-*, save-relay-*-aarch64-apple-ios.zip).
           files: |
             dist/save-relay-*
             dist/SHA256SUMS
