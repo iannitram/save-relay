@@ -2,6 +2,22 @@
 
 From `SPEC.md` (re-approved 2026-11-17, with M17 and M18) to 1.0: Uncharted on the AMD handheld, the Strix Halo tablet and the RTX 3090 Ti desktop sharing saves through Play alone, through the service chosen at setup: Nextcloud, Google Drive or Dropbox (`docs/adr/0002-storage-backends.md`); a game still open on another machine said before I play; any Steam game synced with one launch option; each save shown as a card in a Game Mode panel (`docs/adr/0003-baton-wrap-cards-panel.md`); and the same saves on a Mac, through a supported, signed build, and in an iPhone app, through the iOS library (M17, M18). How the code is laid out: `docs/code-map.md`. Each feature below is one GitHub issue (number in brackets), sized by the pipeline's rubric; Easy ones carry a Qwen brief and locked tests.
 
+Updated: 2026-11-18
+
+features:
+- sync-engine: The sync engine, WebDAV client and CLI (F01-F26) (release: 1.0)
+- services: Google Drive and Dropbox beside Nextcloud, with their sign-in flows (F27-F47) (release: 1.0)
+- wrap: The open-elsewhere mark, wrap, install-wrap, save cards and the ludusavi data (F48-F61, F65, F66) (release: 1.0)
+- panel: The panel, its Game Mode shell and the Add games view (F62-F64, F68, F72-F78) (release: 1.0)
+- hardening: The audit's blockers and should-fix items (B1-B6, F79-F87) (release: 1.0)
+- release: Release candidates, device checks and the 1.0 acceptance (F24, F26, F67, F71) (release: 1.0)
+- mac-build: The supported macOS build and Apple signing (F88, F91) (release: 1.0)
+- mobile-bindings: The iOS library and Android bindings (F89, F92, F93) (release: 1.0)
+- save-slots: Follow the selected save slot (#240, built; its milestone is After 1.0) (release: after-1.0)
+- launcher-reuse: craft-launcher starts the Decky plugin from this repo's `decky/` (#292) (release: after-1.0)
+
+One line per feature, in the pipeline's block format: `- <id>: <title> (release: 1.0|after-1.0)`. An id is the `feature:<id>` label once issues carry it; today only `mac-build`, `mobile-bindings` and `save-slots` exist as labels, and the others are labelled when I next touch their issues. `Updated:` is the date this file was last brought in line with the code and the issues.
+
 ## Decisions
 
 Owner rulings that change this roadmap, newest first. Earlier rulings are quoted where they apply (`SPEC.md`'s approval line, "Where it stands", `CHANGELOG.md`).
@@ -10,15 +26,15 @@ Owner rulings that change this roadmap, newest first. Earlier rulings are quoted
 - **Owner ruling 2026-11-17**, to the Project Manager: "The save relay Mac and iOS functions need to be brought into 1.0" and "Revise the roadmap"; confirmed in the question tool: "Yes, all into 1.0 (Recommended)". macOS and iOS move from the Shoulds to Musts M17 and M18 in `SPEC.md` (approved 2026-11-17), and step 15 (`v1.0.0`) waits on rows A1-A4. This supersedes the "Ships with iOS app (Recommended)" placement below.
 - **Owner ruling 2026-11-17**, question tool: "Fold the save relay into the Mac app via a step in the roadmap. Should be a 1.0 that exists in every universal app with and ios and Mac component. Revise all roadmaps if you need to." Rows A1-A4 are save-relay's part. Earlier the same day, where a port's iPhone/iPad app comes after its 1.0: "Ships with iOS app (Recommended)" (superseded by the ruling above); then "Update the mac and ios save relay connection in all of the universal apps".
 
-## Where it stands (2026-11-12)
+## Where it stands (2026-11-18)
 
 **Audited checkpoint:** main at `79ff440` has Stages 1–7 merged (F01–F25, F27–F45, F48–F66 and F69), the M16 integration (F72–F78: #207–#211 and #213 closed 2026-11-11) and the six audit blockers B1–B6 (#223–#228 closed). **You are here: Dev Loop, release-candidate packaging.** The rc.1 packaging pull request (#236) is merged (2026-11-12); #212 (F77) is built and merged, and waits only on the SteamOS handheld check.
 
 - **Verified on main:** the [check run for `77e6c2c`](https://github.com/iannitram/save-relay/actions/runs/43155552302) passed Rust and WebDAV integration on Linux, Windows and macOS, plus the frontend build and tests (the run for `79ff440`, which adds #236, had not finished when I wrote this). Dropbox and Drive have automated fake-service coverage; live sign-in and round trips remain in #47.
 - **Stage 8 remains open:** the 20 design findings (#164–#179, #197, #198, #201, #202) are fixed. #73 tracks the controller-only Game Mode re-check after handheld acceptance for #212.
 - **Audit blockers:** B1–B6 are done on main (rows below). The audit's should-fix items S1–S17 and its Minor list are now issues F79–F87 (#242–#250), milestone `1.0`.
-- **Release and acceptance:** Cargo, `decky/package.json` and `panel/package.json` are at `1.0.0-rc.1` on main (#236); GitHub has `v1.0.0-rc.1` as a pre-release (2026-11-17), and #205 is still open. Google and Dropbox are registered: the ids and the Dropbox key are in `src/clients.rs`, and the two Google secrets are this repo's Actions secrets (#36). The release candidate (#205) is next (#236 is merged).
-- **Open question for me:** which save-slot option for #240. Answered 2026-11-12: #49 (Android and iOS) is in 1.0 and the bindings (#254) are a Should; macOS is a Should for 1.0 (a supported, signed Mac build is #238; CI already signs and notarizes one, #239). Since 2026-11-17 macOS and iOS are Musts (under Decisions).
+- **Release and acceptance:** Cargo, `decky/package.json` and `panel/package.json` are at `1.0.0-rc.1` on main (#236); GitHub has `v1.0.0-rc.1` as a pre-release (2026-11-17), and #205 is still open. Google and Dropbox are registered: the ids and the Dropbox key are in `src/clients.rs`, and the two Google secrets are this repo's Actions secrets (#36). #205 (F71) stays open although the tag exists; its checklist is not closed out (2026-11-18).
+- **Settled:** #240 (save slots) is closed, built and labelled `feature:save-slots`, with its milestone still After 1.0. Answered 2026-11-12: #49 (Android and iOS) is in 1.0 and the bindings (#254) are a Should; macOS is a Should for 1.0 (a supported, signed Mac build is #238; CI already signs and notarizes one, #239). Since 2026-11-17 macOS and iOS are Musts (under Decisions).
 - **Mac and iOS (2026-11-17):** my rulings are under Decisions above: macOS and iOS are in 1.0 (`SPEC.md` M17 and M18, approved 2026-11-17), step 15 waits on rows A1-A4 below, and the ports' Mac and iOS steps wait on them too. #49 and #254 are closed; `v1.0.0-rc.1` (2026-11-17) has an unsigned Mac binary and no iOS library, and no round trip on a Mac or an iPhone is recorded yet (#287, #289).
 
 ### Run order to 1.0
@@ -225,6 +241,8 @@ Stages 1-7 are done (2026-11-06); the "free now" and "after" notes below are the
 
 ## After 1.0
 
-#240 (save slots: a changed saves folder under one game id must not push or pull across slots; M7) gets its row when I pick one of its three options.
+#240 (save slots: a changed saves folder under one game id must not push or pull across slots; M7) is closed and built; it has no F row, and its milestone is still After 1.0 (2026-11-18: not moved, since it is done).
+
+#292 (craft-launcher will start its Decky plugin from `decky/`; keep the scaffold stable) is the only open After 1.0 issue; it is the `launcher-reuse` feature above.
 
 The panel's views on Android and iOS, after the bindings' sign-in through the platform's browser session (the bindings themselves are in 1.0, #254: iOS a Must, M18; Android a Should); moving saves from one service to another (a Won't for 1.0: switching starts fresh); more services (OneDrive, S3) behind the same `Remote`; upload only changed files (server-side COPY of unchanged ones from the previous entry); Nextcloud chunked upload for large save sets; a `save-relay forget <game>`; pruning old conflict backups separately from pushes; saves kept in the Windows registry for wrapped games (ludusavi's registry entries); wrapping games from launchers other than Steam.
