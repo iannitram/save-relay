@@ -196,6 +196,36 @@ pub fn candidates(entry: &Entry, facts: &Facts) -> Vec<String> {
     named_candidates(entry, facts, None).0
 }
 
+// SPDX-License-Identifier: MIT
+// The `C:` mapping in `named_candidates` follows Ludusavi, https://github.com/mtkennerly/ludusavi
+// (src/scan.rs at c4c2ca9943e841a7c052a59e9757535e77e80e0a, `DRIVE_C` in `parse_paths`:
+// "#665: Map C: to Wine drive_c").
+// Changed: only a leading `C:` is mapped (Ludusavi replaces every `C:` in the path), and only for
+// a Proton game on Linux, onto `steam::proton_prefix`'s `drive_c`.
+//
+// MIT License
+//
+// Copyright (c) 2020 Matthew T. Kennerly (mtkennerly)
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+const DRIVE_C: &str = "C:";
+
 /// `candidates`, and how many save templates apply here but cannot be expanded (an unknown or
 /// unclosed placeholder, no single Steam user, no appmanifest, a `..` segment): those count
 /// toward "exactly one" in `translate`.
@@ -207,8 +237,8 @@ fn named_candidates(entry: &Entry, facts: &Facts, name: Option<&str>) -> (Vec<St
     } else {
         facts.platform.key()
     };
-    let proton_home =
-        crate::steam::proton_prefix(&facts.library, facts.app_id).join("drive_c/users/steamuser");
+    let proton_drive_c = crate::steam::proton_prefix(&facts.library, facts.app_id).join("drive_c");
+    let proton_home = proton_drive_c.join("users/steamuser");
     let path_text = |path: &Path| path.to_str().map(|text| text.replace('\\', "/"));
     let mut paths = Vec::new();
     for (template, rule) in &entry.files {
@@ -224,6 +254,15 @@ fn named_candidates(entry: &Entry, facts: &Facts, name: Option<&str>) -> (Vec<St
         let expand = || -> Option<String> {
             let mut result = String::new();
             let mut remaining = template.as_str();
+            // A literal `C:` drive is the prefix's `drive_c` (see the notice on `DRIVE_C`).
+            if proton {
+                if let Some(rest) = remaining.strip_prefix(DRIVE_C) {
+                    if rest.is_empty() || rest.starts_with(['/', '\\']) {
+                        result.push_str(&path_text(&proton_drive_c)?);
+                        remaining = rest;
+                    }
+                }
+            }
             while let Some(open) = remaining.find('<') {
                 result.push_str(&remaining[..open]);
                 let close = remaining[open..].find('>')? + open;
