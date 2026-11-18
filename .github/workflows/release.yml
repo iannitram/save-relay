@@ -348,7 +348,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         with:
-          # The glob also takes the Decky plugin zip and the panel zip (save-relay-decky-*, save-relay-panel-*, save-relay-*-aarch64-apple-ios.zip).
+          # The glob also takes the Decky plugin zip, the panel zip and the iOS library zip (save-relay-decky-*, save-relay-panel-*, save-relay-*-aarch64-apple-ios.zip).
           files: |
             dist/save-relay-*
             dist/SHA256SUMS
