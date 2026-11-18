@@ -243,6 +243,6 @@ Stages 1-7 are done (2026-11-06); the "free now" and "after" notes below are the
 
 #240 (save slots: a changed saves folder under one game id must not push or pull across slots; M7) is closed and built; it has no F row, and its milestone is still After 1.0 (2026-11-18: not moved, since it is done).
 
-#292 (craft-launcher will start its Decky plugin from `decky/`; keep the scaffold stable) is the only open After 1.0 issue; it is the `launcher-reuse` feature above.
+Two issues are open on After 1.0: #292 (craft-launcher will start its Decky plugin from `decky/`; keep the scaffold stable), which is the `launcher-reuse` feature above, and #295 (hardening: write local state through craft-atomic instead of a second copy, reuse with switchboard).
 
 The panel's views on Android and iOS, after the bindings' sign-in through the platform's browser session (the bindings themselves are in 1.0, #254: iOS a Must, M18; Android a Should); moving saves from one service to another (a Won't for 1.0: switching starts fresh); more services (OneDrive, S3) behind the same `Remote`; upload only changed files (server-side COPY of unchanged ones from the previous entry); Nextcloud chunked upload for large save sets; a `save-relay forget <game>`; pruning old conflict backups separately from pushes; saves kept in the Windows registry for wrapped games (ludusavi's registry entries); wrapping games from launchers other than Steam.
