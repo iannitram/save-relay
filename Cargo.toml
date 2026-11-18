@@ -39,6 +39,8 @@ ffi = []
 # (`ring`, under rustls, compiles its own bundled C: docs/code-map.md, rules).
 [dependencies]
 getrandom = "0.2"
+# Crash-safe file writes shared with my other repos (craft-libs, MIT OR Apache-2.0), pinned to a commit.
+craft-atomic = { git = "https://github.com/iannitram/craft-libs", rev = "72ae8f3640bc605f489a5eb46bcc0f4aa9dc649c" }
 quick-xml = "0.32"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

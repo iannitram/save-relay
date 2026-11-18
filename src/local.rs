@@ -23,7 +23,6 @@ use crate::state::LastSynced;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 /// The config format this build reads and writes.
 pub const FORMAT: u32 = 1;
@@ -340,46 +339,20 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &std::path::Path) -> Result<Opt
         .map_err(|error| Error::StateInvalid(error.to_string()))
 }
 
-/// Counts the temp files this process has made, so no two writes in it share a name.
-static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
-
+// Atomic write: craft-atomic, https://github.com/iannitram/craft-libs at 72ae8f3640bc605f489a5eb46bcc0f4aa9dc649c
+// (MIT OR Apache-2.0, same owner as this repo). It replaces this file's own temp-file, sync and rename code.
+/// Writes `value` as pretty JSON to `path` through `craft_atomic`: a temp file beside the target,
+/// synced, then renamed over it, with a bounded retry of the rename on Windows sharing violations.
 pub(crate) fn write_json<T: Serialize>(path: &std::path::Path, value: &T) -> Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| Error::Io("local file has no parent folder".into()))?;
     fs::create_dir_all(parent)?;
-    // Each write gets a temp file of its own, in the same folder: `<file>.<process id>.<n>.tmp`.
-    // Two writes of one file (two `answer` calls, or two threads) never share a name, so neither
-    // renames the other's temp file away. Two live processes never share a process id. A stale
-    // temp file from a crash is truncated only by a later write with the same name, and no live
-    // write owns that name.
-    let file_name = path
-        .file_name()
+    path.file_name()
         .ok_or_else(|| Error::Io("local file has no name".into()))?;
-    let mut temp_name = file_name.to_os_string();
-    temp_name.push(format!(
-        ".{}.{}.tmp",
-        std::process::id(),
-        TEMP_SEQ.fetch_add(1, Ordering::Relaxed)
-    ));
-    let temp = parent.join(temp_name);
     let mut text = serde_json::to_string_pretty(value)
         .map_err(|error| Error::StateInvalid(error.to_string()))?;
     text.push('\n');
-    let result = write_synced(&temp, text.as_bytes())
-        .and_then(|()| fs::rename(&temp, path).map_err(Error::from));
-    if result.is_err() {
-        let _ = fs::remove_file(&temp);
-    }
-    result
-}
-
-/// Writes `bytes` to `temp` and flushes them to disk, so the rename that follows never
-/// publishes a file whose contents are still only in memory.
-fn write_synced(temp: &std::path::Path, bytes: &[u8]) -> Result<()> {
-    use std::io::Write;
-    let mut file = fs::File::create(temp)?;
-    file.write_all(bytes)?;
-    file.sync_all()?;
+    craft_atomic::atomic_write(path, text.as_bytes())?;
     Ok(())
 }
