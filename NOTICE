@@ -1,4 +1,11 @@
-save-relay uses code from other projects. Each is listed here with its licence.
+save-relay
+Includes ideas and code from other projects, used under their licences.
+
+Ludusavi (https://github.com/mtkennerly/ludusavi), MIT licence
+Copyright (c) 2020 Matthew T. Kennerly (mtkennerly)
+Used in src/ludusavi.rs: the mapping of a literal `C:` path to the Wine
+prefix's `drive_c` (src/scan.rs at commit c4c2ca9943e841a7c052a59e9757535e77e80e0a).
+The full licence text is kept in the header of that function's source file.
 
 craft-atomic, from craft-libs (https://github.com/iannitram/craft-libs), pinned at
 commit 72ae8f3640bc605f489a5eb46bcc0f4aa9dc649c. Licence: MIT OR Apache-2.0.

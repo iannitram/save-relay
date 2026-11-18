@@ -581,3 +581,39 @@ fn a_missing_glob_less_path_in_a_clear_folder_matches_either_shape() {
     assert_eq!(located.saves_dir, Path::new(parent));
     assert_eq!(located.manifest.include, ["*.cfg", "Hades", "Hades/**"]);
 }
+
+#[test]
+fn a_literal_c_drive_is_the_proton_prefixs_drive_c() {
+    let entry = entry(json!({
+        "C:/ProgramData/Hades/Saves": { "tags": ["save"] },
+        "C:\\Hades\\More": { "tags": ["save"] },
+        "<home>/.hades": { "tags": ["save"] },
+        "D:/Hades": { "tags": ["save"] },
+    }));
+    let mut proton = facts(Platform::Linux);
+    proton.proton = true;
+    let paths = candidates(&entry, &proton);
+    let drive_c = "fixture/library/steamapps/compatdata/1145360/pfx/drive_c";
+    assert!(
+        paths.contains(&format!("{drive_c}/ProgramData/Hades/Saves")),
+        "{paths:?}"
+    );
+    assert!(
+        paths.contains(&format!("{drive_c}/Hades/More")),
+        "{paths:?}"
+    );
+    assert!(
+        paths.contains(&"D:/Hades".to_string()),
+        "another drive is left alone: {paths:?}"
+    );
+}
+
+#[test]
+fn a_literal_c_drive_is_left_alone_without_proton() {
+    let entry = entry(json!({ "C:/ProgramData/Hades/Saves": { "tags": ["save"] } }));
+    let windows = facts(Platform::Windows);
+    assert_eq!(
+        candidates(&entry, &windows),
+        vec!["C:/ProgramData/Hades/Saves".to_string()]
+    );
+}
