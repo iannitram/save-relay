@@ -1,0 +1,5 @@
+save-relay uses code from other projects. Each is listed here with its licence.
+
+craft-atomic, from craft-libs (https://github.com/iannitram/craft-libs), pinned at
+commit 72ae8f3640bc605f489a5eb46bcc0f4aa9dc649c. Licence: MIT OR Apache-2.0.
+Used by src/local.rs for crash-safe writes of config and state files.
