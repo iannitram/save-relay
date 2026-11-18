@@ -167,3 +167,43 @@ fn unreadable_json_is_state_invalid() {
     std::fs::write(d.data.join("games").join("g.json"), "nope").unwrap();
     assert!(matches!(store.load_game("g"), Err(Error::StateInvalid(_))));
 }
+
+#[test]
+fn a_failed_rename_leaves_the_target_whole_and_no_temp_file() {
+    let d = dirs("failed-rename");
+    let store = LocalStore::new(d.clone());
+    // config.json is a folder holding a file, so the rename onto it must fail.
+    let target = d.config.join("config.json");
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::write(target.join("keep.txt"), "kept").unwrap();
+    assert!(store.save_config(&config()).is_err());
+    assert_eq!(
+        std::fs::read_to_string(target.join("keep.txt")).unwrap(),
+        "kept"
+    );
+    assert_eq!(names(&target), vec!["keep.txt"]);
+    assert_eq!(names(&d.config), vec!["config.json"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failed_temp_create_keeps_the_old_file_whole() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = dirs("failed-create");
+    let store = LocalStore::new(d.clone());
+    store.save_config(&config()).unwrap();
+    let before = std::fs::read_to_string(d.config.join("config.json")).unwrap();
+    std::fs::set_permissions(&d.config, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let mut other = config();
+    other.user = "someone-else".into();
+    let result = store.save_config(&other);
+    std::fs::set_permissions(&d.config, std::fs::Permissions::from_mode(0o755)).unwrap();
+    if result.is_ok() {
+        return; // running as root: the folder cannot be made unwritable
+    }
+    assert_eq!(
+        std::fs::read_to_string(d.config.join("config.json")).unwrap(),
+        before
+    );
+    assert_eq!(names(&d.config), vec!["config.json"]);
+}

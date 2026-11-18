@@ -366,6 +366,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-atomic"
+version = "0.1.0"
+source = "git+https://github.com/iannitram/craft-libs?rev=72ae8f3640bc605f489a5eb46bcc0f4aa9dc649c#72ae8f3640bc605f489a5eb46bcc0f4aa9dc649c"
+dependencies = [
+ "rustix",
+]
+
+[[package]]
 name = "crossbeam-utils"
 version = "0.8.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1177,6 +1185,7 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 name = "save-relay"
 version = "1.0.0-rc.1"
 dependencies = [
+ "craft-atomic",
  "getrandom 0.2.17",
  "keyring",
  "quick-xml",
