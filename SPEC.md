@@ -50,14 +50,7 @@ M17 and M18 moved here from the Shoulds on 2026-11-17 (owner ruling 2026-11-17, 
 
 ## Prior art
 
-Projects doing the same thing, approved by me at Spec and reviewed weekly. Their code comes in only when their license allows it, with credit; otherwise only their ideas.
-
-peer: mtkennerly/ludusavi | MIT | the PC save backup tool: its wrap-the-launch flow, cloud conflict check and backup retention; main source to learn from (Rust, MIT, may be adopted with credit)
-peer: mtkennerly/ludusavi-manifest | MIT | the shared database of where PC games keep saves; a model for our per-game manifest
-peer: libretro/RetroArch | GPL-3.0 | WebDAV cloud sync of saves across PC, Android and iOS: the closest cross-platform precedent (ideas only unless the license fits)
-peer: rclone/rclone | MIT | WebDAV/Nextcloud client behaviour: chunking, retries, modification times
-peer: zdyloves/game-save-sync-webdav | MIT | a small Windows WebDAV save-sync tool; the simple version
-peer: sparksquidremain/game-save-cloud-sync | MIT | multi-PC save sync tool
+The upstream and the peer list are in [`PEERS.md`](PEERS.md) at the repo root.
 
 ## Problem
 
