@@ -82,6 +82,32 @@ on every save-relay command for that game. Each slot then has an independent ser
 local last-sync state; if the launcher changes folders under one id, save-relay treats the old
 record as absent and uses the first-sync rules rather than comparing saves across folders.
 
+### Several games in one saves folder
+
+For Uncharted's `SameAsWindows` layout the launcher passes the shared
+`savedata/1/<title_id>` folder as `--saves-dir`. Use a distinct id and a disjoint prefix for each
+game. For example, the following is the first game's manifest; use `uncharted-shared-2` and
+`SAVEDATA02*/**` for the second, and `uncharted-shared-3` and `SAVEDATA03*/**` for the third:
+
+```json
+{
+  "format": 1,
+  "id": "uncharted-shared-1",
+  "name": "Uncharted 1",
+  "saves": {},
+  "saves_from": "launcher",
+  "include": ["SAVEDATA01*/**"],
+  "exclude": ["**/*.tmp"]
+}
+```
+
+These patterns leave `where.json`, temporary files, and the other games' prefixes outside the
+scanned set. Use the same patterns on every machine and keep the game ids and slot ids distinct.
+Pull and restore follow the server history's recorded paths, including paths outside the current
+manifest (see S12 above); changing a formerly broad manifest does not sanitize existing history.
+Inspect and migrate any existing broad or shared history before using it in a shared folder.
+For launcher-managed slots, also pass the selected slot folder and `--slot <n>` as described above.
+
 ## Sidecar
 
 The sidecar file is `.save-relay-meta.json`, in the saves folder. It is read at the start of each sync. If it is missing, nothing happens.
