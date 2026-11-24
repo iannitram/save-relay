@@ -424,3 +424,41 @@ fn set_path_keeps_the_first_matchs_spelling() {
         Some("two")
     );
 }
+
+#[test]
+fn replace_existing_launch_option_preserves_every_other_byte() {
+    use save_relay::steam::vdf::replace_string;
+    let before = "// local config\r\n\"UserLocalConfigStore\" {\r\n  \"Software\" { \"Valve\" { \"Steam\" { \"apps\" {\r\n    \"42\" { // keep comments and spacing\r\n      \"LaunchOptions\"  \"old\\\\path\" // trailing\r\n      \"LastPlayed\" \"1\"\r\n    }\r\n  } } } }\r\n}\r\n";
+    let path = [
+        "userlocalconfigstore",
+        "software",
+        "valve",
+        "steam",
+        "apps",
+        "42",
+        "launchoptions",
+    ];
+    let after = replace_string(before, &path, "new \"value\"\\path").unwrap();
+    assert_eq!(
+        after,
+        before.replacen("\"old\\\\path\"", "\"new \\\"value\\\"\\\\path\"", 1)
+    );
+    assert_eq!(
+        parse(&after).unwrap().get_path(&path).unwrap().as_str(),
+        Some("new \"value\"\\path")
+    );
+    assert_eq!(replace_string(before, &path, "old\\path").unwrap(), before);
+}
+
+#[test]
+fn replace_string_uses_first_duplicate_and_refuses_invalid_paths() {
+    use save_relay::steam::vdf::replace_string;
+    let source = "\"root\" { \"Key\" one \"key\" two }\n";
+    assert_eq!(
+        replace_string(source, &["ROOT", "key"], "new").unwrap(),
+        "\"root\" { \"Key\" \"new\" \"key\" two }\n"
+    );
+    assert!(replace_string(source, &["root"], "x").is_err());
+    assert!(replace_string(source, &["root", "missing"], "x").is_err());
+    assert!(replace_string("\"root\" {", &["root"], "x").is_err());
+}

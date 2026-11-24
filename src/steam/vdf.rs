@@ -1,7 +1,7 @@
 //! Valve's KeyValues text format (`.vdf`, `.acf`), as Steam writes `libraryfolders.vdf`,
 //! `appmanifest_<id>.acf` and `localconfig.vdf`: quoted keys and values, `{ }` blocks, `//`
-//! comments, `\"` `\\` `\n` `\t` escapes. Order and repeated keys are kept, so a file read and
-//! written again changes only what was set. Pure.
+//! comments, `\"` `\\` `\n` `\t` escapes. The parsed tree keeps order and repeated keys;
+//! `to_text` normalizes formatting, while `replace_string` preserves unrelated bytes. Pure.
 //!
 //! ```text
 //! "libraryfolders"
@@ -135,6 +135,36 @@ pub fn parse(text: &str) -> Result<Vdf> {
     Ok(Vdf::Map(parser.pairs(None)?))
 }
 
+/// Replace an existing string at `keys` without changing any other bytes in the UTF-8 text.
+/// Paths use the same first-match, ASCII case-insensitive rules as `Vdf::get_path`.
+/// Missing keys, maps and malformed input are errors; this function never creates a key.
+/// If the decoded value already equals `value`, the original text is returned unchanged.
+pub fn replace_string(text: &str, keys: &[&str], value: &str) -> Result<String> {
+    let tree = parse(text)?;
+    let old = tree
+        .get_path(keys)
+        .and_then(Vdf::as_str)
+        .ok_or_else(|| Error::Usage("vdf: path does not name an existing string".into()))?;
+    if old == value {
+        return Ok(text.to_owned());
+    }
+    let mut parser = Parser {
+        bytes: text.as_bytes(),
+        pos: 0,
+        line: 1,
+    };
+    let span = parser
+        .find_string_span(keys, false)?
+        .ok_or_else(|| Error::Usage("vdf: path does not name an existing string".into()))?;
+    let mut quoted = String::new();
+    write_quoted(&mut quoted, value);
+    let mut result = String::with_capacity(text.len() + quoted.len());
+    result.push_str(&text[..span.0]);
+    result.push_str(&quoted);
+    result.push_str(&text[span.1..]);
+    Ok(result)
+}
+
 /// Write a top-level `Map` the way Steam does: one pair per line, tab-indented blocks, values
 /// escaped, `\n` line ends, a final newline. `parse(&to_text(v)) == v` for every `Map`.
 pub fn to_text(root: &Vdf) -> String {
@@ -257,6 +287,53 @@ impl Parser<'_> {
                 }
             }
         }
+    }
+
+    // The file has already been validated by `parse`. Walk the same token stream while retaining
+    // raw byte boundaries; only the first occurrence of each key participates in a path.
+    fn find_string_span(&mut self, keys: &[&str], nested: bool) -> Result<Option<(usize, usize)>> {
+        let mut selected = false;
+        let mut found = None;
+        while let Some(key) = self.token()? {
+            match key.kind {
+                Kind::Close if nested => break,
+                Kind::Str(key) => {
+                    self.skip();
+                    let start = self.pos;
+                    let next = self
+                        .token()?
+                        .ok_or_else(|| Error::Io("vdf: missing value".into()))?;
+                    let matched = !selected
+                        && keys
+                            .first()
+                            .is_some_and(|wanted| key.eq_ignore_ascii_case(wanted));
+                    if matched {
+                        selected = true;
+                    }
+                    match next.kind {
+                        Kind::Str(_) => {
+                            if matched && keys.len() == 1 {
+                                found = Some((start, self.pos));
+                            }
+                        }
+                        Kind::Open => {
+                            let child_keys = if matched && keys.len() > 1 {
+                                &keys[1..]
+                            } else {
+                                &[]
+                            };
+                            let child = self.find_string_span(child_keys, true)?;
+                            if matched {
+                                found = child;
+                            }
+                        }
+                        Kind::Close => return Err(Error::Io("vdf: missing value".into())),
+                    }
+                }
+                _ => return Err(Error::Io("vdf: unexpected block".into())),
+            }
+        }
+        Ok(found)
     }
 
     fn token(&mut self) -> Result<Option<Token>> {
