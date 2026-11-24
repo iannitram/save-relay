@@ -7,13 +7,14 @@ There is one manifest per game, because each game has its own revision, history 
 
 | Field | Description |
 |-------|-------------|
-| `format` | Always 1 |
+| `format` | 1 normally; 2 with `strict_scope: true` |
 | `id` | The game id: 1-64 characters of `a-z`, `0-9`, `-`, starting with a letter or digit. It names the game's folder on the server |
 | `name` | A display name, not empty |
 | `saves` | The saves folder template per platform; at least one, unless `saves_from` is set |
 | `saves_from` | The only value is `"launcher"`: the launcher always passes `--saves-dir`, so `saves` may be `{}` |
 | `include` | Glob patterns of the files that count as saves, relative to the saves folder; at least one |
 | `exclude` | Patterns left out even when included |
+| `strict_scope` | With format 2, must be `true`: reject remote revisions with paths outside these patterns; omitted or false for format 1 |
 
 ## Patterns
 
@@ -95,6 +96,39 @@ may legitimately move their saves folder. Do not infer slot identity from direct
 opt-in declaration could require slot identity, but would need explicit version negotiation so an
 older helper cannot silently ignore it. Until then, launchers must supply `--slot` and reject an
 unexpected response identity themselves.
+
+### Several games in one saves folder
+
+For Uncharted's `SameAsWindows` layout the launcher passes the shared
+`savedata/1/<title_id>` folder as `--saves-dir`. Use a distinct id and a disjoint prefix for each
+game. For example, the following is the first game's manifest; use `uncharted-shared-2` and
+`SAVEDATA02*/**` for the second, and `uncharted-shared-3` and `SAVEDATA03*/**` for the third:
+
+```json
+{
+  "format": 2,
+  "id": "uncharted-shared-1",
+  "name": "Uncharted 1",
+  "saves": {},
+  "saves_from": "launcher",
+  "include": ["SAVEDATA01*/**"],
+  "exclude": ["**/*.tmp"],
+  "strict_scope": true
+}
+```
+
+These patterns leave `where.json`, temporary files, and the other games' prefixes outside the
+scanned set. With `strict_scope`, sync and restore refuse a current revision or selected history
+entry containing any path outside the patterns before transferring or publishing changes. They do
+not silently discard those paths. Inspect and migrate any existing broad or shared history first.
+Use the same patterns on every machine and keep the game ids and slot ids distinct.
+
+**Version requirement:** format 2 requires a build containing this feature on every client.
+Version `v1.0.0-rc.2` and earlier reject format 2 in manifest files. Remembered format 2 records
+encode the version as a string so older clients also reject them. Upgrade and verify all clients
+before using a shared directory; old clients with a separate, previously remembered format 1
+manifest remain unsafe. With format 1, S12 behavior above remains unchanged.
+For launcher-managed slots, also pass the selected slot folder and `--slot <n>` as described above.
 
 ## Sidecar
 
