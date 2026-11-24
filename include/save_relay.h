@@ -76,8 +76,11 @@ char *save_relay_setup(const char *server, const char *user, const char *passwor
 /* Google Drive or Dropbox sign-in through the app's own browser session (the same PKCE parts as
  * the desktop sign-in). `service` is "gdrive" or "dropbox"; `redirect_uri` is the app's redirect.
  * The answer's data.url is the page the app opens (its code is NULL); when the browser session
- * returns, pass that redirect URL to save_relay_sign_in_finish. The refresh token goes to
- * `cred_set` only. `device` and `root` may be NULL. */
+ * returns, pass that redirect URL to save_relay_sign_in_finish. On Android 15+, return the app
+ * to the foreground before calling save_relay_sign_in_finish (backgrounded apps without a
+ * foreground service have outbound DNS/HTTP blocked); on `server_unreachable` or `server_error`,
+ * the pending sign-in is kept so the app can retry with the same redirect URL. The refresh token
+ * goes to `cred_set` only. `device` and `root` may be NULL. */
 char *save_relay_sign_in_start(const char *service, const char *redirect_uri, const char *device,
                                const char *root);
 char *save_relay_sign_in_finish(const char *redirect_url);
