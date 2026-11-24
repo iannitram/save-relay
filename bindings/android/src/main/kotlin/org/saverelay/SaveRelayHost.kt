@@ -15,7 +15,8 @@ interface SaveRelayHost {
      * - For `POST` with no `Content-Type` header, set `Content-Type: application/octet-stream`.
      * - Only call `setDoOutput(true)` when [body] is non-empty.
      * - Default `Accept-Encoding` to `identity` so response bytes are not transparently unzipped.
-     * - Catch `Throwable` and log class, message, method, and queryless URL (never headers/bodies).
+     * - Catch `Throwable` and log class, method, and sanitized message and URL. Remove query,
+     *   fragment, userinfo, and secrets; omit unsafe message or path data. Never log headers/bodies.
      */
     fun http(
         method: String,
