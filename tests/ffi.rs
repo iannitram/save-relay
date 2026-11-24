@@ -561,3 +561,47 @@ fn platform_sign_in_finish_keeps_pending_state_on_unreachable_for_foreground_ret
     assert_eq!(finished["data"]["service"], "dropbox");
     assert_eq!(finished["data"]["user"], "fake@example.com");
 }
+
+#[test]
+fn slot_suffixed_manifests_keep_ffi_slots_separate() {
+    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let remote = Arc::new(MemoryRemote::new());
+    let source = Device::new("ffi-slots-source");
+    let target = Device::new("ffi-slots-target");
+    assert_eq!(source.init(Some(remote.clone()))["ok"], true);
+    assert_eq!(setup("source")["ok"], true);
+    for slot in 1..=2 {
+        let dir = source.root.join(format!("slot-{slot}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("progress.sav"), format!("progress {slot}")).unwrap();
+        let manifest = c(&MANIFEST.replace("ffi-game", &format!("ffi-game-slot-{slot}")));
+        let path = c(dir.to_str().unwrap());
+        let status = envelope(unsafe { save_relay_status(manifest.as_ptr(), path.as_ptr()) });
+        assert_eq!(status["ok"], true, "{status}");
+        assert_eq!(status["data"]["game"], format!("ffi-game-slot-{slot}"));
+        let pushed = envelope(unsafe {
+            save_relay_push(manifest.as_ptr(), path.as_ptr(), std::ptr::null())
+        });
+        assert_eq!(pushed["ok"], true, "{pushed}");
+        assert_eq!(pushed["data"]["game"], format!("ffi-game-slot-{slot}"));
+        assert_eq!(pushed["data"]["action"], "pushed");
+    }
+    assert_eq!(target.init(Some(remote))["ok"], true);
+    assert_eq!(setup("target")["ok"], true);
+    for slot in 1..=2 {
+        let dir = target.root.join(format!("slot-{slot}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let manifest = c(&MANIFEST.replace("ffi-game", &format!("ffi-game-slot-{slot}")));
+        let path = c(dir.to_str().unwrap());
+        let pulled = envelope(unsafe {
+            save_relay_pull(manifest.as_ptr(), path.as_ptr(), std::ptr::null())
+        });
+        assert_eq!(pulled["ok"], true, "{pulled}");
+        assert_eq!(pulled["data"]["game"], format!("ffi-game-slot-{slot}"));
+        assert_eq!(pulled["data"]["action"], "pulled");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("progress.sav")).unwrap(),
+            format!("progress {slot}")
+        );
+    }
+}

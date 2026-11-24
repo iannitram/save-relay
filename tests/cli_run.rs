@@ -1312,3 +1312,33 @@ fn rc2_slot_contract_keeps_two_slots_and_an_empty_third_separate() {
             >= 2
     );
 }
+
+#[test]
+fn literal_slot_suffix_id_and_explicit_desktop_slot_are_distinct() {
+    let remote = Arc::new(MemoryRemote::new());
+    let m = Machine::new(&remote);
+    m.setup("first");
+    fs::write(m.root.join("demo.json"), r#"{"format":1,"id":"demo-game-slot-2","name":"Demo","saves_from":"launcher","saves":{},"include":["**/*.sav"]}"#).unwrap();
+    m.write_save("progress.sav", "progress");
+    let flags = format!(
+        "demo-game-slot-2 --manifest {} --saves-dir {}",
+        m.root.join("demo.json").display(),
+        m.root.join("saves").display()
+    );
+    let (code, direct) = m.json(&format!("push {flags}"), T0 + 1);
+    assert_eq!(code, 0, "{direct}");
+    assert_eq!(direct["data"]["game"], "demo-game-slot-2");
+    let (code, slotted) = m.json(&format!("push {flags} --slot 3"), T0 + 2);
+    assert_eq!(code, 0, "{slotted}");
+    assert_eq!(slotted["data"]["game"], "demo-game-slot-2-slot-3");
+    let (code, mismatch) = m.json(
+        &format!(
+            "status another-game --manifest {} --saves-dir {}",
+            m.root.join("demo.json").display(),
+            m.root.join("saves").display()
+        ),
+        T0 + 3,
+    );
+    assert_eq!(code, 2, "{mismatch}");
+    assert_eq!(mismatch["error"]["code"], "usage");
+}

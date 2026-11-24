@@ -97,7 +97,7 @@ impl GameArg {
                     Error::Io(format!("cannot read manifest {}: {error}", path.display()))
                 })?;
                 let manifest = Manifest::from_json(&text)?;
-                if manifest.id != base_id {
+                if manifest.id != self.id && manifest.id != base_id {
                     return Err(Error::Usage(format!(
                         "--manifest is for '{}', not '{}'",
                         manifest.id, self.id
