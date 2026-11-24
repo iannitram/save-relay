@@ -822,13 +822,18 @@ pub unsafe extern "C" fn save_relay_game_files_download(
             text(dest_dir, "dest_dir")?,
             text(state_dir, "state_dir")?,
         );
+        // Clear the stop flag before claiming the slot, so a cancel that lands after the claim
+        // is never wiped. A refused (busy) call must not clear the running download's flag.
+        let stale_stop = !GAME_FILES_RUNNING.load(Ordering::SeqCst);
+        if stale_stop {
+            GAME_FILES_STOP.store(false, Ordering::SeqCst);
+        }
         if GAME_FILES_RUNNING.swap(true, Ordering::SeqCst) {
             return Err(Error::Busy(
                 "a game-file download is already running".into(),
             ));
         }
         let _running = RunningGuard;
-        GAME_FILES_STOP.store(false, Ordering::SeqCst);
         let source = game_source(&host)?;
         let mut observe = |progress: &Progress| {
             *GAME_FILES_PROGRESS

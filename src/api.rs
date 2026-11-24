@@ -468,6 +468,7 @@ pub fn exit_code(error: &Error) -> i32 {
         | Error::Server(_)
         | Error::RangeUnsupported(_)
         | Error::RemoteChanged(_)
+        | Error::RemoteRevised(_)
         | Error::NotYetUploaded(_)
         | Error::StateInvalid(_)
         | Error::Changed

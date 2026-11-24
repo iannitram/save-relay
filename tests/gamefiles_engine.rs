@@ -288,8 +288,9 @@ fn a_changed_revision_stops_before_the_chunk_is_appended_and_the_next_run_restar
         .unwrap()
         .insert(format!("game-files/{APP}/files/big.bin"), "rev-2".into());
     let error = s.run().unwrap_err();
-    assert!(matches!(error, Error::RemoteChanged(_)), "{error:?}");
-    assert_eq!(error.code(), "remote_changed");
+    assert!(matches!(error, Error::RemoteRevised(_)), "{error:?}");
+    assert_eq!(error.code(), "remote_revised");
+    assert_eq!(error.class(), save_relay::error::Class::Retryable);
     assert!(
         before > 0 && !part.exists(),
         "the stale partial is discarded"
@@ -323,7 +324,7 @@ fn a_changed_revision_between_two_chunks_of_one_run_is_caught_too() {
         }
         Ok(answer)
     });
-    assert!(matches!(s.run(), Err(Error::RemoteChanged(_))));
+    assert!(matches!(s.run(), Err(Error::RemoteRevised(_))));
     assert!(!s.dest.join("big.bin").exists());
 }
 

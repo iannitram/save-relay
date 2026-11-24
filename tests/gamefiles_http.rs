@@ -116,6 +116,47 @@ fn a_dropped_connection_is_retried_and_a_missing_file_is_not_yet_uploaded() {
     assert!(matches!(error, Error::NotYetUploaded(_)), "{error:?}");
 }
 
+/// A range shorter than the service's error body must still classify the answer by its status.
+#[test]
+fn error_answers_to_a_tiny_range_keep_their_class() {
+    let tiny = body(3, 10);
+    let fresh = |name: &str| {
+        let server = RangeServer::start();
+        server.put_game(APP, &[("tiny.bin", &tiny)]);
+        let root = folder(name);
+        (server, root.join("game"), root.join("state"))
+    };
+    // 409 path/not_found: the file is not up yet.
+    let root = folder("tiny-missing");
+    let server = RangeServer::start();
+    server.put(
+        &format!("game-files/{APP}/manifest.json"),
+        manifest(APP, &[("tiny.bin", &tiny)]),
+    );
+    let error = run(
+        &server,
+        &root.join("game"),
+        &root.join("state"),
+        &AtomicBool::new(false),
+        &mut |_| {},
+    )
+    .unwrap_err();
+    assert!(matches!(error, Error::NotYetUploaded(_)), "{error:?}");
+    assert_eq!(error.class(), save_relay::error::Class::NotYetUploaded);
+
+    // 401 once: the token is refreshed and the file arrives.
+    let (server, dest, state) = fresh("tiny-401");
+    server.fail_with(&[401]);
+    run(&server, &dest, &state, &AtomicBool::new(false), &mut |_| {}).unwrap();
+    assert_eq!(fs::read(dest.join("tiny.bin")).unwrap(), tiny);
+
+    // 503 once: retried, then the file arrives.
+    let (server, dest, state) = fresh("tiny-503");
+    server.fail_with(&[503]);
+    run(&server, &dest, &state, &AtomicBool::new(false), &mut |_| {}).unwrap();
+    assert_eq!(fs::read(dest.join("tiny.bin")).unwrap(), tiny);
+}
+
 /// The child half of the kill test: download, and die the hard way (no destructors, no
 /// unwinding) as soon as a few chunks of the big file are durable.
 #[test]

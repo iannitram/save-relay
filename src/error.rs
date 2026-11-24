@@ -64,6 +64,9 @@ pub enum Error {
     /// Game files: the file on the service changed while it was being fetched (another
     /// revision answered). The partial copy is discarded; run again to restart that file.
     RemoteChanged(String),
+    /// Game files: another revision answered between chunks. The partial copy is already
+    /// discarded, so a plain retry restarts that file and succeeds: class `retryable`.
+    RemoteRevised(String),
     /// Game files: the finished file's size or SHA-256 differs from the manifest. Never installed.
     IntegrityFailed(String),
     /// Game files: a file in the destination is not ours or is not what the manifest says;
@@ -126,6 +129,7 @@ impl Error {
             Error::Io(_) => "io",
             Error::RangeUnsupported(_) => "range_unsupported",
             Error::RemoteChanged(_) => "remote_changed",
+            Error::RemoteRevised(_) => "remote_revised",
             Error::IntegrityFailed(_) => "integrity_failed",
             Error::DestinationConflict(_) => "destination_conflict",
             Error::Busy(_) => "busy",
@@ -138,7 +142,7 @@ impl Error {
     /// answer (a 4xx the service will repeat) is `Fatal`.
     pub fn class(&self) -> Class {
         match self {
-            Error::Unreachable(_) | Error::Busy(_) => Class::Retryable,
+            Error::Unreachable(_) | Error::Busy(_) | Error::RemoteRevised(_) => Class::Retryable,
             Error::Server(message) if retryable_status(message) => Class::Retryable,
             Error::NotYetUploaded(_) => Class::NotYetUploaded,
             Error::ReauthNeeded(_) | Error::AuthFailed | Error::NotSetUp => Class::ReauthNeeded,
@@ -203,6 +207,7 @@ impl fmt::Display for Error {
             Error::Io(m) => write!(f, "{m}"),
             Error::RangeUnsupported(m) => write!(f, "the service does not serve byte ranges: {m}"),
             Error::RemoteChanged(m) => write!(f, "the file changed on the server meanwhile: {m}"),
+            Error::RemoteRevised(m) => write!(f, "the file was replaced on the server meanwhile: {m}"),
             Error::IntegrityFailed(m) => write!(f, "the downloaded file is not what the manifest lists: {m}"),
             Error::DestinationConflict(m) => write!(f, "{m}"),
             Error::Busy(m) => write!(f, "{m}"),

@@ -573,7 +573,7 @@ impl Run<'_> {
                     Some(old) if old != identity => {
                         drop(file);
                         self.drop_partial(&entry.path);
-                        return Err(Error::RemoteChanged(format!(
+                        return Err(Error::RemoteRevised(format!(
                             "{} is a different version now; run again to fetch it from the start",
                             entry.path
                         )));

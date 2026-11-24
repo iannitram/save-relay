@@ -19,6 +19,7 @@ struct ServerState {
     revs: HashMap<String, String>,
     ignore_range: bool,
     drop_next: u32,
+    fail: Vec<u16>,
     log: Vec<(String, Option<String>)>,
     bytes_sent: u64,
 }
@@ -40,6 +41,7 @@ impl RangeServer {
             revs: HashMap::new(),
             ignore_range: false,
             drop_next: 0,
+            fail: Vec::new(),
             log: Vec::new(),
             bytes_sent: 0,
         }));
@@ -61,6 +63,7 @@ impl RangeServer {
                 revs: HashMap::new(),
                 ignore_range: false,
                 drop_next: 0,
+                fail: Vec::new(),
                 log: Vec::new(),
                 bytes_sent: 0,
             })),
@@ -90,6 +93,10 @@ impl RangeServer {
     }
     pub fn drop_next(&self, n: u32) {
         self.state.lock().unwrap().drop_next = n;
+    }
+    /// Answer the next requests with these statuses (an error JSON body), in order.
+    pub fn fail_with(&self, statuses: &[u16]) {
+        self.state.lock().unwrap().fail = statuses.to_vec();
     }
     /// (path, Range header) of every download so far.
     pub fn log(&self) -> Vec<(String, Option<String>)> {
@@ -143,6 +150,17 @@ fn serve(mut stream: TcpStream, state: Arc<Mutex<ServerState>>) {
     st.log.push((path.clone(), range.clone()));
     if st.drop_next > 0 {
         st.drop_next -= 1;
+        return;
+    }
+    if !st.fail.is_empty() {
+        let status = st.fail.remove(0);
+        let json = br#"{"error_summary":"scripted failure for the test, longer than ten bytes"}"#;
+        let _ = write!(
+            stream,
+            "HTTP/1.1 {status} Scripted\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            json.len()
+        );
+        let _ = stream.write_all(json);
         return;
     }
     let Some(file) = st.files.get(&path).cloned() else {

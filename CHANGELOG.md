@@ -1,10 +1,6 @@
 # Changelog
 
-- 2026-11-24 Revised the existing code map, roadmap and pipeline against main `7bfe1df`, current issues, all 11 successful commit checks and published rc.2 assets (#308). Corrected stale release/hardening/iOS statuses and macOS scope contradictions; separated source, automated tests and owner/device acceptance. Owner clarified Save Relay's additional role as the resumable Android/iOS thin-app chunk service through Dropbox, Nextcloud and Google Drive, using ACNH as the reference; no app store and no launcher-repo implementation here. Added tracked design/core/interface work #305/#309/#310 and audit follow-up #311.
-
 Newest first. One line per change of stage, release or decision that the next session needs.
-
-- 2026-11-24 #305 (owner ruling 2026-11-24, for Uncharted-Universal#523): resumable game-file downloads through the Dropbox app are implemented: `src/gamefiles/`, `save_relay_game_files_*` in the C interface, Swift and Kotlin, tests with a local Range server and a process-kill resume. Dropbox only; Nextcloud and Drive sources, the CLI and the ACNH legacy root are still #309/#310. No tag cut.
 
 - 2026-11-18 v1.0.0-rc.2: the release now ships the iOS library (#288) for the game ports' iOS apps (owner ruling 2026-11-17: "Yes, cut rc.2 after #288").
 - 2026-11-18 PM audit: ROADMAP gets a `features:` block (ten ids), the #240 question is recorded as settled, and the code map snapshot is re-dated. New issues from the peer and reuse audit: #294 (Ludusavi `C:` mapping, PR #296) and #295 (craft-atomic reuse, PR #297).

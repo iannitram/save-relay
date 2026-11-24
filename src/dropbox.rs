@@ -387,6 +387,10 @@ impl Dropbox {
 
 /// The longest body `GameSource::read_bounded` accepts for a manifest (docs/assets.md).
 const MAX_SMALL_FILE: usize = 4 * 1024 * 1024;
+/// Room for a service error body on a range request, so a short range does not turn a 409,
+/// 401 or 503 answer into "longer than the range". The exact length of a 206 body is checked
+/// by `gamefiles::engine::validate` against its Content-Range.
+const ERROR_BODY_ALLOWANCE: usize = 64 * 1024;
 
 impl GameSource for Dropbox {
     fn service(&self) -> &'static str {
@@ -409,7 +413,10 @@ impl GameSource for Dropbox {
         );
         match response {
             Ok(response) => Ok(response.body),
-            Err(error) => Err(too_large(error, path)),
+            Err(error) => Err(match too_large(error, path) {
+                Error::RangeUnsupported(_) => Error::ManifestInvalid("longer than 4 MiB".into()),
+                other => other,
+            }),
         }
     }
 
@@ -430,7 +437,11 @@ impl GameSource for Dropbox {
                     "Dropbox-API-Arg",
                     &header_json(&json!({"path": api_path(path)})),
                 )
-                .max_response_bytes(usize::try_from(len).unwrap_or(usize::MAX)),
+                .max_response_bytes(
+                    usize::try_from(len)
+                        .unwrap_or(usize::MAX)
+                        .max(ERROR_BODY_ALLOWANCE),
+                ),
             Op::Range,
             path,
         );
