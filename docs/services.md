@@ -36,7 +36,7 @@ Setup opens your browser. Sign in to the Google account you want to use and appr
 save-relay setup --service gdrive
 ```
 
-The browser returns to a small page on this machine when sign-in is done. The refresh token is kept in the system credential store.
+The browser returns to a small page on this machine when sign-in is done. The refresh token is kept in the system credential store. For Android apps using the C/JNI bindings, see `docs/android.md` for Android 15+ foreground token-exchange and `HttpURLConnection` requirements.
 
 ## Dropbox
 
@@ -46,7 +46,7 @@ Setup opens your browser. Sign in to the Dropbox account you want to use and app
 save-relay setup --service dropbox
 ```
 
-The browser returns to a small page on this machine when sign-in is done. The refresh token is kept in the system credential store.
+The browser returns to a small page on this machine when sign-in is done. The refresh token is kept in the system credential store. For Android apps using the C/JNI bindings, see `docs/android.md` for Android 15+ foreground token-exchange and `HttpURLConnection` requirements.
 
 ## Steam's Game Mode
 
@@ -89,3 +89,6 @@ A launcher can query `save-relay status --json` without a network request. Its `
 For Nextcloud, run `setup nextcloud --url <url> --user <name> --password-stdin --json` and write the app password followed by a newline to standard input. For Google Drive or Dropbox, run `setup gdrive --json` or `setup dropbox --json`; `data.verification_url` and `data.user_code` mirror the existing `url` and `code` fields. Nothing is configured until the launcher completes the challenge with `setup <service> --finish --json`. Dropbox's code from the web page goes on standard input; Google completes the device flow without a typed stdin code. A failed transient exchange can be retried with `--finish`. The existing `--service` forms remain available.
 
 `sign-out --json` deletes the current service's stored credentials and pending Google and Dropbox sign-ins before removing configuration. It leaves game records and save history in place. If deletion fails, configuration remains so the operation can be retried.
+## Planned game-file downloads
+
+Save Relay is also planned to act as an installer hub for a game's prepared files using the same chosen service and sign-in. This is a design, not a released download feature. Assets remain separate from save data. Google Drive's `drive.file` scope only covers files created or opened with the app or explicitly shared with it; placing existing files in a folder alone does not make every file accessible. See [the installer design](assets.md) for the layout, resumable transfer, and current limits.
