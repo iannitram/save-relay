@@ -27,7 +27,7 @@ fn shared_prefixes_keep_games_slots_and_history_isolated() {
     };
     let game = |id: &str, prefix: &str| {
         Game {
-        manifest: Manifest::from_json(&format!(r#"{{"format":1,"id":"{id}","name":"Fixture","saves_from":"launcher","saves":{{}},"include":["{prefix}*/**"],"exclude":["**/*.tmp"]}}"#)).unwrap(),
+        manifest: Manifest::from_json(&format!(r#"{{"format":2,"id":"{id}","name":"Fixture","saves_from":"launcher","saves":{{}},"include":["{prefix}*/**"],"exclude":["**/*.tmp"],"strict_scope":true}}"#)).unwrap(),
         saves_dir: saves.clone(),
     }
     };
@@ -98,4 +98,110 @@ fn shared_prefixes_keep_games_slots_and_history_isolated() {
     assert_eq!(read("where.json"), "local metadata");
     assert_eq!(read("SAVEDATA01/cache.tmp"), "local temp");
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn strict_scope_refuses_broad_current_and_historical_records_without_writes() {
+    let root =
+        std::env::temp_dir().join(format!("save-relay-strict-history-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let saves = root.join("saves");
+    fs::create_dir_all(saves.join("SAVEDATA01")).unwrap();
+    fs::create_dir_all(saves.join("SAVEDATA02")).unwrap();
+    fs::write(saves.join("SAVEDATA01/save"), "one").unwrap();
+    fs::write(saves.join("SAVEDATA02/save"), "other game").unwrap();
+    fs::write(saves.join("where.json"), "metadata").unwrap();
+    fs::write(saves.join("SAVEDATA01/cache.tmp"), "temporary").unwrap();
+    let store = LocalStore::new(AppDirs {
+        config: root.join("config"),
+        data: root.join("data"),
+    });
+    let remote = MemoryRemote::new();
+    let session = |now| Session {
+        remote: &remote,
+        layout: Layout::new("save-relay").unwrap(),
+        device: "test".into(),
+        now,
+    };
+    let make_game = |include: &str, strict: bool| {
+        let format = if strict { 2 } else { 1 };
+        Game {
+        manifest: Manifest::from_json(&format!(r#"{{"format":{format},"id":"shared","name":"Fixture","saves_from":"launcher","saves":{{}},"include":["{include}"],"exclude":["**/*.tmp"],"strict_scope":{strict}}}"#)).unwrap(), saves_dir: saves.clone(),
+    }
+    };
+    let broad = make_game("**", false);
+    let strict = make_game("SAVEDATA01*/**", true);
+    push(&session(1000), &broad, &store, None).unwrap();
+    let old = history(&session(1001), "shared").unwrap().current.unwrap();
+    let snapshot = || {
+        remote
+            .file_paths()
+            .into_iter()
+            .map(|p| {
+                let bytes = remote.read(&p).unwrap();
+                (p, bytes)
+            })
+            .collect::<Vec<_>>()
+    };
+    let before = snapshot();
+    assert!(pull(&session(2000), &strict, &store, None, false).is_err());
+    assert!(push(&session(2001), &strict, &store, None).is_err());
+    assert!(restore(&session(2002), &strict, &store, &old).is_err());
+    assert_eq!(snapshot(), before);
+    assert_eq!(
+        fs::read_to_string(saves.join("SAVEDATA02/save")).unwrap(),
+        "other game"
+    );
+    assert_eq!(
+        fs::read_to_string(saves.join("where.json")).unwrap(),
+        "metadata"
+    );
+    assert_eq!(
+        fs::read_to_string(saves.join("SAVEDATA01/cache.tmp")).unwrap(),
+        "temporary"
+    );
+    // Publish a clean current revision with the legacy broad manifest; the old entry remains.
+    fs::remove_file(saves.join("SAVEDATA02/save")).unwrap();
+    fs::remove_file(saves.join("where.json")).unwrap();
+    push(&session(3000), &broad, &store, None).unwrap();
+    fs::write(saves.join("SAVEDATA02/save"), "other game").unwrap();
+    fs::write(saves.join("where.json"), "metadata").unwrap();
+    let before = snapshot();
+    assert!(restore(&session(4000), &strict, &store, &old).is_err());
+    assert_eq!(snapshot(), before);
+    assert_eq!(
+        fs::read_to_string(saves.join("SAVEDATA02/save")).unwrap(),
+        "other game"
+    );
+    assert_eq!(
+        fs::read_to_string(saves.join("where.json")).unwrap(),
+        "metadata"
+    );
+    assert_eq!(
+        fs::read_to_string(saves.join("SAVEDATA01/cache.tmp")).unwrap(),
+        "temporary"
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn strict_scope_requires_format_two() {
+    let manifest = |format, strict| {
+        format!(
+            r#"{{"format":{format},"id":"g","name":"G","saves_from":"launcher","saves":{{}},"include":["**"],"strict_scope":{strict}}}"#
+        )
+    };
+    assert!(Manifest::from_json(&manifest(1, true)).is_err());
+    assert!(Manifest::from_json(&manifest(2, false)).is_err());
+    assert!(Manifest::from_json(&manifest(2, true)).is_ok());
+    assert!(Manifest::from_json(&manifest(1, false)).is_ok());
+    let strict = Manifest::from_json(&manifest(2, true)).unwrap();
+    let saved = serde_json::to_string(&strict).unwrap();
+    assert_eq!(Manifest::from_json(&saved).unwrap(), strict);
+    #[derive(serde::Deserialize)]
+    struct Legacy {
+        #[allow(dead_code)]
+        format: u32,
+    }
+    assert!(serde_json::from_str::<Legacy>(&saved).is_err());
 }

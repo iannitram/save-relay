@@ -108,6 +108,9 @@ fn sync(
 ) -> Result<SyncReport> {
     let id = &game.manifest.id;
     let (state, pre, reachable) = read_server(s, id)?;
+    if let Some(state) = &state {
+        check_strict_scope(game, &state.save_set())?;
+    }
     // Offline is decided from this same state read: do not treat a failed mark read as free
     // and then retry state, which could recover and allow a launch to publish without a mark.
     let hold = match intent {
@@ -351,6 +354,20 @@ fn sync(
         server_card,
         local_card,
     })
+}
+
+fn check_strict_scope(game: &Game, set: &SaveSet) -> Result<()> {
+    if game.manifest.strict_scope {
+        if let Some(file) = set.files.iter().find(|file| {
+            !glob::selected(&game.manifest.include, &game.manifest.exclude, &file.path)
+        }) {
+            return Err(Error::StateInvalid(format!(
+                "remote path outside strict manifest scope: {}",
+                file.path
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// What this machine's saves folder says about a card: the sidecar's place and checked picture,
@@ -935,6 +952,9 @@ fn canonical_saves_folder(folder: &Path) -> String {
 pub fn status(s: &Session, game: &Game, store: &LocalStore) -> Result<StatusData> {
     let id = &game.manifest.id;
     let (state, _, reachable) = read_server(s, id)?;
+    if let Some(state) = &state {
+        check_strict_scope(game, &state.save_set())?;
+    }
     let hold = if reachable {
         launch_hold(s, id)?
     } else {
@@ -1284,6 +1304,9 @@ pub fn restore(s: &Session, game: &Game, store: &LocalStore, entry: &str) -> Res
             "cannot restore {entry} of {id}"
         )));
     }
+    if let Some(state) = &state {
+        check_strict_scope(game, &state.save_set())?;
+    }
     let listed: Vec<String> = history_children(s, id)?
         .into_iter()
         .filter(|child| child.is_dir)
@@ -1292,8 +1315,9 @@ pub fn restore(s: &Session, game: &Game, store: &LocalStore, entry: &str) -> Res
     if !listed.iter().any(|name| name == entry) {
         return Err(Error::NoSuchEntry(entry.to_string()));
     }
-    let wanted =
-        transfer::without_reserved(&transfer::read_record(s.remote, &s.layout, id, entry)?);
+    let record = transfer::read_record(s.remote, &s.layout, id, entry)?;
+    check_strict_scope(game, &record)?;
+    let wanted = transfer::without_reserved(&record);
     let local = scan(
         &game.saves_dir,
         &game.manifest.include,
