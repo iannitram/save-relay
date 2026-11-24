@@ -305,4 +305,59 @@ public final class SaveRelay {
             takeString(save_relay_sign_in_finish(redirectPointer))
         }
     }
+
+    // MARK: Game files (resumable downloads from Dropbox; docs/assets.md, #305)
+    //
+    // `destDir` is where an app's game files go; `stateDir` is where the library keeps its
+    // checkpoints and `.part` files. Both are app-private folders on the same file system,
+    // neither inside the other, neither the saves folder. All five answer with the usual JSON
+    // envelope; an error envelope also carries `error.class` ("retryable", "not_yet_uploaded",
+    // "reauth_needed" or "fatal").
+    //
+    // `gameFilesDownload` blocks until the download finishes, fails or is cancelled: call it
+    // from a background queue, never the main thread, and poll `gameFilesProgress` from
+    // another. The `SaveRelayNetwork` it runs over must send the request's `Range` header, give
+    // back the 206 answer with its `Content-Range` and `Dropbox-API-Result` headers unchanged,
+    // send `Accept-Encoding: identity`, and stop at `maxResponseBytes`. A force-quit, a dead
+    // battery or a dropped network loses at most one chunk; call `gameFilesDownload` again at
+    // the next launch and it continues.
+
+    /// What a download would do, from file sizes only (nothing is written).
+    public func gameFilesPlan(appId: String?, destDir: String?, stateDir: String?) -> String {
+        withOptionalCString(appId) { appPointer in
+            withOptionalCString(destDir) { destPointer in
+                withOptionalCString(stateDir) { statePointer in
+                    takeString(save_relay_game_files_plan(appPointer, destPointer, statePointer))
+                }
+            }
+        }
+    }
+
+    /// Download or resume everything missing. Blocks; see the note above.
+    public func gameFilesDownload(appId: String?, destDir: String?, stateDir: String?) -> String {
+        withOptionalCString(appId) { appPointer in
+            withOptionalCString(destDir) { destPointer in
+                withOptionalCString(stateDir) { statePointer in
+                    takeString(save_relay_game_files_download(appPointer, destPointer, statePointer))
+                }
+            }
+        }
+    }
+
+    /// The latest progress of the running or last download (`data` is null before any).
+    public func gameFilesProgress() -> String {
+        takeString(save_relay_game_files_progress())
+    }
+
+    /// Stop the running download after its current chunk is durable; a later download continues.
+    public func gameFilesCancel() -> String {
+        takeString(save_relay_game_files_cancel())
+    }
+
+    /// Remove the checkpoints and `.part` files in `stateDir` (never the game folder).
+    public func gameFilesCleanup(stateDir: String?) -> String {
+        withOptionalCString(stateDir) { statePointer in
+            takeString(save_relay_game_files_cleanup(statePointer))
+        }
+    }
 }

@@ -408,3 +408,52 @@ JNIEXPORT jlong JNICALL Java_org_saverelay_SaveRelay_nativeSignInFinish(
   LEAVE_STRING(redirect, redirect_text);
   return (jlong)(intptr_t)line;
 }
+
+JNIEXPORT jlong JNICALL Java_org_saverelay_SaveRelay_nativeGameFilesPlan(
+    JNIEnv *env, jobject thiz, jstring app, jstring dest, jstring state) {
+  (void)thiz;
+  const char *app_text = ENTER_STRING(app);
+  const char *dest_text = ENTER_STRING(dest);
+  const char *state_text = ENTER_STRING(state);
+  char *line = save_relay_game_files_plan(app_text, dest_text, state_text);
+  LEAVE_STRING(app, app_text);
+  LEAVE_STRING(dest, dest_text);
+  LEAVE_STRING(state, state_text);
+  return (jlong)(intptr_t)line;
+}
+
+JNIEXPORT jlong JNICALL Java_org_saverelay_SaveRelay_nativeGameFilesDownload(
+    JNIEnv *env, jobject thiz, jstring app, jstring dest, jstring state) {
+  (void)thiz;
+  const char *app_text = ENTER_STRING(app);
+  const char *dest_text = ENTER_STRING(dest);
+  const char *state_text = ENTER_STRING(state);
+  char *line = save_relay_game_files_download(app_text, dest_text, state_text);
+  LEAVE_STRING(app, app_text);
+  LEAVE_STRING(dest, dest_text);
+  LEAVE_STRING(state, state_text);
+  return (jlong)(intptr_t)line;
+}
+
+JNIEXPORT jlong JNICALL Java_org_saverelay_SaveRelay_nativeGameFilesProgress(
+    JNIEnv *env, jobject thiz) {
+  (void)env;
+  (void)thiz;
+  return (jlong)(intptr_t)save_relay_game_files_progress();
+}
+
+JNIEXPORT jlong JNICALL Java_org_saverelay_SaveRelay_nativeGameFilesCancel(
+    JNIEnv *env, jobject thiz) {
+  (void)env;
+  (void)thiz;
+  return (jlong)(intptr_t)save_relay_game_files_cancel();
+}
+
+JNIEXPORT jlong JNICALL Java_org_saverelay_SaveRelay_nativeGameFilesCleanup(
+    JNIEnv *env, jobject thiz, jstring state) {
+  (void)thiz;
+  const char *state_text = ENTER_STRING(state);
+  char *line = save_relay_game_files_cleanup(state_text);
+  LEAVE_STRING(state, state_text);
+  return (jlong)(intptr_t)line;
+}

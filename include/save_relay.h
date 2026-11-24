@@ -85,6 +85,41 @@ char *save_relay_sign_in_start(const char *service, const char *redirect_uri, co
                                const char *root);
 char *save_relay_sign_in_finish(const char *redirect_url);
 
+/* Game files (docs/assets.md, #305): resumable download of an app's files from the signed-in
+ * Dropbox, `game-files/<app_id>/manifest.json` and `game-files/<app_id>/files/...` in the App
+ * folder. Needs a Dropbox sign-in (save_relay_sign_in_start/_finish). `dest_dir` is where the
+ * files go and `state_dir` is where the library keeps its checkpoints and `.part` files: both
+ * app-private, on the same file system, neither inside the other and neither the saves folder.
+ * Each answer is the usual JSON envelope (commands "game-files-plan", "game-files-download",
+ * "game-files-progress", "game-files-cancel", "game-files-cleanup"); an error envelope also has
+ * error.class: "retryable", "not_yet_uploaded", "reauth_needed" or "fatal". Every request asks
+ * for a bounded range through the `http` callback, which must send the Range header, return the
+ * 206 answer with its Content-Range and Dropbox-API-Result headers untouched, send no
+ * Accept-Encoding but identity, and honour max_response_bytes. */
+
+/* What a download would do, from file sizes only; changes nothing. data: files and bytes
+ * present, partial and missing, and the files in the way. Blocks for one request. */
+char *save_relay_game_files_plan(const char *app_id, const char *dest_dir, const char *state_dir);
+
+/* Download or resume everything missing. Blocks until it finishes, fails or is cancelled, so
+ * call it from a background thread. A killed process, a dead battery or a dropped network loses
+ * at most one chunk; call it again to continue. data: the final progress, state "complete" or
+ * "cancelled". One download runs at a time (error code "busy"). */
+char *save_relay_game_files_download(const char *app_id, const char *dest_dir,
+                                     const char *state_dir);
+
+/* data: the latest progress of the running or last download (state, files_done, files_total,
+ * bytes_done, bytes_total, current), or null before any. Cheap; poll it twice a second. */
+char *save_relay_game_files_progress(void);
+
+/* Stop the running download after its current chunk is durable; the download call returns
+ * "cancelled" and a later download continues. data.running says whether one was running. */
+char *save_relay_game_files_cancel(void);
+
+/* Remove the checkpoints and `.part` files in `state_dir` (never the game folder), so the next
+ * download starts unfinished files again. Refused (error code "busy") while a download runs. */
+char *save_relay_game_files_cleanup(const char *state_dir);
+
 /* Free a string returned above. NULL is ignored. */
 void save_relay_free(char *pointer);
 

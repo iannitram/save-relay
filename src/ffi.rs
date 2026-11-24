@@ -20,17 +20,19 @@ use crate::cli::{self, Args, Command};
 use crate::clients::{self, Client, ClientSet};
 use crate::creds::{CredentialStore, Secret};
 use crate::error::{Error, Result};
+use crate::gamefiles::{engine, Progress};
 use crate::http::{Request, Response, Transport};
 use crate::local::LocalStore;
 use crate::manifest::Manifest;
 use crate::oauth::{self, PlatformSignIn};
 use crate::platform::{AppDirs, PathVars};
 use crate::remote::{MemoryRemote, Remote};
-use crate::service::Service;
+use crate::service::{self, Service};
 use crate::stamp;
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// The largest secret `cred_get` may hand back (a refresh token is a few hundred bytes).
@@ -298,10 +300,16 @@ pub unsafe extern "C" fn save_relay_http_respond(
 
 /// Run a closure for one command and turn any failure or panic into its error envelope.
 fn guard(command: &str, body: impl FnOnce() -> Result<String>) -> *mut c_char {
+    // The game-files commands tell the app what to do next (`error.class`).
+    let failure = if command.starts_with("game-files") {
+        api::failure_with_class
+    } else {
+        api::failure
+    };
     let line = match catch_unwind(AssertUnwindSafe(body)) {
         Ok(Ok(line)) => line,
-        Ok(Err(error)) => api::failure(command, &error),
-        Err(_) => api::failure(command, &Error::Io("internal error".into())),
+        Ok(Err(error)) => failure(command, &error),
+        Err(_) => failure(command, &Error::Io("internal error".into())),
     };
     CString::new(line.replace('\0', ""))
         .unwrap_or_default()
@@ -724,6 +732,171 @@ pub unsafe extern "C" fn save_relay_setup(
         }
         args.push("--json".into());
         run_json("setup", args, Some(password.to_string()))
+    })
+}
+
+/// The one game-file download at a time this library runs (`save_relay_game_files_download`).
+static GAME_FILES_RUNNING: AtomicBool = AtomicBool::new(false);
+/// Set by `save_relay_game_files_cancel`; read between chunks.
+static GAME_FILES_STOP: AtomicBool = AtomicBool::new(false);
+/// The latest progress of the running (or last) download.
+static GAME_FILES_PROGRESS: Mutex<Option<Progress>> = Mutex::new(None);
+
+/// Clears the running flag however the download ends.
+struct RunningGuard;
+
+impl Drop for RunningGuard {
+    fn drop(&mut self) {
+        GAME_FILES_RUNNING.store(false, Ordering::SeqCst);
+    }
+}
+
+fn game_source(host: &Arc<Host>) -> Result<crate::dropbox::Dropbox> {
+    let store = LocalStore::new(AppDirs::from_vars(&host.vars));
+    let creds = HostCreds(host.clone());
+    let config = store.load_config()?.ok_or(Error::NotSetUp)?;
+    service::open_game_source(
+        &config,
+        &creds,
+        transport_for(host),
+        stamp::now,
+        &host.clients,
+    )
+}
+
+/// What a game-file download would do: reads the app's manifest from the service and compares
+/// it with `dest_dir` and `state_dir` by file size, changing nothing. Returns the envelope
+/// `game-files-plan` whose `data` is the plan (files and bytes present, partial and missing,
+/// and the files in the way). `dest_dir` is where the game's files go and `state_dir` where
+/// the library keeps its checkpoints; both are app-private folders on the same file system,
+/// neither inside the other and neither the saves folder. Blocks for one request.
+///
+/// # Safety
+/// Each pointer is null (refused) or a NUL-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn save_relay_game_files_plan(
+    app_id: *const c_char,
+    dest_dir: *const c_char,
+    state_dir: *const c_char,
+) -> *mut c_char {
+    guard("game-files-plan", || {
+        let host = host()?;
+        let (app_id, dest, state) = (
+            text(app_id, "app_id")?,
+            text(dest_dir, "dest_dir")?,
+            text(state_dir, "state_dir")?,
+        );
+        let source = game_source(&host)?;
+        let plan = engine::plan(
+            &source,
+            app_id,
+            std::path::Path::new(dest),
+            std::path::Path::new(state),
+            &engine::Options::default(),
+        )?;
+        Ok(api::success("game-files-plan", &plan))
+    })
+}
+
+/// Download (or resume) every file of `app_id` that `dest_dir` does not have yet. Blocks until
+/// it finishes, fails or is cancelled, so call it from a background thread; poll
+/// `save_relay_game_files_progress` from another. A killed process, a dead battery or a dropped
+/// network loses at most one chunk: call it again and it continues. Returns the envelope
+/// `game-files-download` whose `data` is the final progress, with `state` `complete`, or
+/// `cancelled` after `save_relay_game_files_cancel`; a failure is the usual error envelope
+/// with a `class` of `retryable`, `not_yet_uploaded`, `reauth_needed` or `fatal`. One download
+/// runs at a time (`busy`).
+///
+/// # Safety
+/// As `save_relay_game_files_plan`.
+#[no_mangle]
+pub unsafe extern "C" fn save_relay_game_files_download(
+    app_id: *const c_char,
+    dest_dir: *const c_char,
+    state_dir: *const c_char,
+) -> *mut c_char {
+    guard("game-files-download", || {
+        let host = host()?;
+        let (app_id, dest, state) = (
+            text(app_id, "app_id")?,
+            text(dest_dir, "dest_dir")?,
+            text(state_dir, "state_dir")?,
+        );
+        if GAME_FILES_RUNNING.swap(true, Ordering::SeqCst) {
+            return Err(Error::Busy(
+                "a game-file download is already running".into(),
+            ));
+        }
+        let _running = RunningGuard;
+        GAME_FILES_STOP.store(false, Ordering::SeqCst);
+        let source = game_source(&host)?;
+        let mut observe = |progress: &Progress| {
+            *GAME_FILES_PROGRESS
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(progress.clone());
+        };
+        let done = engine::run(
+            &source,
+            app_id,
+            std::path::Path::new(dest),
+            std::path::Path::new(state),
+            &engine::Options::default(),
+            &GAME_FILES_STOP,
+            &mut observe,
+        )?;
+        Ok(api::success("game-files-download", &done))
+    })
+}
+
+/// The latest progress of the running or last game-file download: the envelope
+/// `game-files-progress` whose `data` has `state`, `files_done`, `files_total`, `bytes_done`,
+/// `bytes_total` and `current`, or `null` before any download. Cheap; poll it twice a second.
+#[no_mangle]
+pub extern "C" fn save_relay_game_files_progress() -> *mut c_char {
+    guard("game-files-progress", || {
+        let progress = GAME_FILES_PROGRESS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        Ok(api::success("game-files-progress", &progress))
+    })
+}
+
+/// Ask the running download to stop after the chunk it is on has been made durable. The
+/// download call then returns `cancelled`, and a later download continues from there. The
+/// envelope `game-files-cancel` says in `data.running` whether a download was running.
+#[no_mangle]
+pub extern "C" fn save_relay_game_files_cancel() -> *mut c_char {
+    guard("game-files-cancel", || {
+        let running = GAME_FILES_RUNNING.load(Ordering::SeqCst);
+        if running {
+            GAME_FILES_STOP.store(true, Ordering::SeqCst);
+        }
+        Ok(api::success(
+            "game-files-cancel",
+            &serde_json::json!({ "running": running }),
+        ))
+    })
+}
+
+/// Remove the library's checkpoints and `.part` files in `state_dir` (never anything in the
+/// game folder), so the next download starts every unfinished file again. Refused with `busy`
+/// while a download runs.
+///
+/// # Safety
+/// `state_dir` is null (refused) or a NUL-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn save_relay_game_files_cleanup(state_dir: *const c_char) -> *mut c_char {
+    guard("game-files-cleanup", || {
+        let state = text(state_dir, "state_dir")?;
+        if GAME_FILES_RUNNING.load(Ordering::SeqCst) {
+            return Err(Error::Busy("a game-file download is running".into()));
+        }
+        engine::cleanup(std::path::Path::new(state))?;
+        *GAME_FILES_PROGRESS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+        Ok(api::success("game-files-cleanup", &serde_json::json!({})))
     })
 }
 

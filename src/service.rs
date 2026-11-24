@@ -191,6 +191,32 @@ pub fn open_with(
     })
 }
 
+/// The game-file source (`gamefiles::GameSource`) of the service this machine is set up for.
+/// Only Dropbox serves game files so far; the others are a usage error naming that.
+pub fn open_game_source(
+    config: &Config,
+    store: &dyn CredentialStore,
+    transport: Arc<dyn Transport>,
+    clock: Clock,
+    clients: &ClientSet,
+) -> Result<Dropbox> {
+    let service = Service::from_server(&config.server)?;
+    if service != Service::Dropbox {
+        return Err(Error::Usage(format!(
+            "game files are served through Dropbox in this version; this device is set up for {}",
+            service.label()
+        )));
+    }
+    let refresh = store
+        .get(&token_account(service, &config.user)?)?
+        .ok_or(Error::NotSetUp)?;
+    let client = client_for(service, clients, None)?;
+    let provider =
+        oauth::provider(service).ok_or_else(|| Error::Usage("no OAuth provider".into()))?;
+    let tokens = TokenSource::new(provider, client, refresh, transport.clone(), clock);
+    Ok(Dropbox::new(tokens, transport))
+}
+
 /// The `Remote` of an OAuth service over `tokens`.
 fn backend(
     service: Service,

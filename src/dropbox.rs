@@ -10,6 +10,7 @@
 //! `http::Transport` with a bearer token from `oauth::TokenSource`.
 
 use crate::error::{Error, Result};
+use crate::gamefiles::{GameSource, RangeAnswer};
 use crate::http::{Request, Response, Transport};
 use crate::oauth::TokenSource;
 use crate::remote::{Precondition, Remote, RemoteEntry};
@@ -102,6 +103,9 @@ pub enum Op {
     Copy,
     Move,
     Delete,
+    /// A ranged download (`GameSource::fetch`): 206 is success, and 200 and 416 are handed to
+    /// the caller, which judges the range.
+    Range,
 }
 
 /// What a backend does with an answer.
@@ -124,6 +128,7 @@ pub enum Outcome {
 /// | status | summary starts with | op | outcome |
 /// |---|---|---|---|
 /// | 200 | | any | Ok |
+/// | 206, 416 | | Range | Ok (the caller judges the range) |
 /// | 401 | | any | Refresh |
 /// | 429, 500-599 | | any | Retry |
 /// | 409 | `path/conflict/folder` | Mkcol | Ok (already a folder) |
@@ -147,6 +152,7 @@ pub fn classify(op: Op, status: u16, body: &str, path: &str) -> Outcome {
         .unwrap_or_default();
     match status {
         200 => return Outcome::Ok,
+        206 | 416 if op == Op::Range => return Outcome::Ok,
         401 => return Outcome::Refresh,
         429 | 500..=599 => return Outcome::Retry,
         409 => {}
@@ -376,6 +382,86 @@ impl Dropbox {
             .ok()
             .and_then(|v| v["email"].as_str().map(str::to_string))
             .ok_or_else(|| Error::Server("dropbox: no email in the answer".into()))
+    }
+}
+
+/// The longest body `GameSource::read_bounded` accepts for a manifest (docs/assets.md).
+const MAX_SMALL_FILE: usize = 4 * 1024 * 1024;
+
+impl GameSource for Dropbox {
+    fn service(&self) -> &'static str {
+        "dropbox"
+    }
+
+    fn read_bounded(&self, path: &str, max: usize) -> Result<Vec<u8>> {
+        checked(path)?;
+        let response = self.send(
+            Request::new("POST", &format!("{CONTENT}/files/download"))
+                .header("Content-Type", "application/octet-stream")
+                .header("Accept-Encoding", "identity")
+                .header(
+                    "Dropbox-API-Arg",
+                    &header_json(&json!({"path": api_path(path)})),
+                )
+                .max_response_bytes(max.min(MAX_SMALL_FILE)),
+            Op::Get,
+            path,
+        );
+        match response {
+            Ok(response) => Ok(response.body),
+            Err(error) => Err(too_large(error, path)),
+        }
+    }
+
+    fn fetch(&self, path: &str, start: u64, len: u64) -> Result<RangeAnswer> {
+        checked(path)?;
+        if len == 0 {
+            return Err(Error::Usage("a range of no bytes".into()));
+        }
+        let end = start
+            .checked_add(len - 1)
+            .ok_or_else(|| Error::Usage("range end overflows".into()))?;
+        let response = self.send(
+            Request::new("POST", &format!("{CONTENT}/files/download"))
+                .header("Content-Type", "application/octet-stream")
+                .header("Accept-Encoding", "identity")
+                .header("Range", &format!("bytes={start}-{end}"))
+                .header(
+                    "Dropbox-API-Arg",
+                    &header_json(&json!({"path": api_path(path)})),
+                )
+                .max_response_bytes(usize::try_from(len).unwrap_or(usize::MAX)),
+            Op::Range,
+            path,
+        );
+        let response = response.map_err(|error| too_large(error, path))?;
+        let header = |name: &str| response.header_value(name).map(str::to_string);
+        Ok(RangeAnswer {
+            status: response.status,
+            content_range: header("Content-Range"),
+            content_encoding: header("Content-Encoding"),
+            content_type: header("Content-Type"),
+            identity: response
+                .header_value("Dropbox-API-Result")
+                .and_then(|result| parse_rev(result).ok()),
+            body: response.body,
+        })
+    }
+}
+
+/// A body past the bound the request set (a server that ignored `Range` and sent the whole
+/// file) is a range problem, not a retryable network error.
+fn too_large(error: Error, path: &str) -> Error {
+    match &error {
+        Error::Server(message) if message.contains("exceeds the") => Error::RangeUnsupported(
+            format!("the answer for {path} is longer than the range asked for"),
+        ),
+        Error::Unreachable(message) if message.contains("larger than allowed") => {
+            Error::RangeUnsupported(format!(
+                "the answer for {path} is longer than the range asked for"
+            ))
+        }
+        _ => error,
     }
 }
 

@@ -58,6 +58,43 @@ pub enum Error {
     NoPendingChoice(String),
     /// A local file operation failed.
     Io(String),
+    /// Game files (docs/assets.md): the service ignored or mangled a byte range, so the file
+    /// cannot be fetched in resumable chunks.
+    RangeUnsupported(String),
+    /// Game files: the file on the service changed while it was being fetched (another
+    /// revision answered). The partial copy is discarded; run again to restart that file.
+    RemoteChanged(String),
+    /// Game files: the finished file's size or SHA-256 differs from the manifest. Never installed.
+    IntegrityFailed(String),
+    /// Game files: a file in the destination is not ours or is not what the manifest says;
+    /// it is never overwritten.
+    DestinationConflict(String),
+    /// Game files: another download already holds this destination.
+    Busy(String),
+    /// Game files: the manifest or a file it lists is not on the service (yet). The owner may
+    /// still be uploading it.
+    NotYetUploaded(String),
+}
+
+/// What a caller should do about a failure (the `class` of a game-files error):
+/// try again later, wait for the owner's upload, sign in again, or stop and show the message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Class {
+    Retryable,
+    NotYetUploaded,
+    ReauthNeeded,
+    Fatal,
+}
+
+impl Class {
+    pub fn key(self) -> &'static str {
+        match self {
+            Class::Retryable => "retryable",
+            Class::NotYetUploaded => "not_yet_uploaded",
+            Class::ReauthNeeded => "reauth_needed",
+            Class::Fatal => "fatal",
+        }
+    }
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -87,8 +124,36 @@ impl Error {
             Error::SteamRunning => "steam_running",
             Error::NoPendingChoice(_) => "no_pending_choice",
             Error::Io(_) => "io",
+            Error::RangeUnsupported(_) => "range_unsupported",
+            Error::RemoteChanged(_) => "remote_changed",
+            Error::IntegrityFailed(_) => "integrity_failed",
+            Error::DestinationConflict(_) => "destination_conflict",
+            Error::Busy(_) => "busy",
+            Error::NotYetUploaded(_) => "not_yet_uploaded",
         }
     }
+
+    /// How a caller should treat this failure. A dropped connection, a busy service
+    /// (`dropbox 429` or 5xx) and a held destination are `Retryable`; any other service
+    /// answer (a 4xx the service will repeat) is `Fatal`.
+    pub fn class(&self) -> Class {
+        match self {
+            Error::Unreachable(_) | Error::Busy(_) => Class::Retryable,
+            Error::Server(message) if retryable_status(message) => Class::Retryable,
+            Error::NotYetUploaded(_) => Class::NotYetUploaded,
+            Error::ReauthNeeded(_) | Error::AuthFailed | Error::NotSetUp => Class::ReauthNeeded,
+            _ => Class::Fatal,
+        }
+    }
+}
+
+/// `Server("dropbox 503")`-style messages: true for 429 and 5xx.
+fn retryable_status(message: &str) -> bool {
+    message
+        .split(|c: char| !c.is_ascii_digit())
+        .find(|part| part.len() == 3)
+        .and_then(|part| part.parse::<u16>().ok())
+        .is_some_and(|status| status == 429 || (500..=599).contains(&status))
 }
 
 impl fmt::Display for Error {
@@ -136,6 +201,12 @@ impl fmt::Display for Error {
             ),
             Error::NoPendingChoice(g) => write!(f, "no choice is waiting for game '{g}'"),
             Error::Io(m) => write!(f, "{m}"),
+            Error::RangeUnsupported(m) => write!(f, "the service does not serve byte ranges: {m}"),
+            Error::RemoteChanged(m) => write!(f, "the file changed on the server meanwhile: {m}"),
+            Error::IntegrityFailed(m) => write!(f, "the downloaded file is not what the manifest lists: {m}"),
+            Error::DestinationConflict(m) => write!(f, "{m}"),
+            Error::Busy(m) => write!(f, "{m}"),
+            Error::NotYetUploaded(m) => write!(f, "not on the server yet: {m}"),
         }
     }
 }

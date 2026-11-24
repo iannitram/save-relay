@@ -4,6 +4,8 @@
 
 Newest first. One line per change of stage, release or decision that the next session needs.
 
+- 2026-11-24 #305 (owner ruling 2026-11-24, for Uncharted-Universal#523): resumable game-file downloads through the Dropbox app are implemented: `src/gamefiles/`, `save_relay_game_files_*` in the C interface, Swift and Kotlin, tests with a local Range server and a process-kill resume. Dropbox only; Nextcloud and Drive sources, the CLI and the ACNH legacy root are still #309/#310. No tag cut.
+
 - 2026-11-18 v1.0.0-rc.2: the release now ships the iOS library (#288) for the game ports' iOS apps (owner ruling 2026-11-17: "Yes, cut rc.2 after #288").
 - 2026-11-18 PM audit: ROADMAP gets a `features:` block (ten ids), the #240 question is recorded as settled, and the code map snapshot is re-dated. New issues from the peer and reuse audit: #294 (Ludusavi `C:` mapping, PR #296) and #295 (craft-atomic reuse, PR #297).
 - 2026-11-17 Spec re-approved (owner, in the Mac satellite session: "Everything is approved"): M17 and M18 (macOS and iOS in 1.0) and the roadmap changes of PR #290 (the Decisions list, rows A1-A4, step 15 waiting on them). After that approval, the 1.0 sentence was edited to name the Mac and the iPhone, to match M17 and M18 (the owner is asked about its wording in PR #290).

@@ -47,6 +47,38 @@ class SaveRelay(
     fun signInFinish(redirectUrl: String?): String =
         take(nativeSignInFinish(redirectUrl))
 
+    // Game files: resumable downloads from Dropbox (docs/assets.md, #305). `destDir` is where an
+    // app's files go and `stateDir` where the library keeps its checkpoints and `.part` files:
+    // app-private, on the same file system, neither inside the other, neither the saves folder.
+    // Every answer is the usual JSON envelope; an error also carries `error.class`
+    // ("retryable", "not_yet_uploaded", "reauth_needed" or "fatal").
+
+    /** What a download would do, from file sizes only (nothing is written). */
+    fun gameFilesPlan(appId: String?, destDir: String?, stateDir: String?): String =
+        take(nativeGameFilesPlan(appId, destDir, stateDir))
+
+    /**
+     * Downloads or resumes everything missing. Blocks until it finishes, fails or is cancelled:
+     * run it on a background thread (a foreground service for gigabytes) and poll
+     * [gameFilesProgress] from another. A killed process or a dropped network loses at most one
+     * chunk; call it again and it continues. The host's `SaveRelayHost.http` must send the
+     * request's `Range` header, return the 206 answer with its `Content-Range` and
+     * `Dropbox-API-Result` headers unchanged, use `Accept-Encoding: identity` and
+     * `Content-Type: application/octet-stream` (a bodiless POST otherwise gets a form type and a
+     * 400 from Dropbox), and stop at `maxResponseBytes`.
+     */
+    fun gameFilesDownload(appId: String?, destDir: String?, stateDir: String?): String =
+        take(nativeGameFilesDownload(appId, destDir, stateDir))
+
+    /** The latest progress of the running or last download (`data` is null before any). */
+    fun gameFilesProgress(): String = take(nativeGameFilesProgress())
+
+    /** Stops the running download after its current chunk is durable. */
+    fun gameFilesCancel(): String = take(nativeGameFilesCancel())
+
+    /** Removes the checkpoints and `.part` files in [stateDir] (never the game folder). */
+    fun gameFilesCleanup(stateDir: String?): String = take(nativeGameFilesCleanup(stateDir))
+
     override fun close() {
         if (!closed) {
             closed = true
@@ -107,6 +139,24 @@ class SaveRelay(
     ): Long
 
     private external fun nativeSignInFinish(redirectUrl: String?): Long
+
+    private external fun nativeGameFilesPlan(
+        appId: String?,
+        destDir: String?,
+        stateDir: String?,
+    ): Long
+
+    private external fun nativeGameFilesDownload(
+        appId: String?,
+        destDir: String?,
+        stateDir: String?,
+    ): Long
+
+    private external fun nativeGameFilesProgress(): Long
+
+    private external fun nativeGameFilesCancel(): Long
+
+    private external fun nativeGameFilesCleanup(stateDir: String?): Long
 
     companion object {
         init {
