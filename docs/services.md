@@ -11,22 +11,26 @@ After setup, the password or refresh token stays in the system credential store.
 Pick the service where you want to keep your saves. Use that same choice on every machine. You can also run setup without a service name and answer the question it asks.
 
 ```text
-save-relay setup --service nextcloud --server https://cloud.example.org --user me
+# For Nextcloud, follow the piped-input example below.
 save-relay setup --service gdrive
 save-relay setup --service dropbox
 ```
 
-Nextcloud asks for an address and user name, then an app password. Google Drive and Dropbox open a browser so you can sign in and approve access. Their sign-in uses PKCE and returns to save-relay through a small local web page. The browser page is on this machine; it passes the sign-in result back to the app.
+Nextcloud takes an address and user name as flags and reads an app password from standard input. Google Drive and Dropbox open a browser so you can sign in and approve access. Their sign-in uses PKCE and returns to save-relay through a small local web page. The browser page is on this machine; it passes the sign-in result back to the app.
 
 ## Nextcloud
 
-Use your Nextcloud address and user name. Create an app password in Nextcloud and give it to save-relay when asked. An app password is separate from your normal account password and can be revoked in Nextcloud.
+Use your Nextcloud address and user name. Create an app password in Nextcloud and supply it on standard input. An app password is separate from your normal account password and can be revoked in Nextcloud.
 
 ```text
+# Linux/macOS (bash): read without echo and pipe the password; it is not in argv.
+read -rs -p "App password: " relay_password; printf '\n'
+printf '%s\n' "$relay_password" |
 save-relay setup --service nextcloud --server https://cloud.example.org --user me
+unset relay_password
 ```
 
-The password is read privately during setup and saved in the system credential store. Nextcloud stores save-relay's files in its `save-relay` folder.
+Direct terminal input is refused because it would echo the password. A launcher can instead supply the password on its standard input pipe. On Windows, use a launcher that sends the password via a pipe. The password is saved in the system credential store. Nextcloud stores save-relay's files in its `save-relay` folder.
 
 ## Google Drive
 

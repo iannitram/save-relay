@@ -46,3 +46,18 @@ fn launch_option_uses_the_cli_binary_and_preserves_current_option_text() {
         .ends_with("%command%"));
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn stable_release_filename_is_recognized_in_launch_options() {
+    use save_relay::platform::Platform;
+    use save_relay::steam::launch::wrapped;
+    for (binary, platform) in [
+        ("/opt/tools/save-relay", Platform::Linux),
+        ("C:\\Tools\\save-relay.exe", Platform::Windows),
+        ("/opt/tools/save-relay", Platform::Mac),
+    ] {
+        let option = wrapped(Some("-novid %command%"), binary, platform);
+        assert!(is_wrapped(&option), "{option}");
+        assert_eq!(unwrapped(&option).as_deref(), Some("-novid %command%"));
+    }
+}

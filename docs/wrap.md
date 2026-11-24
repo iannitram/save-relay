@@ -12,6 +12,8 @@ save-relay wrap -- %command%
 
 Put that line in the game's Launch Options in Steam, or let `install-wrap` do it for you. `install-wrap` writes the full path to the program in place of `save-relay`. Options for `wrap` (`--game`, `--manifest`, `--saves-dir`) go before the `--`.
 
+The executable must be named `save-relay` on Linux/macOS or `save-relay.exe` on Windows. Verify the downloaded release against `SHA256SUMS` before renaming it; put it in a stable directory on PATH. Steam records its full path, so leave it there after adding wraps. If you move it, remove and add the wraps again with the binary in its new location.
+
 ## install-wrap
 
 `install-wrap` adds the wrap to the Launch Options of the games you name by Steam app id, or of every installed game save-relay knows with `--all-known`. `--dry-run` shows what would change and writes nothing. `--remove` takes the wrap back out.

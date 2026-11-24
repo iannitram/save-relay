@@ -1073,6 +1073,29 @@ pub fn run(args: &[String], stdin: &mut dyn Read, stdout: &mut dyn Write) -> i32
     )
 }
 
+/// Refuse Nextcloud password input from an echoing terminal before reading any bytes.
+/// Piped input and injected readers are unaffected. A launcher still gets one JSON envelope.
+pub fn refuse_terminal_password(
+    args: &[String],
+    is_terminal: bool,
+    stdout: &mut dyn Write,
+) -> Option<i32> {
+    if !is_terminal
+        || !matches!(
+            parse(args),
+            Ok(Args {
+                command: Command::Setup { .. },
+                ..
+            })
+        )
+    {
+        return None;
+    }
+    Some(print_failure(stdout, args.iter().any(|arg| arg == "--json"), "setup", &Error::Usage(
+        "Nextcloud password cannot be read safely from a terminal. Pipe it on standard input; see docs/services.md for private input instructions.".into(),
+    )))
+}
+
 /// Report an argument that cannot be represented as UTF-8. The binary checks this before
 /// converting `args_os`, so malformed arguments never get lossy-normalized into a command.
 pub fn non_utf8_argument(json: bool, stdout: &mut dyn Write) -> i32 {
