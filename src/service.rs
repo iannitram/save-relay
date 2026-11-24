@@ -191,6 +191,31 @@ pub fn open_with(
     })
 }
 
+/// Open the configured Dropbox backend directly for resumable game-file downloads (#305).
+pub fn open_dropbox(
+    config: &Config,
+    store: &dyn CredentialStore,
+    transport: Arc<dyn Transport>,
+    clock: Clock,
+    clients: &ClientSet,
+) -> Result<(Dropbox, TokenSource)> {
+    let service = Service::from_server(&config.server)?;
+    if service != Service::Dropbox {
+        return Err(Error::Usage(
+            "resumable game-file downloads require Dropbox".into(),
+        ));
+    }
+    let refresh = store
+        .get(&token_account(service, &config.user)?)?
+        .ok_or(Error::NotSetUp)?;
+    let client = client_for(service, clients, None)?;
+    let provider =
+        oauth::provider(service).ok_or_else(|| Error::Usage("no OAuth provider".into()))?;
+    let tokens = TokenSource::new(provider, client, refresh, transport.clone(), clock);
+    let handle = tokens.clone();
+    Ok((Dropbox::new(tokens, transport), handle))
+}
+
 /// The `Remote` of an OAuth service over `tokens`.
 fn backend(
     service: Service,
