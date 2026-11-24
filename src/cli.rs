@@ -157,6 +157,8 @@ pub enum Command {
     Status {
         game: GameArg,
     },
+    GlobalStatus,
+    SignOut,
     History {
         game: String,
     },
@@ -377,9 +379,19 @@ pub fn parse(args: &[String]) -> Result<Args> {
         }
         "status" => {
             let flags = split(&args[1..], &["--manifest", "--saves-dir", "--slot"], &[])?;
-            require(&flags.positionals, 1, &["<game>"])?;
-            Command::Status {
-                game: game_arg(flags.positionals[0], &flags)?,
+            if flags.positionals.is_empty() {
+                if flags.flag("--manifest").is_some()
+                    || flags.flag("--saves-dir").is_some()
+                    || flags.flag("--slot").is_some()
+                {
+                    return Err(Error::Usage("global status takes no game flags".into()));
+                }
+                Command::GlobalStatus
+            } else {
+                require(&flags.positionals, 1, &["<game>"])?;
+                Command::Status {
+                    game: game_arg(flags.positionals[0], &flags)?,
+                }
             }
         }
         "history" => {
@@ -411,18 +423,44 @@ pub fn parse(args: &[String]) -> Result<Args> {
                 entry: flags.positionals[1].to_string(),
             }
         }
+        "sign-out" => {
+            let flags = split(&args[1..], &[], &[])?;
+            require(&flags.positionals, 0, &[])?;
+            Command::SignOut
+        }
         "setup" => {
             let flags = split(
                 &args[1..],
-                &["--service", "--server", "--user", "--device", "--root"],
-                &["--no-browser", "--finish"],
+                &[
+                    "--service",
+                    "--server",
+                    "--url",
+                    "--user",
+                    "--device",
+                    "--root",
+                ],
+                &["--no-browser", "--finish", "--password-stdin"],
             )?;
-            require(&flags.positionals, 0, &[])?;
-            let server = flags.flag("--server");
+            if flags.positionals.len() > 1 {
+                return Err(Error::Usage("setup takes at most one service".into()));
+            }
+            if flags.flag("--service").is_some() && !flags.positionals.is_empty() {
+                return Err(Error::Usage(
+                    "use a service argument or --service, not both".into(),
+                ));
+            }
+            if flags.flag("--server").is_some() && flags.flag("--url").is_some() {
+                return Err(Error::Usage("use --server or --url, not both".into()));
+            }
+            let server = flags.flag("--server").or(flags.flag("--url"));
             let user = flags.flag("--user");
             let device = flags.flag("--device").map(String::from);
             let root = flags.flag("--root").unwrap_or(DEFAULT_ROOT).to_string();
-            let no_browser = flags.has("--no-browser");
+            let no_browser = flags.has("--no-browser")
+                || (json
+                    && !flags.positionals.is_empty()
+                    && !flags.has("--finish")
+                    && matches!(flags.positionals[0], "gdrive" | "dropbox"));
             let finish = flags.has("--finish");
             if no_browser && finish {
                 return Err(Error::Usage(
@@ -436,7 +474,10 @@ pub fn parse(args: &[String]) -> Result<Args> {
             } else {
                 SignInStep::Browser
             };
-            let service = match flags.flag("--service") {
+            let service = match flags
+                .flag("--service")
+                .or(flags.positionals.first().copied())
+            {
                 Some("nextcloud") => Some(Service::Nextcloud),
                 Some("gdrive") => Some(Service::Gdrive),
                 Some("dropbox") => Some(Service::Dropbox),
@@ -447,6 +488,9 @@ pub fn parse(args: &[String]) -> Result<Args> {
                 }
                 None => None,
             };
+            if flags.has("--password-stdin") && service != Some(Service::Nextcloud) {
+                return Err(Error::Usage("--password-stdin requires nextcloud".into()));
+            }
             match service {
                 Some(Service::Nextcloud) => {
                     if no_browser {
@@ -911,7 +955,8 @@ pub fn command_name(command: &Command) -> &'static str {
     match command {
         Command::Pull { .. } | Command::PullAnyway { .. } => "pull",
         Command::Push { .. } => "push",
-        Command::Status { .. } => "status",
+        Command::Status { .. } | Command::GlobalStatus => "status",
+        Command::SignOut => "sign-out",
         Command::History { .. } => "history",
         Command::Repair { .. } => "repair",
         Command::Restore { .. } => "restore",
@@ -937,7 +982,8 @@ pub fn usage() -> &'static str {
 Commands:
   pull    <game> [--manifest <file>] [--saves-dir <dir>] [--slot <n>] [--resolve keep-server|keep-local]
   push    <game> [--manifest <file>] [--saves-dir <dir>] [--slot <n>] [--resolve keep-server|keep-local]
-  status  <game> [--manifest <file>] [--saves-dir <dir>] [--slot <n>]
+  status  [<game> [--manifest <file>] [--saves-dir <dir>] [--slot <n>]]
+  sign-out
   history <game> [--slot <n>]
   repair  <game> [--slot <n>] [--yes]
   restore <game> <entry> [--manifest <file>] [--saves-dir <dir>] [--slot <n>]
@@ -952,10 +998,10 @@ Commands:
   where
   picture <game> <entry> --out <file> [--slot <n>]
   panel   [--port <n>] [--no-open]
-  setup   --server <url> --user <name> [--device <name>] [--root <folder>]
+  setup   [nextcloud] (--server|--url) <url> --user <name> [--password-stdin] [--device <name>] [--root <folder>]
           (reads the app password from the first line of standard input)
-  setup   --service gdrive|dropbox [--no-browser | --finish] [--device <name>] [--root <folder>]
-          (signs in through the browser; --finish reads Dropbox's code from standard input)
+  setup   (gdrive|dropbox | --service gdrive|dropbox) [--no-browser | --finish] [--device <name>] [--root <folder>]
+          (positional service with --json returns a challenge; --finish reads Dropbox's code from standard input)
   help | --help | -h
   version | --version | -V
 
@@ -1225,7 +1271,45 @@ pub fn run_with_net(
         return repair_command(game, *yes, json, stdin, stdout, &context);
     }
     match execute(command, stdin, &context) {
-        Ok(done) => {
+        Ok(mut done) => {
+            // The positional launcher form adds aliases without changing the existing panel contract.
+            let positional_oauth = {
+                let argv: Vec<&str> = args
+                    .iter()
+                    .map(String::as_str)
+                    .filter(|arg| *arg != "--json")
+                    .collect();
+                argv.first() == Some(&"setup")
+                    && split(
+                        &argv[1..],
+                        &[
+                            "--service",
+                            "--server",
+                            "--url",
+                            "--user",
+                            "--device",
+                            "--root",
+                        ],
+                        &["--no-browser", "--finish", "--password-stdin"],
+                    )
+                    .ok()
+                    .and_then(|flags| flags.positionals.first().copied())
+                    .is_some_and(|s| s == "gdrive" || s == "dropbox")
+            };
+            if json && positional_oauth {
+                if let Ok(mut envelope) = serde_json::from_str::<serde_json::Value>(&done.json) {
+                    if let Some(data) = envelope.get_mut("data").and_then(|v| v.as_object_mut()) {
+                        if let Some(url) = data.get("url").cloned() {
+                            data.insert("verification_url".into(), url);
+                            data.insert(
+                                "user_code".into(),
+                                data.get("code").cloned().unwrap_or(serde_json::Value::Null),
+                            );
+                            done.json = envelope.to_string();
+                        }
+                    }
+                }
+            }
             let shown = if json { &done.json } else { &done.text };
             let _ = writeln!(stdout, "{}", shown.trim_end());
             done.code
@@ -1285,7 +1369,7 @@ fn wrap_child(args: &[String]) -> Option<&[String]> {
 /// The command word for an envelope when the arguments did not parse: the first argument that
 /// is a command, else "unknown".
 fn guess_command(args: &[String]) -> String {
-    const NAMES: [&str; 18] = [
+    const NAMES: [&str; 19] = [
         "pull",
         "push",
         "status",
@@ -1293,6 +1377,7 @@ fn guess_command(args: &[String]) -> String {
         "repair",
         "restore",
         "setup",
+        "sign-out",
         "wrap",
         "which",
         "steam-games",
@@ -1350,6 +1435,8 @@ fn execute(command: Command, stdin: &mut dyn Read, cx: &Context) -> Result<Outco
         Command::PullAnyway { game, resolve } => sync_command("pull", &game, resolve, true, cx),
         Command::Push { game, resolve } => sync_command("push", &game, resolve, false, cx),
         Command::Status { game } => status(&game, cx),
+        Command::GlobalStatus => global_status(cx),
+        Command::SignOut => sign_out(cx),
         Command::History { game } => history(&game, cx),
         Command::Repair { .. } => unreachable!("repair runs with confirmation in run_with_net"),
         Command::Restore { game, entry } => restore(&game, &entry, cx),
@@ -1922,6 +2009,39 @@ fn answer_text(game: &str, answer: Answer) -> String {
         Answer::Wait => "the game waits until the open-elsewhere mark clears",
     };
     format!("Recorded {} for {game}: {effect}.", answer.key())
+}
+
+/// Report saved configuration without opening credentials or contacting a service.
+fn global_status(cx: &Context) -> Result<Outcome> {
+    let config = cx.store.load_config()?;
+    let data = match config {
+        Some(config) => {
+            serde_json::json!({"configured": true, "service": Service::from_server(&config.server)?.key(), "account": config.user})
+        }
+        None => serde_json::json!({"configured": false, "service": null, "account": null}),
+    };
+    Ok(outcome("status", &data, data.to_string(), 0))
+}
+
+/// Remove saved credentials before removing configuration, allowing a failed deletion to be retried.
+fn sign_out(cx: &Context) -> Result<Outcome> {
+    let mut accounts = BTreeSet::new();
+    if let Some(config) = cx.store.load_config()? {
+        accounts.extend(service::credential_accounts(&config)?);
+    }
+    for service in [Service::Gdrive, Service::Dropbox] {
+        accounts.insert(service::pending_account(service));
+    }
+    for account in accounts {
+        cx.creds.delete(&account)?;
+    }
+    cx.store.clear_config()?;
+    Ok(outcome(
+        "sign-out",
+        &serde_json::json!({}),
+        "Signed out.".into(),
+        0,
+    ))
 }
 
 /// Switching service or account starts fresh (docs/adr/0002-storage-backends.md): the credentials

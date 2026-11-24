@@ -1200,3 +1200,115 @@ fn text_mode_conflict_prompt_and_history_table() {
         )
     );
 }
+
+/// Executable consumer contract for the rc.2 slotted launcher example.
+#[test]
+fn rc2_slot_contract_keeps_two_slots_and_an_empty_third_separate() {
+    let contract: Value =
+        serde_json::from_str(include_str!("../examples/slot-contract-v1.0.0-rc.2.json")).unwrap();
+    assert_eq!(contract["contract_for"], "v1.0.0-rc.2");
+    let remote = Arc::new(MemoryRemote::new());
+    let a = Machine::new(&remote);
+    let b = Machine::new(&remote);
+    a.setup("first");
+    b.setup("second");
+    let invoke = |m: &Machine, command: &str, slot: u32, now| {
+        let dir = m.root.join(format!("slot-{slot}"));
+        fs::create_dir_all(&dir).unwrap();
+        let args: Vec<String> = contract["commands"][command]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|x| {
+                x.as_str()
+                    .unwrap()
+                    .replace("{manifest}", &m.root.join("demo.json").to_string_lossy())
+                    .replace("{slot_dir}", &dir.to_string_lossy())
+                    .replace("{slot}", &slot.to_string())
+            })
+            .collect();
+        let (code, out) = m.run_args(&args, "", now);
+        let v = one_envelope(&out);
+        assert_eq!(
+            v["data"]["game"],
+            contract["expected_game"]
+                .as_str()
+                .unwrap()
+                .replace("{slot}", &slot.to_string()),
+            "{v}"
+        );
+        (code, v)
+    };
+    for slot in 1..=3 {
+        fs::create_dir_all(a.root.join(format!("slot-{slot}"))).unwrap();
+    }
+    fs::write(a.root.join("slot-1/progress.sav"), "one").unwrap();
+    fs::write(a.root.join("slot-2/progress.sav"), "two").unwrap();
+    for slot in 1..=2 {
+        assert_eq!(invoke(&a, "push", slot, T0 + slot as u64).0, 0);
+    }
+    let slot2_before = invoke(&a, "history", 2, T0 + 25).1["data"].clone();
+    let (code, third) = invoke(&a, "pull", 3, T0 + 10);
+    assert_eq!(code, 0, "{third}");
+    assert!(!a.root.join("slot-3/progress.sav").exists());
+    assert!(invoke(&a, "history", 3, T0 + 11).1["data"]["entries"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    for slot in 1..=2 {
+        assert_eq!(invoke(&b, "pull", slot, T0 + 20 + slot as u64).0, 0);
+        assert_eq!(
+            fs::read_to_string(b.root.join(format!("slot-{slot}/progress.sav"))).unwrap(),
+            if slot == 1 { "one" } else { "two" }
+        );
+    }
+    fs::write(b.root.join("slot-1/progress.sav"), "remote change").unwrap();
+    assert_eq!(invoke(&b, "push", 1, T0 + 30).0, 0);
+    fs::write(a.root.join("slot-1/progress.sav"), "local change").unwrap();
+    let (code, conflict) = invoke(&a, "pull", 1, T0 + 40);
+    assert_eq!(code, 3, "{conflict}");
+    assert_eq!(conflict["data"]["action"], "conflict");
+    let (code, resolved) = invoke(&a, "resolve_pull", 1, T0 + 50);
+    assert_eq!(code, 0, "{resolved}");
+    assert_eq!(
+        fs::read_to_string(a.root.join("slot-1/progress.sav")).unwrap(),
+        "remote change"
+    );
+    assert_eq!(
+        fs::read_to_string(a.root.join("slot-2/progress.sav")).unwrap(),
+        "two"
+    );
+    fs::write(b.root.join("slot-1/progress.sav"), "second remote change").unwrap();
+    assert_eq!(invoke(&b, "push", 1, T0 + 55).0, 0);
+    fs::write(a.root.join("slot-1/progress.sav"), "keep this local change").unwrap();
+    let (code, conflict) = invoke(&a, "push", 1, T0 + 56);
+    assert_eq!(code, 3, "{conflict}");
+    assert_eq!(conflict["data"]["action"], "conflict");
+    let (code, resolved) = invoke(&a, "resolve_push", 1, T0 + 57);
+    assert_eq!(code, 0, "{resolved}");
+    assert_eq!(resolved["data"]["action"], "pushed");
+    assert_eq!(
+        fs::read_to_string(a.root.join("slot-1/progress.sav")).unwrap(),
+        "keep this local change"
+    );
+    assert_eq!(invoke(&a, "history", 2, T0 + 60).1["data"], slot2_before);
+    assert!(invoke(&a, "history", 3, T0 + 60).1["data"]["entries"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert!(!a.root.join("slot-3/progress.sav").exists());
+    assert_eq!(
+        invoke(&a, "history", 2, T0 + 60).1["data"]["entries"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        invoke(&a, "history", 1, T0 + 60).1["data"]["entries"]
+            .as_array()
+            .unwrap()
+            .len()
+            >= 2
+    );
+}
