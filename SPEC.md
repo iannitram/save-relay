@@ -6,6 +6,12 @@
 
 A project is Spec'd only when the line above has a date and a link. Change a Must or a Won't after approval and the approval line goes back to "not yet" until I approve again.
 
+## Thin-app installer scope (owner direction 2026-11-24)
+
+Save Relay also supplies the shared library service for Android and iOS thin apps to pull, install and resume their private prepared game-file chunks, alongside save sync. This is not an app store; the separate launcher repo is outside this implementation scope. The owner requested this extension directly on 2026-11-24 and named ACNH as the reference. It extends the earlier save-only scope without claiming the published RC already implements it.
+
+The required services are Dropbox, Nextcloud and Google Drive, reusing the configured session and credential store. A path/size/SHA-256 manifest, bounded byte-range reads, durable partial files, verified publication, restart skipping of verified complete files, progress and pause/cancel form the shared contract (#305 -> #309 -> #310). Assets live separately from save histories and never cause save files, user settings or unrelated files to be overwritten. Preserve ACNH's existing private Dropbox layout through an explicit compatibility/migration contract. Proprietary game files stay in the owner's storage and app sandbox; none go into this repo, CI, releases or public links. Mobile apps own foreground/background scheduling. Existing Mac/iOS and save-sync acceptance requirements remain.
+
 ## Musts
 
 Each Must is something a person can do and see. Each one gets its own issue, and each issue names the check that proves it.
@@ -45,7 +51,7 @@ M17 and M18 moved here from the Shoulds on 2026-11-17 (owner ruling 2026-11-17, 
 - A guessed saves folder: a wrapped game with no clear entry is refused (M13).
 - Any storage other than my Nextcloud (WebDAV), Google Drive and Dropbox; Steam Cloud.
 - Moving saves from one service to another automatically: switching services starts fresh (I can push again from any machine).
-- Settings, shader caches or logs: saves only (a save card's small picture and text travel with the save they describe).
+- Settings or logs in save sync: saves only (a save card's small picture and text travel with the save they describe). Thin-app prepared assets use the separate installer namespace, not save history.
 - A panel outside Steam's Game Mode other than `save-relay panel` in the browser (no tray app, no desktop window).
 
 ## Prior art
