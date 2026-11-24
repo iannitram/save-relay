@@ -81,3 +81,7 @@ The Drive 409 check uses two token-source sessions on this machine. Using an id 
 Switching services starts fresh. Saves in the old service are not copied to the new one. Set up the new service on every machine. Then push again from the machine that has the newest saves, before syncing from the other machines.
 
 To check which service this machine uses, run `save-relay status` for a game. If Drive or Dropbox reports `reauth_needed`, sign in again with the same setup for that service. If setup reports `sign_in_failed`, start that service's setup again and finish the sign-in. These errors do not mean you should choose a different service.
+
+## Planned game-file downloads
+
+Save Relay is also planned to act as an installer hub for a game's prepared files using the same chosen service and sign-in. This is a design, not a released download feature. Assets remain separate from save data. Google Drive's `drive.file` scope only covers files created or opened with the app or explicitly shared with it; placing existing files in a folder alone does not make every file accessible. See [the installer design](assets.md) for the layout, resumable transfer, and current limits.
