@@ -35,6 +35,15 @@ class SaveRelay(
         root: String? = null,
     ): String = take(nativeSignInStart(service, redirectUri, device, root))
 
+    /**
+     * Completes browser OAuth using the redirect URL returned to the app.
+     *
+     * On Android 15+, reply to the loopback redirect and bring the app back to the foreground
+     * before calling this method (backgrounded apps without a foreground service have outbound
+     * DNS/HTTP blocked). On `server_unreachable` or `server_error`, save-relay keeps the pending
+     * sign-in so the caller can retry briefly once foreground network access is restored.
+     * See `docs/android.md`.
+     */
     fun signInFinish(redirectUrl: String?): String =
         take(nativeSignInFinish(redirectUrl))
 

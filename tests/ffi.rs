@@ -506,3 +506,58 @@ fn platform_sign_in_takes_the_apps_browser_session_and_stores_the_token_only_the
     let again = envelope(unsafe { save_relay_sign_in_finish(c(&redirect).as_ptr()) });
     assert_eq!(again["error"]["code"], "sign_in_failed", "{again}");
 }
+
+struct FailThenDelegate {
+    remaining_failures: std::sync::atomic::AtomicUsize,
+    inner: Arc<FakeDropbox>,
+}
+
+impl save_relay::http::Transport for FailThenDelegate {
+    fn send(
+        &self,
+        request: &save_relay::http::Request,
+    ) -> save_relay::Result<save_relay::http::Response> {
+        let prev = self
+            .remaining_failures
+            .load(std::sync::atomic::Ordering::SeqCst);
+        if prev > 0 {
+            self.remaining_failures
+                .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            return Err(save_relay::Error::Unreachable(
+                "the app's network call failed".into(),
+            ));
+        }
+        self.inner.send(request)
+    }
+}
+
+#[test]
+fn platform_sign_in_finish_keeps_pending_state_on_unreachable_for_foreground_retry() {
+    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+    let fake = Arc::new(FakeDropbox::new());
+    let transport = Arc::new(FailThenDelegate {
+        remaining_failures: std::sync::atomic::AtomicUsize::new(1),
+        inner: fake.clone(),
+    });
+    let device = Device::new("platform-sign-in-retry");
+    assert_eq!(
+        device.init_with(Some(Arc::new(MemoryRemote::new())), Some(transport))["ok"],
+        true
+    );
+
+    let started = start_dropbox_sign_in();
+    assert_eq!(started["ok"], true, "{started}");
+    let state = state_of(started["data"]["url"].as_str().unwrap());
+    let redirect = format!("saverelay://oauth?code={SIGN_IN_CODE}&state={state}");
+
+    // First attempt fails (e.g. Android 15 APP_BACKGROUND DNS block before returning to foreground).
+    let blocked = envelope(unsafe { save_relay_sign_in_finish(c(&redirect).as_ptr()) });
+    assert_eq!(blocked["ok"], false, "{blocked}");
+    assert_eq!(blocked["error"]["code"], "server_unreachable", "{blocked}");
+
+    // Pending sign-in is preserved: retrying with the same redirect once back in the foreground succeeds.
+    let finished = envelope(unsafe { save_relay_sign_in_finish(c(&redirect).as_ptr()) });
+    assert_eq!(finished["ok"], true, "{finished}");
+    assert_eq!(finished["data"]["service"], "dropbox");
+    assert_eq!(finished["data"]["user"], "fake@example.com");
+}
