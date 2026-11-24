@@ -81,3 +81,11 @@ The Drive 409 check uses two token-source sessions on this machine. Using an id 
 Switching services starts fresh. Saves in the old service are not copied to the new one. Set up the new service on every machine. Then push again from the machine that has the newest saves, before syncing from the other machines.
 
 To check which service this machine uses, run `save-relay status` for a game. If Drive or Dropbox reports `reauth_needed`, sign in again with the same setup for that service. If setup reports `sign_in_failed`, start that service's setup again and finish the sign-in. These errors do not mean you should choose a different service.
+
+### Launcher setup contract
+
+A launcher can query `save-relay status --json` without a network request. Its `data` has `configured`, `service`, and `account`; an unconfigured machine returns `false` and null values. This reports the saved configuration, not whether its credentials or service are currently reachable. `status <game> --json` retains its game-specific meaning.
+
+For Nextcloud, run `setup nextcloud --url <url> --user <name> --password-stdin --json` and write the app password followed by a newline to standard input. For Google Drive or Dropbox, run `setup gdrive --json` or `setup dropbox --json`; `data.verification_url` and `data.user_code` mirror the existing `url` and `code` fields. Nothing is configured until the launcher completes the challenge with `setup <service> --finish --json`. Dropbox's code from the web page goes on standard input; Google completes the device flow without a typed stdin code. A failed transient exchange can be retried with `--finish`. The existing `--service` forms remain available.
+
+`sign-out --json` deletes the current service's stored credentials and pending Google and Dropbox sign-ins before removing configuration. It leaves game records and save history in place. If deletion fails, configuration remains so the operation can be retried.

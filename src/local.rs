@@ -141,6 +141,15 @@ impl LocalStore {
         write_json(&self.dirs.config.join("config.json"), config)
     }
 
+    /// Remove configuration after credentials have been deleted. Missing configuration is fine.
+    pub fn clear_config(&self) -> Result<()> {
+        match fs::remove_file(self.dirs.config.join("config.json")) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
     /// `None` when this machine never synced `game`.
     pub fn load_last(&self, game: &str) -> Result<Option<LastSynced>> {
         read_json(&self.dirs.data.join("last").join(format!("{game}.json")))

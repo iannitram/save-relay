@@ -921,3 +921,164 @@ fn a_refresh_token_the_service_rotates_is_stored_after_the_command() {
         ROTATED
     );
 }
+
+#[test]
+fn launcher_setup_status_and_sign_out_cover_all_services() {
+    for service in [Service::Nextcloud, Service::Gdrive, Service::Dropbox] {
+        let machine = Machine::new();
+        let transport = if service == Service::Gdrive {
+            drive().1
+        } else {
+            dropbox().1
+        };
+        let (code, status) = machine.json(&transport, "status", "");
+        assert_eq!(code, 0, "{status}");
+        assert_eq!(status["data"]["configured"], false);
+        let secret = "private-app-password";
+        let (code, answer) = match service {
+            Service::Nextcloud => machine.json(
+                &transport,
+                "setup nextcloud --url https://example.org --user alice --password-stdin",
+                &format!("{secret}\n"),
+            ),
+            Service::Gdrive | Service::Dropbox => {
+                let (code, prompt) =
+                    machine.json(&transport, &format!("setup {}", service.key()), "");
+                assert_eq!(code, 0, "{prompt}");
+                assert_eq!(prompt["data"]["verification_url"], prompt["data"]["url"]);
+                assert_eq!(prompt["data"]["user_code"], prompt["data"]["code"]);
+                assert!(machine.store.load_config().unwrap().is_none());
+                let input = if service == Service::Dropbox {
+                    format!("{SIGN_IN_CODE}\n")
+                } else {
+                    String::new()
+                };
+                machine.json(
+                    &transport,
+                    &format!("setup {} --finish", service.key()),
+                    &input,
+                )
+            }
+        };
+        assert_eq!(code, 0, "{answer}");
+        assert!(!answer.to_string().contains(secret));
+        assert!(!answer.to_string().contains(REFRESH_TOKEN));
+        machine.assert_no_secret_on_disk(&[secret, REFRESH_TOKEN]);
+        let (code, status) = machine.json(&transport, "status", "");
+        assert_eq!(code, 0, "{status}");
+        assert_eq!(status["data"]["configured"], true);
+        assert_eq!(status["data"]["service"], service.key());
+        assert_eq!(
+            status["data"]["account"],
+            if service == Service::Nextcloud {
+                "alice"
+            } else {
+                ACCOUNT
+            }
+        );
+        let config = machine.store.load_config().unwrap().unwrap();
+        let accounts = save_relay::service::credential_accounts(&config).unwrap();
+        let (code, signed_out) = machine.json(&transport, "sign-out", "");
+        assert_eq!(code, 0, "{signed_out}");
+        for account in accounts {
+            assert!(machine.creds.get(&account).unwrap().is_none());
+        }
+        assert!(machine.store.load_config().unwrap().is_none());
+        assert_eq!(
+            machine.json(&transport, "status", "").1["data"]["configured"],
+            false
+        );
+        assert_eq!(machine.json(&transport, "sign-out", "").0, 0);
+    }
+}
+
+struct NoNetwork;
+impl Transport for NoNetwork {
+    fn send(&self, _: &Request) -> Result<Response> {
+        panic!("global status must not use the network")
+    }
+}
+
+#[test]
+fn global_status_never_uses_network() {
+    let machine = Machine::new();
+    let transport: Arc<dyn Transport> = Arc::new(NoNetwork);
+    for server in ["https://example.org", "gdrive", "dropbox"] {
+        machine
+            .store
+            .save_config(&save_relay::local::Config {
+                format: 1,
+                server: server.into(),
+                user: "alice".into(),
+                root: "save-relay".into(),
+                device: "desk".into(),
+            })
+            .unwrap();
+        assert_eq!(machine.json(&transport, "status", "").0, 0);
+    }
+}
+
+struct DeleteFails;
+impl CredentialStore for DeleteFails {
+    fn get(&self, _: &str) -> Result<Option<Secret>> {
+        Ok(None)
+    }
+    fn set(&self, _: &str, _: &Secret) -> Result<()> {
+        Ok(())
+    }
+    fn delete(&self, _: &str) -> Result<()> {
+        Err(Error::Credentials("delete failed".into()))
+    }
+    fn kind(&self) -> &'static str {
+        "test"
+    }
+}
+
+#[test]
+fn failed_sign_out_keeps_configuration_for_retry() {
+    let machine = Machine::new();
+    machine
+        .store
+        .save_config(&save_relay::local::Config {
+            format: 1,
+            server: "dropbox".into(),
+            user: "alice".into(),
+            root: "save-relay".into(),
+            device: "desk".into(),
+        })
+        .unwrap();
+    let net = Net {
+        transport: dropbox().1,
+        open_browser: &no_browser,
+        clients: test_clients(),
+        game_mode: false,
+        clock,
+    };
+    let mut output = Vec::new();
+    let args = vec!["sign-out".into(), "--json".into()];
+    assert_ne!(
+        run_with_net(
+            &args,
+            &mut &b""[..],
+            &mut output,
+            &MemoryRemote::new(),
+            &DeleteFails,
+            &machine.store,
+            &machine.vars,
+            T0,
+            &net
+        ),
+        0
+    );
+    assert!(machine.store.load_config().unwrap().is_some());
+}
+
+#[test]
+fn launcher_challenge_accepts_flags_before_service() {
+    let machine = Machine::new();
+    let (_, transport) = dropbox();
+    let (code, prompt) = machine.json(&transport, "setup --device desk dropbox", "");
+    assert_eq!(code, 0, "{prompt}");
+    assert_eq!(prompt["data"]["verification_url"], prompt["data"]["url"]);
+    assert!(prompt["data"]["verification_url"].is_string());
+}
