@@ -82,6 +82,12 @@ char *save_relay_sign_in_start(const char *service, const char *redirect_uri, co
                                const char *root);
 char *save_relay_sign_in_finish(const char *redirect_url);
 
+/* Resumable per-game asset downloads through the configured Dropbox App folder (#305).
+ * `manifest_json` is a GameFilesManifest JSON (`game_id`, optional `remote_root`, `files`).
+ * `dest_dir` is the local game directory; `.part` files resume across power loss or restarts. */
+char *save_relay_download_game_files(const char *manifest_json, const char *dest_dir);
+char *save_relay_game_files_status(const char *manifest_json, const char *dest_dir);
+
 /* Free a string returned above. NULL is ignored. */
 void save_relay_free(char *pointer);
 
