@@ -25,7 +25,8 @@ Use your Nextcloud address and user name. Create an app password in Nextcloud an
 ```text
 # Linux/macOS (bash): read without echo and pipe the password; it is not in argv.
 read -rs -p "App password: " relay_password; printf '\n'
-printf '%s\n' "$relay_password" | save-relay setup --service nextcloud --server https://cloud.example.org --user me
+printf '%s\n' "$relay_password" |
+save-relay setup --service nextcloud --server https://cloud.example.org --user me
 unset relay_password
 ```
 
