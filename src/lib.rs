@@ -5,6 +5,7 @@
 //! docs/adr/0003-baton-wrap-cards-panel.md). The map of this crate is `docs/code-map.md`.
 
 pub mod api;
+pub mod assets;
 pub mod card;
 pub mod cli;
 pub mod clients;

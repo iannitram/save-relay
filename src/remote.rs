@@ -32,11 +32,33 @@ pub enum Precondition {
     Absent,
 }
 
+/// A validated contiguous portion with the provider identity observed for that response.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RangeChunk {
+    pub bytes: Vec<u8>,
+    pub total: u64,
+    pub identity: String,
+}
+
+/// Maximum in-memory response for an asset chunk.
+pub const MAX_RANGE_BYTES: usize = 1024 * 1024;
+
 pub trait Remote {
     /// The direct children of folder `dir`, sorted by name. Missing: `Error::NotFound(dir)`.
     fn list(&self, dir: &str) -> Result<Vec<RemoteEntry>>;
     /// A file's bytes and etag. Missing, or a folder: `Error::NotFound(path)`.
     fn get(&self, path: &str) -> Result<(Vec<u8>, String)>;
+    /// Read at most `length` bytes from `offset`, requiring the same representation when
+    /// `identity` is supplied. Implementations must never fall back to unbounded `get`.
+    fn read_range(
+        &self,
+        _path: &str,
+        _offset: u64,
+        _length: usize,
+        _identity: Option<&str>,
+    ) -> Result<RangeChunk> {
+        Err(Error::Server("bounded range reads unsupported".into()))
+    }
     /// Write a file and return its new etag. A precondition that fails is `Error::Changed`;
     /// a missing parent folder is `Error::NotFound(parent)`.
     fn put(&self, path: &str, bytes: &[u8], pre: &Precondition) -> Result<String>;
@@ -261,6 +283,39 @@ impl Remote for MemoryRemote {
         match inner.nodes.get(path) {
             Some(Node::File { bytes, etag }) => Ok((bytes.clone(), etag.clone())),
             _ => Err(Error::NotFound(path.to_string())),
+        }
+    }
+
+    fn read_range(
+        &self,
+        path: &str,
+        offset: u64,
+        length: usize,
+        identity: Option<&str>,
+    ) -> Result<RangeChunk> {
+        if length == 0 || length > MAX_RANGE_BYTES {
+            return Err(Error::Usage("invalid range length".into()));
+        }
+        let inner = self.lock();
+        inner.offline()?;
+        match inner.nodes.get(path) {
+            Some(Node::File { bytes, etag }) => {
+                if identity.is_some_and(|v| v != etag) {
+                    return Err(Error::Changed);
+                }
+                let start = usize::try_from(offset)
+                    .map_err(|_| Error::Server("range outside file".into()))?;
+                if start >= bytes.len() {
+                    return Err(Error::Server("range outside file".into()));
+                }
+                let end = start.saturating_add(length).min(bytes.len());
+                Ok(RangeChunk {
+                    bytes: bytes[start..end].to_vec(),
+                    total: bytes.len() as u64,
+                    identity: etag.clone(),
+                })
+            }
+            _ => Err(Error::NotFound(path.into())),
         }
     }
 

@@ -438,6 +438,55 @@ impl crate::remote::Remote for WebDav {
         Ok((response.body, etag))
     }
 
+    fn read_range(
+        &self,
+        path: &str,
+        offset: u64,
+        length: usize,
+        identity: Option<&str>,
+    ) -> Result<crate::remote::RangeChunk> {
+        if length == 0 || length > crate::remote::MAX_RANGE_BYTES {
+            return Err(Error::Usage("invalid range length".into()));
+        }
+        let end = offset
+            .checked_add(length as u64 - 1)
+            .ok_or_else(|| Error::Usage("range overflow".into()))?;
+        let mut request = crate::http::Request::new("GET", &self.url(path))
+            .header("Authorization", &self.auth)
+            .header("Range", &format!("bytes={offset}-{end}"))
+            .header("Accept-Encoding", "identity")
+            .max_response_bytes(length);
+        if let Some(want) = identity {
+            request = request.header("If-Match", want);
+        }
+        let response = self.transport.send(&request)?;
+        match response.status {
+            401 | 403 => return Err(Error::AuthFailed),
+            404 => return Err(Error::NotFound(path.into())),
+            412 => return Err(Error::Changed),
+            _ => {}
+        }
+        let etag = response
+            .header_value("ETag")
+            .filter(|s| s.starts_with('"') && s.ends_with('"'))
+            .ok_or_else(|| Error::Server("webdav: missing strong ETag".into()))?
+            .to_string();
+        if identity.is_some_and(|want| want != etag.as_str()) {
+            return Err(Error::Changed);
+        }
+        let total = response
+            .header_value("Content-Range")
+            .and_then(|v| v.rsplit_once('/'))
+            .and_then(|(_, n)| n.parse().ok())
+            .ok_or_else(|| Error::Server("webdav: missing range total".into()))?;
+        crate::assets::validate_range_response(&response, offset, length, total)?;
+        Ok(crate::remote::RangeChunk {
+            bytes: response.body,
+            total,
+            identity: etag,
+        })
+    }
+
     fn put(&self, path: &str, bytes: &[u8], pre: &crate::remote::Precondition) -> Result<String> {
         let headers: Vec<(&str, String)> = match pre {
             crate::remote::Precondition::Any => vec![],

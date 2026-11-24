@@ -824,6 +824,66 @@ impl Remote for Drive {
         ))
     }
 
+    fn read_range(
+        &self,
+        path: &str,
+        offset: u64,
+        length: usize,
+        identity: Option<&str>,
+    ) -> Result<crate::remote::RangeChunk> {
+        if length == 0 || length > crate::remote::MAX_RANGE_BYTES {
+            return Err(Error::Usage("invalid range length".into()));
+        }
+        let end = offset
+            .checked_add(length as u64 - 1)
+            .ok_or_else(|| Error::Usage("range overflow".into()))?;
+        let mut file = root();
+        for part in path.split('/') {
+            if part.is_empty() || !file.is_dir {
+                return Err(Error::NotFound(path.into()));
+            }
+            let matching: Vec<_> = self
+                .children(&file.id, Some(part))?
+                .into_iter()
+                .filter(|f| f.name == part)
+                .collect();
+            if matching.len() != 1 {
+                return Err(Error::Server(
+                    "drive: missing or ambiguous asset path".into(),
+                ));
+            }
+            file = matching.into_iter().next().expect("one match");
+        }
+        if file.is_dir {
+            return Err(Error::NotFound(path.into()));
+        }
+        let current = format!("{}:{}", file.id, file.version);
+        if identity.is_some_and(|want| want != current) {
+            return Err(Error::Changed);
+        }
+        let response = self.send(
+            Request::new(
+                "GET",
+                &format!("{API}/files/{}?alt=media", encode_segment(&file.id)),
+            )
+            .header("Range", &format!("bytes={offset}-{end}"))
+            .header("Accept-Encoding", "identity")
+            .max_response_bytes(length),
+            path,
+            None,
+        )?;
+        let seen = self.metadata(&file.id, path)?;
+        if seen.version != file.version || seen.size != file.size {
+            return Err(Error::Changed);
+        }
+        crate::assets::validate_range_response(&response, offset, length, file.size)?;
+        Ok(crate::remote::RangeChunk {
+            bytes: response.body,
+            total: file.size,
+            identity: current,
+        })
+    }
+
     fn put(&self, path: &str, bytes: &[u8], pre: &Precondition) -> Result<String> {
         if path.is_empty() {
             return Err(Error::Server("drive: cannot write the files root".into()));

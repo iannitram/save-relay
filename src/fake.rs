@@ -19,3 +19,24 @@ pub const SIGN_IN_CODE: &str = "fake-sign-in-code";
 
 /// The device code the Drive fake issues for its device flow and accepts when polled.
 pub const DEVICE_CODE: &str = "fake-device-code";
+
+fn ranged(bytes: &[u8], request: &crate::http::Request) -> Option<crate::http::Response> {
+    let value = request.header_value("Range")?;
+    let parsed = value
+        .strip_prefix("bytes=")
+        .and_then(|s| s.split_once('-'))
+        .and_then(|(a, b)| Some((a.parse::<usize>().ok()?, b.parse::<usize>().ok()?)));
+    let Some((start, end)) = parsed else {
+        return Some(crate::http::Response::new(416, Vec::new()));
+    };
+    if start >= bytes.len() || end < start {
+        return Some(crate::http::Response::new(416, Vec::new()));
+    }
+    let end = end.min(bytes.len() - 1);
+    Some(
+        crate::http::Response::new(206, bytes[start..=end].to_vec()).header(
+            "Content-Range",
+            &format!("bytes {start}-{end}/{}", bytes.len()),
+        ),
+    )
+}

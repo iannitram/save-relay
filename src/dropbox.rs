@@ -147,6 +147,7 @@ pub fn classify(op: Op, status: u16, body: &str, path: &str) -> Outcome {
         .unwrap_or_default();
     match status {
         200 => return Outcome::Ok,
+        206 if op == Op::Get => return Outcome::Ok,
         401 => return Outcome::Refresh,
         429 | 500..=599 => return Outcome::Retry,
         409 => {}
@@ -421,6 +422,53 @@ impl Remote for Dropbox {
         let rev = parse_rev(response.header_value("Dropbox-API-Result").unwrap_or(""))?;
         Ok((response.body, rev))
     }
+    fn read_range(
+        &self,
+        path: &str,
+        offset: u64,
+        length: usize,
+        identity: Option<&str>,
+    ) -> Result<crate::remote::RangeChunk> {
+        checked(path)?;
+        if length == 0 || length > crate::remote::MAX_RANGE_BYTES {
+            return Err(Error::Usage("invalid range length".into()));
+        }
+        let end = offset
+            .checked_add(length as u64 - 1)
+            .ok_or_else(|| Error::Usage("range overflow".into()))?;
+        let response = self.send(
+            Request::new("POST", &format!("{CONTENT}/files/download"))
+                .header(
+                    "Dropbox-API-Arg",
+                    &header_json(&json!({"path": api_path(path)})),
+                )
+                .header("Range", &format!("bytes={offset}-{end}"))
+                .header("Accept-Encoding", "identity")
+                .max_response_bytes(length),
+            Op::Get,
+            path,
+        )?;
+        let metadata: Value =
+            serde_json::from_str(response.header_value("Dropbox-API-Result").unwrap_or(""))
+                .map_err(|_| Error::Server("dropbox: bad range metadata".into()))?;
+        let revision = metadata["rev"]
+            .as_str()
+            .filter(|r| !r.is_empty())
+            .ok_or_else(|| Error::Server("dropbox: missing range revision".into()))?;
+        if identity.is_some_and(|want| want != revision) {
+            return Err(Error::Changed);
+        }
+        let total = metadata["size"]
+            .as_u64()
+            .ok_or_else(|| Error::Server("dropbox: missing range size".into()))?;
+        crate::assets::validate_range_response(&response, offset, length, total)?;
+        Ok(crate::remote::RangeChunk {
+            bytes: response.body,
+            total,
+            identity: revision.to_string(),
+        })
+    }
+
     fn put(&self, path: &str, bytes: &[u8], pre: &Precondition) -> Result<String> {
         checked(path)?;
         if path.is_empty() {

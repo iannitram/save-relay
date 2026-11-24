@@ -879,7 +879,9 @@ impl Inner {
             if node.is_dir {
                 return bad_request("fake drive: a folder has no media");
             }
-            return Response::new(200, node.bytes.clone()).header("Content-Type", &node.mime_type);
+            return crate::fake::ranged(&node.bytes, request)
+                .unwrap_or_else(|| Response::new(200, node.bytes.clone()))
+                .header("Content-Type", &node.mime_type);
         }
         Response::new(200, node_json(node).to_string())
     }

@@ -81,6 +81,7 @@ pub struct SaveRelayHttpRequest {
 /// Where the app's `http` callback puts the answer (`save_relay_http_respond`). Opaque.
 pub struct SaveRelayHttpSink {
     response: Option<Response>,
+    max_response_bytes: Option<usize>,
 }
 
 struct Host {
@@ -236,7 +237,10 @@ impl Transport for HostTransport {
             body_len: request.body.len(),
             max_response_bytes: request.max_response_bytes.unwrap_or(0),
         };
-        let mut sink = SaveRelayHttpSink { response: None };
+        let mut sink = SaveRelayHttpSink {
+            response: None,
+            max_response_bytes: request.max_response_bytes,
+        };
         // SAFETY: every pointer in `native` lives through the call.
         let status = unsafe { (self.0.http)(self.0.user_data as *mut c_void, &native, &mut sink) };
         match (status, sink.response) {
@@ -268,7 +272,10 @@ pub unsafe extern "C" fn save_relay_http_respond(
 ) -> c_int {
     catch_unwind(AssertUnwindSafe(|| {
         let Some(sink) = sink.as_mut() else { return 1 };
-        if (body.is_null() && body_len != 0) || body_len > isize::MAX as usize {
+        if (body.is_null() && body_len != 0)
+            || body_len > isize::MAX as usize
+            || sink.max_response_bytes.is_some_and(|max| body_len > max)
+        {
             return 1;
         }
         let headers = match optional_text(headers, "headers") {
@@ -738,4 +745,29 @@ pub unsafe extern "C" fn save_relay_free(pointer: *mut c_char) {
             drop(CString::from_raw(pointer));
         }
     }));
+}
+
+#[cfg(test)]
+mod range_sink_tests {
+    use super::*;
+
+    #[test]
+    fn rejects_oversized_response_before_copying() {
+        let mut sink = SaveRelayHttpSink {
+            response: None,
+            max_response_bytes: Some(2),
+        };
+        let bytes = [0u8; 3];
+        let result = unsafe {
+            save_relay_http_respond(
+                &mut sink,
+                200,
+                std::ptr::null(),
+                bytes.as_ptr(),
+                bytes.len(),
+            )
+        };
+        assert_eq!(result, 1);
+        assert!(sink.response.is_none());
+    }
 }

@@ -651,10 +651,12 @@ impl Inner {
             return path_not_file();
         }
         match self.metadata(&path) {
-            Some(metadata) => Response::new(200, node.bytes).header(
-                "Dropbox-API-Result",
-                &crate::dropbox::header_json(&metadata),
-            ),
+            Some(metadata) => crate::fake::ranged(&node.bytes, request)
+                .unwrap_or_else(|| Response::new(200, node.bytes))
+                .header(
+                    "Dropbox-API-Result",
+                    &crate::dropbox::header_json(&metadata),
+                ),
             None => path_not_found(),
         }
     }
