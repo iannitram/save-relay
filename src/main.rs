@@ -1,6 +1,6 @@
 //! `save-relay`: see `cli` for the commands.
 
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 
 fn main() {
     let raw: Vec<_> = std::env::args_os().skip(1).collect();
@@ -14,7 +14,14 @@ fn main() {
             std::process::exit(code);
         }
     };
-    let code = save_relay::cli::run(&args, &mut std::io::stdin(), &mut stdout);
+    let code = match save_relay::cli::refuse_terminal_password(
+        &args,
+        std::io::stdin().is_terminal(),
+        &mut stdout,
+    ) {
+        Some(code) => code,
+        None => save_relay::cli::run(&args, &mut std::io::stdin(), &mut stdout),
+    };
     let _ = stdout.flush();
     std::process::exit(code);
 }

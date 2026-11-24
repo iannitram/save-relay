@@ -50,4 +50,4 @@ save-relay setup --service dropbox --finish
 
 ## Limits
 
-The panel never runs `wrap`, `install-wrap` or `panel`. Everything it does, the command line can do too. It only listens on 127.0.0.1 and answers one request at a time. To set up Nextcloud, use the command line.
+The panel never runs `wrap` or `panel`; the browser panel uses `install-wrap` for Add games. Everything it does, the command line can do too. It only listens on 127.0.0.1 and handles requests concurrently. To set up Nextcloud, use the command line.
