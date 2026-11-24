@@ -1247,6 +1247,7 @@ fn rc2_slot_contract_keeps_two_slots_and_an_empty_third_separate() {
     for slot in 1..=2 {
         assert_eq!(invoke(&a, "push", slot, T0 + slot as u64).0, 0);
     }
+    let slot2_before = invoke(&a, "history", 2, T0 + 25).1["data"].clone();
     let (code, third) = invoke(&a, "pull", 3, T0 + 10);
     assert_eq!(code, 0, "{third}");
     assert!(!a.root.join("slot-3/progress.sav").exists());
@@ -1277,6 +1278,25 @@ fn rc2_slot_contract_keeps_two_slots_and_an_empty_third_separate() {
         fs::read_to_string(a.root.join("slot-2/progress.sav")).unwrap(),
         "two"
     );
+    fs::write(b.root.join("slot-1/progress.sav"), "second remote change").unwrap();
+    assert_eq!(invoke(&b, "push", 1, T0 + 55).0, 0);
+    fs::write(a.root.join("slot-1/progress.sav"), "keep this local change").unwrap();
+    let (code, conflict) = invoke(&a, "push", 1, T0 + 56);
+    assert_eq!(code, 3, "{conflict}");
+    assert_eq!(conflict["data"]["action"], "conflict");
+    let (code, resolved) = invoke(&a, "resolve_push", 1, T0 + 57);
+    assert_eq!(code, 0, "{resolved}");
+    assert_eq!(resolved["data"]["action"], "pushed");
+    assert_eq!(
+        fs::read_to_string(a.root.join("slot-1/progress.sav")).unwrap(),
+        "keep this local change"
+    );
+    assert_eq!(invoke(&a, "history", 2, T0 + 60).1["data"], slot2_before);
+    assert!(invoke(&a, "history", 3, T0 + 60).1["data"]["entries"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert!(!a.root.join("slot-3/progress.sav").exists());
     assert_eq!(
         invoke(&a, "history", 2, T0 + 60).1["data"]["entries"]
             .as_array()

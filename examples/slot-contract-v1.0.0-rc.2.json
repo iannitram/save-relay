@@ -5,6 +5,7 @@
     "pull": ["pull", "demo-game", "--manifest", "{manifest}", "--saves-dir", "{slot_dir}", "--slot", "{slot}", "--json"],
     "push": ["push", "demo-game", "--manifest", "{manifest}", "--saves-dir", "{slot_dir}", "--slot", "{slot}", "--json"],
     "resolve_pull": ["pull", "demo-game", "--manifest", "{manifest}", "--saves-dir", "{slot_dir}", "--slot", "{slot}", "--resolve", "keep-server", "--json"],
+    "resolve_push": ["push", "demo-game", "--manifest", "{manifest}", "--saves-dir", "{slot_dir}", "--slot", "{slot}", "--resolve", "keep-local", "--json"],
     "history": ["history", "demo-game", "--slot", "{slot}", "--json"]
   },
   "expected_game": "demo-game-slot-{slot}"
