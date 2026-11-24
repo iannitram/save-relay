@@ -109,9 +109,10 @@ final class CheckModel: ObservableObject {
     private let saves: URL
 
     init() {
-        root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("relay-check", isDirectory: true)
-        saves = root.appendingPathComponent("saves", isDirectory: true)
+        root = directory
+        saves = directory.appendingPathComponent("saves", isDirectory: true)
     }
     func perform(_ operation: String) {
         guard !busy else { return }
