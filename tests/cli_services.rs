@@ -1082,3 +1082,36 @@ fn launcher_challenge_accepts_flags_before_service() {
     assert_eq!(prompt["data"]["verification_url"], prompt["data"]["url"]);
     assert!(prompt["data"]["verification_url"].is_string());
 }
+
+#[test]
+fn sign_out_clears_unfinished_sign_ins_without_configuration() {
+    let machine = Machine::new();
+    let (_, transport) = dropbox();
+    for service in [Service::Gdrive, Service::Dropbox] {
+        machine
+            .creds
+            .set(&pending_account(service), &Secret::new("pending secret"))
+            .unwrap();
+    }
+    assert_eq!(machine.json(&transport, "sign-out", "").0, 0);
+    for service in [Service::Gdrive, Service::Dropbox] {
+        assert!(machine
+            .creds
+            .get(&pending_account(service))
+            .unwrap()
+            .is_none());
+    }
+}
+
+#[test]
+fn launcher_setup_rejects_ambiguous_or_incompatible_flags() {
+    for line in [
+        "setup nextcloud --service nextcloud --server https://example.org --user alice",
+        "setup nextcloud --server https://example.org --url https://example.org --user alice",
+        "setup dropbox --password-stdin",
+        "setup gdrive --password-stdin",
+    ] {
+        let args: Vec<String> = line.split_whitespace().map(String::from).collect();
+        assert!(save_relay::cli::parse(&args).is_err(), "{line}");
+    }
+}
