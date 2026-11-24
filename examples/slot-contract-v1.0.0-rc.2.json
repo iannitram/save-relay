@@ -1,0 +1,11 @@
+{
+  "contract_for": "v1.0.0-rc.2",
+  "description": "Replace placeholders with argument values; pass each array element as one argv item. Validate data.game on every successful or conflict response.",
+  "commands": {
+    "pull": ["pull", "demo-game", "--manifest", "{manifest}", "--saves-dir", "{slot_dir}", "--slot", "{slot}", "--json"],
+    "push": ["push", "demo-game", "--manifest", "{manifest}", "--saves-dir", "{slot_dir}", "--slot", "{slot}", "--json"],
+    "resolve_pull": ["pull", "demo-game", "--manifest", "{manifest}", "--saves-dir", "{slot_dir}", "--slot", "{slot}", "--resolve", "keep-server", "--json"],
+    "history": ["history", "demo-game", "--slot", "{slot}", "--json"]
+  },
+  "expected_game": "demo-game-slot-{slot}"
+}

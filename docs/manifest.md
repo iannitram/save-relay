@@ -82,6 +82,20 @@ on every save-relay command for that game. Each slot then has an independent ser
 local last-sync state; if the launcher changes folders under one id, save-relay treats the old
 record as absent and uses the first-sync rules rather than comparing saves across folders.
 
+For launchers adopting `v1.0.0-rc.2`, use the [versioned argv contract](../examples/slot-contract-v1.0.0-rc.2.json)
+as an integration fixture. Substitute each placeholder in its own argument, and validate that
+`data.game` is exactly `<game>-slot-<n>` on both successful and conflict responses. Keep the same
+slot and folder when retrying a conflict. For `history`, pass the slot even though no folder is
+needed. Test two distinct populated slots and an empty third, including history and conflict
+resolution, before migrating an existing launcher; see [issue #301](https://github.com/iannitram/save-relay/issues/301).
+
+The suffixed response identity provides an explicit check for a launcher that knows it selected a
+slot. The helper cannot tell whether an omitted `--slot` was accidental: ordinary unslotted games
+may legitimately move their saves folder. Do not infer slot identity from directory names. A future
+opt-in declaration could require slot identity, but would need explicit version negotiation so an
+older helper cannot silently ignore it. Until then, launchers must supply `--slot` and reject an
+unexpected response identity themselves.
+
 ## Sidecar
 
 The sidecar file is `.save-relay-meta.json`, in the saves folder. It is read at the start of each sync. If it is missing, nothing happens.
