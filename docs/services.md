@@ -36,7 +36,7 @@ Setup opens your browser. Sign in to the Google account you want to use and appr
 save-relay setup --service gdrive
 ```
 
-The browser returns to a small page on this machine when sign-in is done. The refresh token is kept in the system credential store.
+The browser returns to a small page on this machine when sign-in is done. The refresh token is kept in the system credential store. For Android apps using the C/JNI bindings, see `docs/android.md` for Android 15+ foreground token-exchange and `HttpURLConnection` requirements.
 
 ## Dropbox
 
@@ -46,7 +46,7 @@ Setup opens your browser. Sign in to the Dropbox account you want to use and app
 save-relay setup --service dropbox
 ```
 
-The browser returns to a small page on this machine when sign-in is done. The refresh token is kept in the system credential store.
+The browser returns to a small page on this machine when sign-in is done. The refresh token is kept in the system credential store. For Android apps using the C/JNI bindings, see `docs/android.md` for Android 15+ foreground token-exchange and `HttpURLConnection` requirements.
 
 ## Steam's Game Mode
 
