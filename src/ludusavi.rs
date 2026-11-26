@@ -411,6 +411,7 @@ pub fn translate(
         saves: BTreeMap::from([(facts.platform, folder.clone())]),
         include,
         exclude: Vec::new(),
+        strict_scope: false,
         saves_from: None,
     };
     manifest.validate()?;

@@ -84,6 +84,7 @@ One small library and command-line tool that every port's launcher calls: pull b
 - Server layout under one Nextcloud folder: per game, the current saves, a small state file (revision, device, time, file list with hashes), and a history folder of dated copies. Each machine records the revision it last synced; a conflict is "server revision changed and local files changed since that revision".
 - Pushes upload to a temporary name and rename, so a broken upload never replaces the current saves.
 - The game manifest is a small data file shipped by each port.
+- Mobile universal ports with split per-game thin apps (e.g., Uncharted 1/2/3) may also use `save-relay`'s configured Dropbox App folder to download per-game assets resumably under `game-files/<game-id>/...` (`save_relay_download_game_files`, `save_relay_game_files_status`), using HTTP `Range` byte-offset `.part` staging and SHA-256 verification without colliding with save sync (#305).
 - Rulings 2026-11-01 (question tool): the Baton, `wrap` and save cards with a Game Mode panel, all in 1.0; the open-elsewhere mark "Never blocks, always asks (Recommended)"; the card picture "Port writes it, wrap grabs Steam's (Recommended)".
 - The open-elsewhere mark is a small `playing.json` beside `state.json` (device, time, revision read), written at `pull` and removed at `push`; the plan table gains a row for it before Pull.
 - `wrap` reuses the engine unchanged: it is `pull`, a child process, then `push`. The ludusavi-manifest data is MIT, downloaded and cached, never bundled as code.

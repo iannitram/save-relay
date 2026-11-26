@@ -31,7 +31,11 @@ pub const SAVES_FROM_LAUNCHER: &str = "launcher";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Manifest {
-    /// Must be `FORMAT`.
+    /// Format 1, or format 2 for strict scope.
+    #[serde(
+        serialize_with = "serialize_format",
+        deserialize_with = "deserialize_format"
+    )]
     pub format: u32,
     /// The game id: 1-64 characters of `a-z`, `0-9`, `-`, starting with a letter or digit.
     /// It names the game's folder on the server.
@@ -50,6 +54,38 @@ pub struct Manifest {
     /// Glob patterns left out even when included.
     #[serde(default)]
     pub exclude: Vec<String>,
+    /// Refuse remote revisions containing paths outside the include/exclude patterns.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub strict_scope: bool,
+}
+
+// Format 2 is stored as a string so older clients that deserialize remembered records without
+// validating the manifest reject it instead of silently ignoring strict_scope.
+fn serialize_format<S: serde::Serializer>(
+    format: &u32,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error> {
+    if *format == 2 {
+        serializer.serialize_str("2")
+    } else {
+        serializer.serialize_u32(*format)
+    }
+}
+
+fn deserialize_format<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<u32, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Version {
+        Number(u32),
+        Text(String),
+    }
+    match Version::deserialize(deserializer)? {
+        Version::Number(n) => Ok(n),
+        Version::Text(s) if s == "2" => Ok(2),
+        Version::Text(_) => Err(serde::de::Error::custom("invalid manifest format")),
+    }
 }
 
 impl Manifest {
@@ -76,8 +112,12 @@ impl Manifest {
     /// `include` not empty; every pattern relative (no leading `/`), with no `\` and no `..`
     /// segment. The first failure is returned.
     pub fn validate(&self) -> Result<()> {
-        if self.format != FORMAT {
-            return Err(Error::ManifestInvalid(format!("format: expected {FORMAT}")));
+        if !((self.format == FORMAT && !self.strict_scope)
+            || (self.format == 2 && self.strict_scope))
+        {
+            return Err(Error::ManifestInvalid(
+                "format: expected 1 without strict_scope or 2 with strict_scope".into(),
+            ));
         }
         check_id(&self.id)?;
         if self.name.is_empty() {

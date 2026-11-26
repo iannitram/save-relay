@@ -75,6 +75,7 @@ fn record() -> GameRecord {
             .collect(),
         include: vec!["Uncharted 1/**".into()],
         exclude: vec![],
+        strict_scope: false,
         saves_from: None,
     };
     GameRecord {

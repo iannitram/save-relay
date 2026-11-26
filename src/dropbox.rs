@@ -146,7 +146,7 @@ pub fn classify(op: Op, status: u16, body: &str, path: &str) -> Outcome {
         })
         .unwrap_or_default();
     match status {
-        200 => return Outcome::Ok,
+        200 | 206 => return Outcome::Ok,
         401 => return Outcome::Refresh,
         429 | 500..=599 => return Outcome::Retry,
         409 => {}
@@ -376,6 +376,26 @@ impl Dropbox {
             .ok()
             .and_then(|v| v["email"].as_str().map(str::to_string))
             .ok_or_else(|| Error::Server("dropbox: no email in the answer".into()))
+    }
+
+    /// Download a byte range `[start, end_inclusive]` of `path` inside the Dropbox App folder.
+    /// Returns the received bytes and whether the server responded with HTTP 206 Partial Content.
+    pub fn get_range(&self, path: &str, start: u64, end_inclusive: u64) -> Result<(Vec<u8>, bool)> {
+        checked(path)?;
+        if end_inclusive < start {
+            return Err(Error::Usage("invalid byte range".into()));
+        }
+        let response = self.send(
+            Request::new("POST", &format!("{CONTENT}/files/download"))
+                .header(
+                    "Dropbox-API-Arg",
+                    &header_json(&json!({"path": api_path(path)})),
+                )
+                .header("Range", &format!("bytes={start}-{end_inclusive}")),
+            Op::Get,
+            path,
+        )?;
+        Ok((response.body, response.status == 206))
     }
 }
 
