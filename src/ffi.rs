@@ -20,6 +20,7 @@ use crate::cli::{self, Args, Command};
 use crate::clients::{self, Client, ClientSet};
 use crate::creds::{CredentialStore, Secret};
 use crate::error::{Error, Result};
+use crate::game_files::{self, GameFilesManifest};
 use crate::http::{Request, Response, Transport};
 use crate::local::LocalStore;
 use crate::manifest::Manifest;
@@ -738,4 +739,60 @@ pub unsafe extern "C" fn save_relay_free(pointer: *mut c_char) {
             drop(CString::from_raw(pointer));
         }
     }));
+}
+
+/// Download per-game asset files from the configured Dropbox App folder resumably (#305).
+///
+/// # Safety
+/// `manifest_json` and `dest_dir` must be NUL-terminated UTF-8 strings.
+#[no_mangle]
+pub unsafe extern "C" fn save_relay_download_game_files(
+    manifest_json: *const c_char,
+    dest_dir: *const c_char,
+) -> *mut c_char {
+    guard("game-files", || {
+        let host = host()?;
+        let manifest_str = text(manifest_json, "manifest_json")?;
+        let dest = text(dest_dir, "dest_dir")?;
+        let manifest = GameFilesManifest::parse(manifest_str)?;
+        let store = LocalStore::new(AppDirs::from_vars(&host.vars));
+        let config = store.load_config()?.ok_or(Error::NotSetUp)?;
+        let creds = HostCreds(host.clone());
+        let transport = transport_for(&host);
+        let (dropbox, tokens) =
+            crate::service::open_dropbox(&config, &creds, transport, stamp::now, &host.clients)?;
+        let result = game_files::download_game_files(
+            &dropbox,
+            &manifest,
+            std::path::Path::new(dest),
+            game_files::DEFAULT_CHUNK_SIZE,
+        );
+        if let Some(new_refresh) = tokens.rotated() {
+            let _ = creds.set(
+                &crate::service::token_account(Service::Dropbox, &config.user)?,
+                &new_refresh,
+            );
+        }
+        let report = result?;
+        Ok(api::success("game-files", &report))
+    })
+}
+
+/// Inspect local completion and `.part` resume progress for `manifest_json` in `dest_dir` (#305).
+///
+/// # Safety
+/// `manifest_json` and `dest_dir` must be NUL-terminated UTF-8 strings.
+#[no_mangle]
+pub unsafe extern "C" fn save_relay_game_files_status(
+    manifest_json: *const c_char,
+    dest_dir: *const c_char,
+) -> *mut c_char {
+    guard("game-files-status", || {
+        let _host = host()?;
+        let manifest_str = text(manifest_json, "manifest_json")?;
+        let dest = text(dest_dir, "dest_dir")?;
+        let manifest = GameFilesManifest::parse(manifest_str)?;
+        let status = game_files::status_game_files(&manifest, std::path::Path::new(dest))?;
+        Ok(api::success("game-files-status", &status))
+    })
 }
