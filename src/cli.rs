@@ -72,7 +72,7 @@ pub struct GameArg {
 impl GameArg {
     /// The manifest and saves folder this command works on, read without writing anything, so
     /// a refusal comes before any server call or file write. The manifest is `--manifest` (its
-    /// id must equal `id`) or the one remembered here (`Error::GameUnknown` when neither). The
+    /// id must equal `id`, or `id` without a `-slot-<1..10>` suffix for desktop `--slot`) or the one remembered here (`Error::GameUnknown` when neither). The
     /// folder is `--saves-dir` verbatim; else, for a `saves_from` game, `Error::Usage` naming
     /// `--saves-dir` (never a remembered or guessed folder, #48); else the remembered
     /// `--saves-dir`, else the manifest's template for `platform`.
@@ -97,7 +97,7 @@ impl GameArg {
                     Error::Io(format!("cannot read manifest {}: {error}", path.display()))
                 })?;
                 let manifest = Manifest::from_json(&text)?;
-                if manifest.id != base_id {
+                if manifest.id != self.id && manifest.id != base_id {
                     return Err(Error::Usage(format!(
                         "--manifest is for '{}', not '{}'",
                         manifest.id, self.id
