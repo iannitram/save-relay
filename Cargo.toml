@@ -47,10 +47,17 @@ serde_json = "1"
 # The ludusavi data reader (`ludusavi::parse`): pure Rust, MIT OR Apache-2.0 (docs/adr/0003).
 serde-saphyr = "2.0"
 sha2 = "0.10"
+# Case folding and Unicode normalization for installer manifest path collisions (#309).
+caseless = "0.2"
+unicode-normalization = "0.1"
 # keyring 4: `v1` (default) picks Keychain on macOS, Credential Manager on Windows and the
 # pure-Rust zbus Secret Service on Linux (no libdbus; keyring 3's sync backend needs it).
 keyring = { version = "4.2", optional = true }
 ureq = { version = "2.12", optional = true, default-features = false, features = ["tls"] }
 
+# Handle-relative, no-follow file operations for the game-file engine (src/gamefiles/fsx.rs).
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1", features = ["fs"] }
+
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_System_Com", "Win32_UI_Shell"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_UI_Shell"] }

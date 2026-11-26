@@ -23,6 +23,9 @@
 //!                    (signs in through the browser; --finish reads Dropbox's code from standard input)
 //! save-relay setup   [--device <name>] [--root <folder>]
 //!                    (no --service, --server or --user: asks which service on standard input)
+//! save-relay game-files plan     <app-id> --dest <dir> --state <dir> [--legacy-root <root>] [--json]
+//! save-relay game-files download <app-id> --dest <dir> --state <dir> [--chunk <bytes>] [--retries <n>] [--legacy-root <root>] [--json]
+//! save-relay game-files cleanup  --state <dir> [--json]
 //! save-relay help | --help | -h
 //! save-relay version | --version | -V
 //! ```
@@ -56,6 +59,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+mod game_files;
+
+pub use game_files::{install_interrupt, request_interrupt, GameFilesCommand, EXIT_CANCELLED};
 
 /// The default server folder that holds every game.
 pub const DEFAULT_ROOT: &str = "save-relay";
@@ -237,6 +244,8 @@ pub enum Command {
         port: Option<u16>,
         open: bool,
     },
+    /// #310: `game-files plan|download|cleanup`, the installer engine from the command line.
+    GameFiles(GameFilesCommand),
     Help,
     Version,
 }
@@ -692,6 +701,7 @@ pub fn parse(args: &[String]) -> Result<Args> {
                 out,
             }
         }
+        "game-files" => Command::GameFiles(game_files::parse(&args[1..])?),
         "panel" => {
             let flags = split(&args[1..], &["--port"], &["--no-open"])?;
             require(&flags.positionals, 0, &[])?;
@@ -970,6 +980,7 @@ pub fn command_name(command: &Command) -> &'static str {
         Command::Where => "where",
         Command::Picture { .. } => "picture",
         Command::Panel { .. } => "panel",
+        Command::GameFiles(command) => command.name(),
         Command::Help => "help",
         Command::Version => "version",
     }
@@ -998,6 +1009,9 @@ Commands:
   where
   picture <game> <entry> --out <file> [--slot <n>]
   panel   [--port <n>] [--no-open]
+  game-files plan     <app-id> --dest <dir> --state <dir> [--legacy-root <root>]
+  game-files download <app-id> --dest <dir> --state <dir> [--chunk <bytes>] [--retries <n>] [--legacy-root <root>]
+  game-files cleanup  --state <dir>
   setup   [nextcloud] (--server|--url) <url> --user <name> [--password-stdin] [--device <name>] [--root <folder>]
           (reads the app password from the first line of standard input)
   setup   (gdrive|dropbox | --service gdrive|dropbox) [--no-browser | --finish] [--device <name>] [--root <folder>]
@@ -1151,6 +1165,16 @@ fn run_with_paths(
     // Only a command that talks to the server needs a connection; the others get a remote
     // that is never asked. Google Drive and Dropbox connect inside the command (`with_remote`).
     let parsed = parse(args);
+    // Ctrl-C stops a game-file download after its next durable chunk (`game_files`).
+    if matches!(
+        &parsed,
+        Ok(Args {
+            command: Command::GameFiles(GameFilesCommand::Download { .. }),
+            ..
+        })
+    ) {
+        install_interrupt();
+    }
     let connected: Result<(Box<dyn Remote>, Option<String>)> = match &parsed {
         Ok(Args {
             command: Command::Setup { server, user, .. },
@@ -1293,6 +1317,16 @@ pub fn run_with_net(
     if let Command::Repair { game, yes } = &command {
         return repair_command(game, *yes, json, stdin, stdout, &context);
     }
+    if let Command::GameFiles(game_files) = &command {
+        return match game_files::execute(game_files, json, stdout, &context) {
+            Ok(done) => {
+                let shown = if json { &done.json } else { &done.text };
+                let _ = writeln!(stdout, "{}", shown.trim_end());
+                done.code
+            }
+            Err(error) => print_failure(stdout, json, name, &error),
+        };
+    }
     match execute(command, stdin, &context) {
         Ok(mut done) => {
             // The positional launcher form adds aliases without changing the existing panel contract.
@@ -1343,7 +1377,13 @@ pub fn run_with_net(
 
 fn print_failure(stdout: &mut dyn Write, json: bool, command: &str, error: &Error) -> i32 {
     if json {
-        let _ = writeln!(stdout, "{}", api::failure(command, error));
+        // The game-files commands tell the caller what to do next (`error.class`).
+        let line = if command.starts_with("game-files") {
+            api::failure_with_class(command, error)
+        } else {
+            api::failure(command, error)
+        };
+        let _ = writeln!(stdout, "{line}");
     } else {
         let _ = writeln!(stdout, "save-relay: {error}");
         if matches!(error, Error::Usage(_)) {
@@ -1392,6 +1432,13 @@ fn wrap_child(args: &[String]) -> Option<&[String]> {
 /// The command word for an envelope when the arguments did not parse: the first argument that
 /// is a command, else "unknown".
 fn guess_command(args: &[String]) -> String {
+    if args
+        .iter()
+        .find(|arg| arg.as_str() != "--json")
+        .is_some_and(|arg| arg == "game-files")
+    {
+        return game_files::guess_name(args);
+    }
     const NAMES: [&str; 19] = [
         "pull",
         "push",
@@ -1485,6 +1532,7 @@ fn execute(command: Command, stdin: &mut dyn Read, cx: &Context) -> Result<Outco
         Command::Answer { game, answer } => answer_command(&game, answer, cx),
         Command::Where => where_command(cx),
         Command::Picture { game, entry, out } => picture_command(&game, &entry, &out, cx),
+        Command::GameFiles(_) => unreachable!("run_with_net runs game-files itself"),
         // `run_with_net` serves the panel before it gets here.
         Command::Panel { .. } => Err(Error::Usage("panel runs as `save-relay panel`".into())),
     }

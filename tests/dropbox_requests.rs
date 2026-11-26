@@ -61,6 +61,27 @@ fn summary(s: &str) -> String {
 }
 
 #[test]
+fn a_ranged_download_lets_206_and_416_through_for_the_caller_to_judge() {
+    for status in [200, 206, 416] {
+        assert_eq!(
+            classify(Op::Range, status, "", "a"),
+            Outcome::Ok,
+            "{status}"
+        );
+    }
+    // Other operations still treat 206 and 416 as failures.
+    assert!(matches!(classify(Op::Get, 206, "", "a"), Outcome::Err(_)));
+    assert!(matches!(classify(Op::Get, 416, "", "a"), Outcome::Err(_)));
+    // The rest of the table holds for Range.
+    assert_eq!(classify(Op::Range, 401, "", "a"), Outcome::Refresh);
+    assert_eq!(classify(Op::Range, 429, "", "a"), Outcome::Retry);
+    assert_eq!(
+        classify(Op::Range, 409, &summary("path/not_found/.."), "a"),
+        Outcome::Err(Error::NotFound("a".into()))
+    );
+}
+
+#[test]
 fn classify_status_codes() {
     assert_eq!(classify(Op::Get, 200, "{}", "a"), Outcome::Ok);
     assert_eq!(classify(Op::Put, 401, "", "a"), Outcome::Refresh);

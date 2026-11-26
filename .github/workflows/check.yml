@@ -240,6 +240,10 @@ jobs:
       - name: Integration tests (Linux, Nextcloud)
         if: runner.os == 'Linux'
         run: cargo test --locked --test cli_webdav -- --ignored --test-threads=1
+      - name: Game files against Nextcloud (Linux)
+        # Linux only: rclone, the Windows and macOS server, ignores If-Match.
+        if: runner.os == 'Linux'
+        run: cargo test --locked --test gamefiles_nextcloud_live -- --ignored --test-threads=1 --nocapture
       - name: Integration tests (Windows, rclone)
         if: runner.os == 'Windows'
         shell: pwsh

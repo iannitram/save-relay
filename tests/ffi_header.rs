@@ -50,6 +50,11 @@ fn every_exported_signature_matches_the_header() {
             })
             .collect::<Vec<_>>()
             .join(", ");
+        let args = if args.is_empty() {
+            "void".to_string()
+        } else {
+            args
+        };
         let result = c_type(result.trim().strip_prefix("->").unwrap_or(""));
         let declaration = format!("{result} {name}({args});");
         assert!(
@@ -58,5 +63,5 @@ fn every_exported_signature_matches_the_header() {
         );
         seen += 1;
     }
-    assert!(seen >= 7, "found only {seen} exported functions");
+    assert!(seen >= 12, "found only {seen} exported functions");
 }

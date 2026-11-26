@@ -21,17 +21,19 @@ use crate::clients::{self, Client, ClientSet};
 use crate::creds::{CredentialStore, Secret};
 use crate::error::{Error, Result};
 use crate::game_files::{self, GameFilesManifest};
+use crate::gamefiles::{self, engine, GameSource, Progress, State};
 use crate::http::{Request, Response, Transport};
 use crate::local::LocalStore;
 use crate::manifest::Manifest;
 use crate::oauth::{self, PlatformSignIn};
-use crate::platform::{AppDirs, PathVars};
+use crate::platform::{AppDirs, PathVars, Platform};
 use crate::remote::{MemoryRemote, Remote};
-use crate::service::Service;
+use crate::service::{self, Service};
 use crate::stamp;
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// The largest secret `cred_get` may hand back (a refresh token is a few hundred bytes).
@@ -75,13 +77,18 @@ pub struct SaveRelayHttpRequest {
     pub headers: *const c_char,
     pub body: *const u8,
     pub body_len: usize,
-    /// Stop reading the answer after this many bytes and fail; 0 means no bound.
+    /// Read at most this many bytes plus one; 0 means no bound. A longer answer is still handed
+    /// to `save_relay_http_respond`, which refuses it as too large (not a connection failure).
     pub max_response_bytes: usize,
 }
 
 /// Where the app's `http` callback puts the answer (`save_relay_http_respond`). Opaque.
 pub struct SaveRelayHttpSink {
     response: Option<Response>,
+    /// The request's `max_response_bytes`: a longer answer is refused before it is copied.
+    max_response_bytes: Option<usize>,
+    /// The app handed over an answer longer than `max_response_bytes` (refused, not copied).
+    too_large: bool,
 }
 
 struct Host {
@@ -216,6 +223,11 @@ impl CredentialStore for HostCreds {
 
 struct HostTransport(Arc<Host>);
 
+/// An answer longer than the request's `max_response_bytes` (`gamefiles::over_bound` knows it).
+fn too_large() -> Error {
+    Error::Unreachable("the answer is larger than allowed".into())
+}
+
 impl Transport for HostTransport {
     fn send(&self, request: &Request) -> Result<Response> {
         let bad = |what: &str| Error::Unreachable(format!("request {what} is not sendable"));
@@ -237,14 +249,22 @@ impl Transport for HostTransport {
             body_len: request.body.len(),
             max_response_bytes: request.max_response_bytes.unwrap_or(0),
         };
-        let mut sink = SaveRelayHttpSink { response: None };
+        let mut sink = SaveRelayHttpSink {
+            response: None,
+            max_response_bytes: request.max_response_bytes,
+            too_large: false,
+        };
         // SAFETY: every pointer in `native` lives through the call.
         let status = unsafe { (self.0.http)(self.0.user_data as *mut c_void, &native, &mut sink) };
+        // An answer past the bound is the same error the Rust transport gives, whatever the
+        // callback returned: game files read it as `range_unsupported` (a whole file for a
+        // range) or `manifest_invalid`, never as a dropped connection to retry.
+        if sink.too_large {
+            return Err(too_large());
+        }
         match (status, sink.response) {
             (0, Some(response)) => match request.max_response_bytes {
-                Some(max) if response.body.len() > max => Err(Error::Unreachable(
-                    "the answer is larger than allowed".into(),
-                )),
+                Some(max) if response.body.len() > max => Err(too_large()),
                 _ => Ok(response),
             },
             (0, None) => Err(Error::Unreachable("the app gave no answer".into())),
@@ -255,6 +275,8 @@ impl Transport for HostTransport {
 
 /// The app's `http` callback hands its answer here. `headers` is `Name: value` lines (may be
 /// null); `body` may be null with `body_len` 0. Returns 0, or 1 on invalid input or panic.
+/// A `body_len` past the request's `max_response_bytes` is refused (1) before anything is read
+/// and recorded as an answer that is too large, whatever the callback then returns.
 ///
 /// # Safety
 /// `sink` must be the pointer the callback received; `headers` a NUL-terminated string or null;
@@ -269,6 +291,10 @@ pub unsafe extern "C" fn save_relay_http_respond(
 ) -> c_int {
     catch_unwind(AssertUnwindSafe(|| {
         let Some(sink) = sink.as_mut() else { return 1 };
+        if sink.max_response_bytes.is_some_and(|max| body_len > max) {
+            sink.too_large = true;
+            return 1;
+        }
         if (body.is_null() && body_len != 0) || body_len > isize::MAX as usize {
             return 1;
         }
@@ -299,10 +325,16 @@ pub unsafe extern "C" fn save_relay_http_respond(
 
 /// Run a closure for one command and turn any failure or panic into its error envelope.
 fn guard(command: &str, body: impl FnOnce() -> Result<String>) -> *mut c_char {
+    // The game-files commands tell the app what to do next (`error.class`).
+    let failure = if command.starts_with("game-files") {
+        api::failure_with_class
+    } else {
+        api::failure
+    };
     let line = match catch_unwind(AssertUnwindSafe(body)) {
         Ok(Ok(line)) => line,
-        Ok(Err(error)) => api::failure(command, &error),
-        Err(_) => api::failure(command, &Error::Io("internal error".into())),
+        Ok(Err(error)) => failure(command, &error),
+        Err(_) => failure(command, &Error::Io("internal error".into())),
     };
     CString::new(line.replace('\0', ""))
         .unwrap_or_default()
@@ -344,7 +376,18 @@ fn build_host(
 }
 
 fn install(host: Host) -> Result<String> {
-    *HOST.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Arc::new(host));
+    // The run slot is taken first (the order `claim_download` uses), so a download that holds
+    // the old host can never overlap a replacement: its callbacks stay valid until it returns.
+    let slot = lock(&DOWNLOAD);
+    if slot.active.is_some() {
+        return Err(Error::Busy(
+            "a game-file download is running; cancel it and wait for it to return before \
+             calling save_relay_init again"
+                .into(),
+        ));
+    }
+    *lock(&HOST) = Some(Arc::new(host));
+    drop(slot);
     Ok(api::success("init", &serde_json::json!({})))
 }
 
@@ -728,6 +771,303 @@ pub unsafe extern "C" fn save_relay_setup(
     })
 }
 
+/// What the one-download-at-a-time slot holds. Claiming, cancelling, cleaning up and replacing
+/// the host all happen under this one lock, so none of them can interleave with another.
+struct DownloadSlot {
+    /// The run in flight, if any.
+    active: Option<ActiveRun>,
+    /// The id the next claimed run gets.
+    next_run: u64,
+}
+
+struct ActiveRun {
+    id: u64,
+    /// This run's own stop flag: a cancel can only ever reach the run that was active when it
+    /// took the lock, and a new run starts with a fresh flag.
+    stop: Arc<AtomicBool>,
+}
+
+static DOWNLOAD: Mutex<DownloadSlot> = Mutex::new(DownloadSlot {
+    active: None,
+    next_run: 1,
+});
+/// The latest progress of the running (or last) download. Lock order: `DOWNLOAD`, then this.
+static GAME_FILES_PROGRESS: Mutex<Option<Progress>> = Mutex::new(None);
+/// Tests: the chunk size the C functions ask for (0 = the default).
+static GAME_FILES_CHUNK: AtomicU64 = AtomicU64::new(0);
+
+/// The version of the game-files part of the C interface (`save_relay_game_files_version`).
+/// Raised only for a change a host must notice; existing signatures never change within one.
+pub const GAME_FILES_ABI_VERSION: c_int = 1;
+
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Tests: make the C functions ask for `bytes` per request instead of the 4 MiB default, so a
+/// small fixture spans several chunks. 0 restores the default.
+#[doc(hidden)]
+pub fn set_game_files_chunk_for_tests(bytes: u64) {
+    GAME_FILES_CHUNK.store(bytes, Ordering::SeqCst);
+}
+
+fn game_files_options(host: &Host) -> Result<engine::Options> {
+    let mut options = engine::Options {
+        protected: protected_saves(host)?,
+        ..engine::Options::default()
+    };
+    let chunk = GAME_FILES_CHUNK.load(Ordering::SeqCst);
+    if chunk > 0 {
+        options.chunk = chunk;
+    }
+    Ok(options)
+}
+
+/// Every saves folder the library's remembered games name on this platform (the records
+/// `save_relay_push` and `save_relay_pull` keep), so a game-file download never lands in one.
+/// A record that cannot be read refuses the call (`destination_conflict`): the check never
+/// passes by not looking.
+fn protected_saves(host: &Host) -> Result<Vec<std::path::PathBuf>> {
+    let store = LocalStore::new(AppDirs::from_vars(&host.vars));
+    Ok(
+        gamefiles::saves_folders(&store, Platform::current(), &host.vars)?
+            .into_iter()
+            .map(|(_, path)| path)
+            .collect(),
+    )
+}
+
+/// Holds the slot for one run; however the run ends (return, error or panic) the progress is
+/// left in a terminal state and the slot is freed.
+struct RunGuard {
+    id: u64,
+    reports_progress: bool,
+}
+
+impl Drop for RunGuard {
+    fn drop(&mut self) {
+        let mut slot = lock(&DOWNLOAD);
+        if self.reports_progress {
+            // A run that did not reach `complete` or `cancelled` ended in an error or a panic:
+            // a poller waiting for a terminal state must see one.
+            if let Some(progress) = lock(&GAME_FILES_PROGRESS).as_mut() {
+                if matches!(progress.state, State::Ready | State::Running) {
+                    progress.state = State::Error;
+                }
+            }
+        }
+        if slot.active.as_ref().is_some_and(|run| run.id == self.id) {
+            slot.active = None;
+        }
+    }
+}
+
+/// Take the slot, or fail with `busy`. The host is read under the same lock, so a replacement
+/// (`save_relay_init`) either happens before the run, which then uses it, or is refused.
+/// A cancellable run (`app_id` given) starts with a fresh stop flag and a `running` progress.
+fn claim_download(app_id: Option<&str>) -> Result<(Arc<Host>, RunGuard, Arc<AtomicBool>)> {
+    let mut slot = lock(&DOWNLOAD);
+    if slot.active.is_some() {
+        return Err(Error::Busy(
+            "a game-file download is already running".into(),
+        ));
+    }
+    let host = host()?;
+    let id = slot.next_run;
+    slot.next_run += 1;
+    let stop = Arc::new(AtomicBool::new(false));
+    slot.active = Some(ActiveRun {
+        id,
+        stop: stop.clone(),
+    });
+    if let Some(app_id) = app_id {
+        let mut progress = Progress::new(app_id);
+        progress.state = State::Running;
+        *lock(&GAME_FILES_PROGRESS) = Some(progress);
+    }
+    Ok((
+        host,
+        RunGuard {
+            id,
+            reports_progress: app_id.is_some(),
+        },
+        stop,
+    ))
+}
+
+/// Run `work` with the game-file source of the configured service, then keep a rotated
+/// refresh token. Every service has a source (`service::open_game_source`).
+fn with_game_source<T>(
+    host: &Arc<Host>,
+    work: impl FnOnce(&dyn GameSource) -> Result<T>,
+) -> Result<T> {
+    let store = LocalStore::new(AppDirs::from_vars(&host.vars));
+    let creds = HostCreds(host.clone());
+    let config = store.load_config()?.ok_or(Error::NotSetUp)?;
+    let opened = service::open_game_source(
+        &config,
+        &creds,
+        transport_for(host),
+        stamp::now,
+        &host.clients,
+    )?;
+    let result = work(opened.source.as_ref());
+    if let Some(new_refresh) = opened.tokens.as_ref().and_then(|tokens| tokens.rotated()) {
+        let service = Service::from_server(&config.server)?;
+        let _ = creds.set(
+            &crate::service::token_account(service, &config.user)?,
+            &new_refresh,
+        );
+    }
+    result
+}
+
+/// What a game-file download would do: reads the app's manifest from the service and compares
+/// it with `dest_dir` and `state_dir` by file size, changing nothing. Returns the envelope
+/// `game-files-plan` whose `data` is the plan (files and bytes present, partial and missing,
+/// and the files in the way). `dest_dir` is where the game's files go and `state_dir` where
+/// the library keeps its checkpoints; both are app-private folders on the same file system,
+/// neither inside the other and neither the saves folder. Blocks for one request.
+///
+/// # Safety
+/// Each pointer is null (refused) or a NUL-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn save_relay_game_files_plan(
+    app_id: *const c_char,
+    dest_dir: *const c_char,
+    state_dir: *const c_char,
+) -> *mut c_char {
+    guard("game-files-plan", || {
+        let host = host()?;
+        let (app_id, dest, state) = (
+            text(app_id, "app_id")?,
+            text(dest_dir, "dest_dir")?,
+            text(state_dir, "state_dir")?,
+        );
+        let options = game_files_options(&host)?;
+        let plan = with_game_source(&host, |source| {
+            engine::plan(
+                source,
+                app_id,
+                std::path::Path::new(dest),
+                std::path::Path::new(state),
+                &options,
+            )
+        })?;
+        Ok(api::success("game-files-plan", &plan))
+    })
+}
+
+/// Download (or resume) every file of `app_id` that `dest_dir` does not have yet. Blocks until
+/// it finishes, fails or is cancelled, so call it from a background thread; poll
+/// `save_relay_game_files_progress` from another. A killed process, a dead battery or a dropped
+/// network loses at most one chunk: call it again and it continues. Returns the envelope
+/// `game-files-download` whose `data` is the final progress, with `state` `complete`, or
+/// `cancelled` after `save_relay_game_files_cancel`; a failure is the usual error envelope
+/// with a `class` of `retryable`, `not_yet_uploaded`, `reauth_needed` or `fatal`. One download
+/// runs at a time (`busy`).
+///
+/// # Safety
+/// As `save_relay_game_files_plan`.
+#[no_mangle]
+pub unsafe extern "C" fn save_relay_game_files_download(
+    app_id: *const c_char,
+    dest_dir: *const c_char,
+    state_dir: *const c_char,
+) -> *mut c_char {
+    guard("game-files-download", || {
+        let (app_id, dest, state) = (
+            text(app_id, "app_id")?,
+            text(dest_dir, "dest_dir")?,
+            text(state_dir, "state_dir")?,
+        );
+        let (host, _run, stop) = claim_download(Some(app_id))?;
+        let mut observe = |progress: &Progress| {
+            *lock(&GAME_FILES_PROGRESS) = Some(progress.clone());
+        };
+        let options = game_files_options(&host)?;
+        let done = with_game_source(&host, |source| {
+            engine::run(
+                source,
+                app_id,
+                std::path::Path::new(dest),
+                std::path::Path::new(state),
+                &options,
+                &stop,
+                &mut observe,
+            )
+        })?;
+        Ok(api::success("game-files-download", &done))
+    })
+}
+
+/// The latest progress of the running or last game-file download: the envelope
+/// `game-files-progress` whose `data` has `state`, `files_done`, `files_total`, `bytes_done`,
+/// `bytes_total` and `current`, or `null` before any download. Cheap; poll it twice a second.
+#[no_mangle]
+pub extern "C" fn save_relay_game_files_progress() -> *mut c_char {
+    guard("game-files-progress", || {
+        let progress = lock(&GAME_FILES_PROGRESS).clone();
+        Ok(api::success("game-files-progress", &progress))
+    })
+}
+
+/// Ask the running download to stop after the chunk it is on has been made durable. The
+/// download call then returns `cancelled`, and a later download continues from there. The
+/// envelope `game-files-cancel` says in `data.running` whether a download was running.
+#[no_mangle]
+pub extern "C" fn save_relay_game_files_cancel() -> *mut c_char {
+    guard("game-files-cancel", || {
+        // Under the claim's lock: the cancel reaches the run that is active right now, never a
+        // later one, and a call that is only waiting to start cannot erase it.
+        let slot = lock(&DOWNLOAD);
+        let running = match slot.active.as_ref().map(|run| &run.stop) {
+            Some(stop) => {
+                stop.store(true, Ordering::SeqCst);
+                true
+            }
+            None => false,
+        };
+        drop(slot);
+        Ok(api::success(
+            "game-files-cancel",
+            &serde_json::json!({ "running": running }),
+        ))
+    })
+}
+
+/// The version of the game-files functions (`GAME_FILES_ABI_VERSION`, 1 today): a host built
+/// against one header can check at start-up that the library it loaded speaks the same one.
+#[no_mangle]
+pub extern "C" fn save_relay_game_files_version() -> c_int {
+    GAME_FILES_ABI_VERSION
+}
+
+/// Remove the library's checkpoints and `.part` files in `state_dir` (never anything in the
+/// game folder), so the next download starts every unfinished file again. Refused with `busy`
+/// while a download runs.
+///
+/// # Safety
+/// `state_dir` is null (refused) or a NUL-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn save_relay_game_files_cleanup(state_dir: *const c_char) -> *mut c_char {
+    guard("game-files-cleanup", || {
+        let state = text(state_dir, "state_dir")?;
+        // Held across the cleanup: a download cannot start between the check and the removal,
+        // and cannot have its fresh progress wiped by the reset below.
+        let slot = lock(&DOWNLOAD);
+        if slot.active.is_some() {
+            return Err(Error::Busy("a game-file download is running".into()));
+        }
+        engine::cleanup(std::path::Path::new(state))?;
+        *lock(&GAME_FILES_PROGRESS) = None;
+        drop(slot);
+        Ok(api::success("game-files-cleanup", &serde_json::json!({})))
+    })
+}
+
 /// Free a string any function above returned. Null is ignored.
 ///
 /// # Safety
@@ -741,7 +1081,8 @@ pub unsafe extern "C" fn save_relay_free(pointer: *mut c_char) {
     }));
 }
 
-/// Download per-game asset files from the configured Dropbox App folder resumably (#305).
+/// Compatibility wrapper (#324) over the `gamefiles` engine: download the files of an inline
+/// manifest from the configured service resumably. New code uses `save_relay_game_files_download`.
 ///
 /// # Safety
 /// `manifest_json` and `dest_dir` must be NUL-terminated UTF-8 strings.
@@ -751,34 +1092,30 @@ pub unsafe extern "C" fn save_relay_download_game_files(
     dest_dir: *const c_char,
 ) -> *mut c_char {
     guard("game-files", || {
-        let host = host()?;
         let manifest_str = text(manifest_json, "manifest_json")?;
         let dest = text(dest_dir, "dest_dir")?;
         let manifest = GameFilesManifest::parse(manifest_str)?;
-        let store = LocalStore::new(AppDirs::from_vars(&host.vars));
-        let config = store.load_config()?.ok_or(Error::NotSetUp)?;
-        let creds = HostCreds(host.clone());
-        let transport = transport_for(&host);
-        let (dropbox, tokens) =
-            crate::service::open_dropbox(&config, &creds, transport, stamp::now, &host.clients)?;
-        let result = game_files::download_game_files(
-            &dropbox,
-            &manifest,
-            std::path::Path::new(dest),
-            game_files::DEFAULT_CHUNK_SIZE,
-        );
-        if let Some(new_refresh) = tokens.rotated() {
-            let _ = creds.set(
-                &crate::service::token_account(Service::Dropbox, &config.user)?,
-                &new_refresh,
-            );
-        }
-        let report = result?;
+        // Holds the one-download slot like the functions above (so it also keeps
+        // `save_relay_init` out), is cancelled by `save_relay_game_files_cancel` like the others,
+        // and reports no progress.
+        let (host, _run, stop) = claim_download(None)?;
+        let protected = protected_saves(&host)?;
+        let report = with_game_source(&host, |source| {
+            game_files::download_game_files_until(
+                source,
+                &manifest,
+                std::path::Path::new(dest),
+                game_files::DEFAULT_CHUNK_SIZE,
+                &protected,
+                &stop,
+            )
+        })?;
         Ok(api::success("game-files", &report))
     })
 }
 
-/// Inspect local completion and `.part` resume progress for `manifest_json` in `dest_dir` (#305).
+/// Compatibility wrapper (#324): what `dest_dir` already holds of an inline manifest, offline.
+/// New code uses `save_relay_game_files_plan`.
 ///
 /// # Safety
 /// `manifest_json` and `dest_dir` must be NUL-terminated UTF-8 strings.
@@ -795,4 +1132,128 @@ pub unsafe extern "C" fn save_relay_game_files_status(
         let status = game_files::status_game_files(&manifest, std::path::Path::new(dest))?;
         Ok(api::success("game-files-status", &status))
     })
+}
+
+#[cfg(test)]
+mod range_sink_tests {
+    use super::*;
+
+    #[test]
+    fn rejects_oversized_response_before_copying() {
+        let mut sink = SaveRelayHttpSink {
+            response: None,
+            max_response_bytes: Some(2),
+            too_large: false,
+        };
+        let bytes = [0u8; 3];
+        // SAFETY: the sink and the byte pointer live through the call.
+        let result = unsafe {
+            save_relay_http_respond(
+                &mut sink,
+                200,
+                std::ptr::null(),
+                bytes.as_ptr(),
+                bytes.len(),
+            )
+        };
+        assert_eq!(result, 1);
+        assert!(sink.response.is_none());
+        assert!(sink.too_large);
+    }
+
+    #[test]
+    fn accepts_a_response_within_the_bound() {
+        let mut sink = SaveRelayHttpSink {
+            response: None,
+            max_response_bytes: Some(3),
+            too_large: false,
+        };
+        let bytes = [7u8; 3];
+        // SAFETY: as above.
+        let result = unsafe {
+            save_relay_http_respond(
+                &mut sink,
+                206,
+                std::ptr::null(),
+                bytes.as_ptr(),
+                bytes.len(),
+            )
+        };
+        assert_eq!(result, 0);
+        assert_eq!(sink.response.unwrap().body, bytes);
+    }
+
+    unsafe extern "C" fn no_cred_get(
+        _: *mut c_void,
+        _: *const c_char,
+        _: *mut u8,
+        _: usize,
+        _: *mut usize,
+    ) -> c_int {
+        1
+    }
+    unsafe extern "C" fn no_cred_set(_: *mut c_void, _: *const c_char, _: *const c_char) -> c_int {
+        0
+    }
+    unsafe extern "C" fn no_cred_delete(_: *mut c_void, _: *const c_char) -> c_int {
+        0
+    }
+
+    /// A server that ignores Range: the app's callback hands over a 200 with one byte more
+    /// than the request's bound, then returns what `user_data` says (0, or 1 as a host that
+    /// gives up on a refused answer would).
+    unsafe extern "C" fn whole_file(
+        user_data: *mut c_void,
+        request: *const SaveRelayHttpRequest,
+        sink: *mut SaveRelayHttpSink,
+    ) -> c_int {
+        let max = (*request).max_response_bytes;
+        assert!(max > 0, "every game-file request is bounded");
+        let body = vec![b'x'; max + 1];
+        let refused =
+            save_relay_http_respond(sink, 200, std::ptr::null(), body.as_ptr(), body.len());
+        assert_eq!(refused, 1);
+        user_data as usize as c_int
+    }
+
+    fn host_source(returns: c_int) -> crate::webdav::WebDav {
+        let host = Arc::new(Host {
+            user_data: returns as usize,
+            vars: PathVars {
+                home: PathBuf::from("h"),
+                data: PathBuf::from("d"),
+                config: PathBuf::from("c"),
+                documents: None,
+            },
+            cred_get: no_cred_get,
+            cred_set: no_cred_set,
+            cred_delete: no_cred_delete,
+            http: whole_file,
+            remote: None,
+            transport: None,
+            clients: ClientSet::shipped(),
+        });
+        crate::webdav::WebDav::new(
+            "https://cloud.example.test/remote.php/dav/files/player",
+            "player",
+            Secret::new("app-password"),
+            Arc::new(HostTransport(host)),
+        )
+    }
+
+    #[test]
+    fn an_answer_past_the_bound_through_the_app_callback_is_never_retryable() {
+        for returns in [0, 1] {
+            let source = host_source(returns);
+            let error = source
+                .fetch("game-files/app/files/big.bin", 0, 1024)
+                .unwrap_err();
+            assert_eq!(error.code(), "range_unsupported", "{returns}: {error:?}");
+            assert_eq!(error.class(), crate::error::Class::Fatal);
+            let error = source
+                .read_bounded("game-files/app/manifest.json", 1000)
+                .unwrap_err();
+            assert_eq!(error.code(), "manifest_invalid", "{returns}: {error:?}");
+        }
+    }
 }

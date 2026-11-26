@@ -2,7 +2,7 @@
 
 One Rust crate (`save-relay`: a library and a command-line tool), a C interface over it for Android and iOS apps, thin Kotlin, JNI and Swift wrappers, the panel's front end (`panel/`) and its Game Mode shell (`decky/`). It does two jobs: save sync through one of three services (Nextcloud over WebDAV, Google Drive, Dropbox), and resumable downloads of prepared game files for thin apps. The plan and the order of work: `ROADMAP.md`.
 
-**Audited main: `b0ce9dc` (2026-11-25).** Released tags: `v1.0.0-rc.1`, `v1.0.0-rc.2` (`961513c`). `main` is 33 commits past rc.2 and still versioned `1.0.0-rc.2`. Status words are the ones defined in `ROADMAP.md` § Status terms: implemented, tested, released, device-verified, in review (#PR), planned (#issue). In the Modules table the Status column is the pipeline's `present` (implemented on `main`) or `planned`; a row that is neither says "in review (#331)". **Nothing here is device-verified:** no issue holds owner-run output from a device or a live Dropbox or Google Drive account.
+**Audited main: `b0ce9dc` (2026-11-25).** Released tags: `v1.0.0-rc.1`, `v1.0.0-rc.2` (`961513c`). `main` is 33 commits past rc.2 and still versioned `1.0.0-rc.2`. Status words are the ones defined in `ROADMAP.md` § Status terms: implemented, tested, released, device-verified, in review (#PR), planned (#issue). In the Modules table the Status column is the pipeline's `present` (implemented on `main`) or `planned`; no row is in review. The game-file rows (#309, #310) reflect #331's merge, not `b0ce9dc`: they describe the installer as implemented and tested, not released. **Nothing here is device-verified:** no issue holds owner-run output from a device or a live Dropbox or Google Drive account.
 
 ## Capabilities
 
@@ -19,8 +19,8 @@ One Rust crate (`save-relay`: a library and a command-line tool), a C interface 
 | Save slots | `--slot` in `src/cli.rs`; slot-suffixed manifest ids for the C interface (#313) | `tests/cli_run.rs`, `tests/ffi.rs` | `--slot`: rc.1, rc.2. C-interface ids: no | none |
 | C interface for save sync | `src/ffi.rs`, `include/save_relay.h` | `tests/ffi.rs`, `tests/ffi_header.rs` on desktop hosts; CI `mobile` builds only | rc.2 (iOS arm64 static library zip); no Android asset | none (#289) |
 | Wrappers | `bindings/android/`, `bindings/ios/` | CI `bindings` compiles and type-checks; no run | Swift file and header inside the iOS zip (rc.2) | none |
-| Game files, interim (#324) | `src/game_files.rs`, Dropbox only, two C functions, no wrapper, no CLI | one unit test in the file | no | none |
-| Game files, three services (#309, #310) | in review (#331): engine, C interface and the Dropbox source; Nextcloud and Drive answer `range_unsupported` until their sources land | on the branch | no | none |
+| Game files, interim (#324), now compatibility wrappers | `src/game_files.rs`: `save_relay_download_game_files` and `save_relay_game_files_status`, deprecated wrappers over the new engine (`Layout::Inline`); Kotlin and Swift wrap both; no CLI. Owner ruling 2026-11-25: they stay until after 1.0, then are removed | `tests/gamefiles_layouts.rs` (no inline unit test remains) | no | none |
+| Game files, three services (#309, #310) | `src/gamefiles/` (`mod`, `engine`, `manifest`, `fsx`); `save-relay game-files plan\|download\|cleanup` (`src/cli/game_files.rs`); `save_relay_game_files_*` in `src/ffi.rs` and `include/save_relay.h` (interface version 1); Kotlin and Swift calls; `GameSource` for Dropbox, Nextcloud (WebDAV) and Drive, each with bounded range reads | `tests/gamefiles_*.rs`, `tests/cli_game_files.rs`, `tests/ffi_game_files.rs` over fakes and local servers; `tests/gamefiles_nextcloud_live.rs` is ignored and is a Linux `integration` step in CI (new, not yet run there). No real Dropbox or Drive run | no | none |
 | macOS signing | `scripts/macos-sign.sh`, `release.yml` | never run with a certificate: no Apple secret is set | rc.1 and rc.2 Mac binaries are unsigned | none (#287) |
 
 ## Platforms (R04)
@@ -48,7 +48,7 @@ flowchart TD
     Bind --> FFI
     subgraph crate["save-relay crate"]
       FFI["ffi: C interface, HostCreds, HostTransport"] --> CLI
-      FFI --> GameFiles["game_files: interim Dropbox downloader"]
+      FFI --> GameFiles["gamefiles: engine; game_files: #324 wrappers"]
       FFI --> Service
       FFI --> OAuth
       CLI["cli: parse, run"] --> API["api: envelope, data shapes, exit codes"]
@@ -113,9 +113,9 @@ Edges the picture leaves out for room: `sync` reads `steam` and `platform` for t
 
 ### Data flow: game-file install
 
-**On main (interim, #324; implemented, one unit test, not released):** `ffi::save_relay_download_game_files(manifest_json, dest_dir)` -> `game_files::GameFilesManifest::parse` and `validate` -> `service::open_dropbox` -> `GameFileRemote::get_range` per 4 MiB chunk -> part file -> SHA-256 -> `fs::rename` into `dest_dir`. Dropbox only; the caller supplies the whole manifest; no wrapper, no CLI. It does not meet `docs/assets.md`: it replaces existing files, has no symlink or containment guard, accepts a 200 answer to a range request, and reads an unbounded body (`ROADMAP.md` Known risks K1).
+**Before #331 (interim, #324; one unit test, not released):** `ffi::save_relay_download_game_files(manifest_json, dest_dir)` -> `game_files::GameFilesManifest::parse` and `validate` -> `service::open_dropbox` -> `GameFileRemote::get_range` per 4 MiB chunk -> part file -> SHA-256 -> `fs::rename` into `dest_dir`. Dropbox only. It replaced existing files, had no symlink or containment guard, accepted a 200 answer to a range request and read an unbounded body (`ROADMAP.md` Known risks K1). All of that is gone: the two #324 functions now run the engine below (`game_files` turns their inline manifest into `Layout::Inline`).
 
-**In review (#331):** host calls plan, then download -> `service::open_game_source` (Dropbox, Nextcloud or Drive, each with bounded range reads) -> the engine reads `game-files/<app_id>/manifest.json` (at most 4 MiB), validates paths (`caseless`, `unicode-normalization`), plans against `dest_dir` and the checkpoint in `state_dir` -> ranged chunks (default 4 MiB, at most 32 MiB) into part files -> SHA-256 per file -> publication by a no-replace hard link, never replacing a player file. Only the Dropbox source works; Nextcloud and Drive answer `range_unsupported`, and handle-relative no-follow opens are still `TODO(#309)`. Cancel keeps the checkpoint (it is the pause); one download per process; progress is polled.
+**Now (#331; implemented, tested, not released, not device-verified):** host calls plan, then download (or `save-relay game-files plan` and `download`) -> `service::open_game_source` (`WebDav` for Nextcloud, `Dropbox` or `Drive`, each a `GameSource` with bounded range reads) -> the engine reads `game-files/<app_id>/manifest.json` (at most 4 MiB), validates paths (`caseless`, `unicode-normalization`), plans against `dest_dir` and the checkpoint in `state_dir` -> ranged chunks (default 4 MiB, at most 32 MiB) into part files -> SHA-256 per file -> publication by a no-replace step, never replacing a player file. Every file is reached through `gamefiles::fsx` (handle-relative no-follow opens on Unix; reparse-point refusal and a no-replace move on Windows). A service that ignores `Range` answers `range_unsupported`; a file changed on the server is `remote_changed`. `Layout` is chosen by the host (Standard, an explicit `--legacy-root`, or Inline), never by a manifest. Cancel keeps the checkpoint (it is the pause); one download per process; progress is polled. On the command line Ctrl-C after a durable checkpoint exits 7.
 
 ## Server layout
 
@@ -130,8 +130,8 @@ The same tree on every service, under one folder (`root`, default `save-relay`):
 <root>/<game>/incoming/<stamp>-<device>/...   an upload in progress
 <root>/<game>/rev/<n>                         WebDAV only: the create-once claim on revision n (#149)
 <root>/<game>/set-aside/rev<n>-<entry>        WebDAV only: an entry `repair` moved aside (#159)
-game-files/<app_id>/manifest.json, files...   in review (#331): prepared game files, outside <root>;
-                                              the interim code reads a caller-named `remote_root`
+game-files/<app_id>/manifest.json, files...   prepared game files, outside <root> (payload under
+                                              files/); `--legacy-root` or a wrapper `remote_root` names another folder
 ```
 
 `<game>` is the manifest id, or `<id>-slot-<n>` (n 1-10) for a slot. The current saves are the history entry `state.json` names (`docs/adr/0001-current-is-a-history-entry.md`). A push becomes current only when the guarded `state.json` write succeeds; the loser of two racing pushes gets `changed_on_server` (`docs/adr/0002-storage-backends.md`). Google Drive also keeps `.claim-<id>` files beside `state.json` for a day.
@@ -171,10 +171,10 @@ The JSON records `LocalStore` writes, and `steam/cloud.json` through the same wr
 | `src/card.rs` | present | pure `Card`, `Sidecar`, picture check (512 KiB), `is_reserved` | `stamp` |
 | `src/remote.rs` | present | the `Remote` trait (list, get, put with `Precondition`, mkcol, copy, move_to, delete, plus two backend-specific repair hooks), `MemoryRemote` | implemented by the three backends; depends on `local` for Drive claim evidence |
 | `src/http.rs` | present | `Request` (hides `Authorization`; optional `max_response_bytes`, set by no save-sync caller), `Response`, `Transport`; `UreqTransport` behind feature `http` (connect 5 s, idle 60 s, `MAX_REQUEST_BODY` 256 MiB, bundled webpki roots only) | all backends, `oauth`, `ludusavi`, `steam::cloud` |
-| `src/service.rs` | present | `Service` (`ALL`, keys, labels), credential account names, `open` / `open_with`, `open_dropbox` (concrete type, for game files). In review (#331): `open_game_source` | `webdav`, `dropbox`, `gdrive`, `oauth`, `creds` |
-| `src/webdav.rs` | present | URL and path encoding, `parse_propfind`, `WebDav` (`If-Match`, `rev/` claims), `http_warning` for plain `http://`. No retry | `Remote`, `http` |
-| `src/dropbox.rs` | present | API v2 request builders and answer table, `Dropbox` with rev-checked uploads, range reads for the interim downloader | `Remote`, `http`, `oauth` |
-| `src/gdrive.rs`, `src/gdrive/guard.rs` | present | Drive v3 queries and parsers, oldest-wins path resolution, the claim guard (`LEASE_SECS` 120, `SLOW_SECS` 60, `MAX_HOPS` 3) | `Remote`, `http`, `oauth` |
+| `src/service.rs` | present | `Service` (`ALL`, keys, labels), credential account names, `open` / `open_with`, `open_game_source` (the `GameSource` of the configured service, Nextcloud, Dropbox or Drive, with the token source so a rotated refresh token can be saved) | `webdav`, `dropbox`, `gdrive`, `oauth`, `creds` |
+| `src/webdav.rs` | present | URL and path encoding, `parse_propfind`, `WebDav` (`If-Match`, `rev/` claims), `http_warning` for plain `http://`, `GameSource` (Range reads, strong ETag as identity, `If-Match` on resume). No retry | `Remote`, `http` |
+| `src/dropbox.rs` | present | API v2 request builders and answer table, `Dropbox` with rev-checked uploads, range reads (`GameSource`, the file revision as identity) | `Remote`, `http`, `oauth` |
+| `src/gdrive.rs`, `src/gdrive/guard.rs` | present | Drive v3 queries and parsers, oldest-wins path resolution, the claim guard (`LEASE_SECS` 120, `SLOW_SECS` 60, `MAX_HOPS` 3), `GameSource` (Range reads of `drive.file` files, file id and version as identity) | `Remote`, `http`, `oauth` |
 | `src/oauth.rs` | present | PKCE, authorize URL, redirect parsing, `TokenSource`, browser / code / device sign-in, `open_browser` | `http`, `clients`; used by `panel` for random bytes and the browser |
 | `src/clients.rs` | present | the app registrations; Google secrets come only from build-time environment (Actions secrets); `registered` refuses an empty id or secret | `oauth` |
 | `src/fake.rs`, `src/fake/` | present | `FakeDropbox`, `FakeDrive` as `Transport`s; compiled into every build, mobile included | tests |
@@ -192,12 +192,13 @@ The JSON records `LocalStore` writes, and `steam/cloud.json` through the same wr
 | `src/wrap.rs` | present | `play`: pull, child, push; signals and console events; pending choices | `sync`, `pending`, `ludusavi` |
 | `src/panel.rs` | present | loopback server, token, embedded front end (feature `panel-dist`), `API_COMMANDS` (10: status, history, restore, pull, answer, where, setup, steam-games, install-wrap, launch-option) | `cli`, `oauth` |
 | `src/cli.rs`, `src/main.rs` | present | `parse` (no clap), `Command` (including `GlobalStatus`, `SignOut`), `usage`, `run`, `run_with`, `run_with_net`; `GameArg::load` accepts `<id>-slot-<n>` manifests; `refuse_terminal_password` (#311) | everything |
-| `src/ffi.rs`, `include/save_relay.h` | present (feature `ffi`; `staticlib` and `cdylib`) | the C interface, § C interface | `cli`, `service`, `oauth`, `game_files` |
-| `src/game_files.rs` | present | interim Dropbox-only downloader (#324): `GameFilesManifest`, `GameFileRemote`, `download_game_files`, `status_game_files`. In review (#331): reduced to a compatibility wrapper | `service`, `dropbox` |
-| `src/gamefiles/{mod,engine,manifest}.rs` | in review (#331) | the provider-neutral engine: `GameSource`, `Layout` (Standard, Legacy, Inline), `Plan`, `Progress`, checkpoints. No CLI command yet | `service`, the three backends |
+| `src/ffi.rs`, `include/save_relay.h` | present (feature `ffi`; `staticlib` and `cdylib`) | the C interface, § C interface | `cli`, `service`, `oauth`, `game_files`, `gamefiles` |
+| `src/game_files.rs` | present | the two #324 C functions as deprecated compatibility wrappers: `GameFilesManifest`, `download_game_files`, `status_game_files`, over `gamefiles::engine` with `Layout::Inline`; checkpoints in `<dest_dir>/.save-relay-game-files/`; removed after 1.0 | `gamefiles` |
+| `src/gamefiles/{mod,engine,manifest,fsx}.rs` | present | the provider-neutral engine: `GameSource` (`read_bounded`, `fetch`, `fetch_matching`), `Layout` (Standard, Legacy, Inline; `Layout::legacy_universal` and `HostOs`), `Plan`, `Progress`, `Report`, `saves_folders`; `manifest` (strict v1, `build_id`, `nx_game_abi`, per-file `exec`, path rules); `engine` (plan, run with `.part` files and checkpoints, cancel, cleanup); `fsx` (handle-relative no-follow file operations, no-replace publication) | `service`, `dropbox`, `webdav`, `gdrive`, `caseless`, `unicode-normalization`, `rustix` (Unix) |
+| `src/cli/game_files.rs` | present | `save-relay game-files plan <app-id> --dest <dir> --state <dir> [--legacy-root <root>]`, `download` (adds `--chunk`, `--retries`) and `cleanup --state <dir>`; envelopes `game-files-plan`, `game-files-download`, `game-files-cleanup` with `error.class`; `EXIT_CANCELLED` (7); refuses a `--dest` or `--state` that holds or sits in a saves folder this machine syncs | `gamefiles`, `service`, `local` |
 | `src/lib.rs` | present | the module list | |
-| `bindings/android/` | present | `SaveRelay.kt`, `SaveRelayHost.kt`, `save_relay_jni.c`: init, pull, push, status, setup, signInStart, signInFinish, close. No game-file call. In review (#331): game-file calls | `include/save_relay.h` |
-| `bindings/ios/` | present | `SaveRelay.swift`, `module.modulemap`: init, pull, push, status, setup, signInStart, signInFinish; `deinit` instead of close. No game-file call. In review (#331): game-file calls | `include/save_relay.h` |
+| `bindings/android/` | present | `SaveRelay.kt`, `SaveRelayHost.kt`, `save_relay_jni.c`: init, pull, push, status, setup, signInStart, signInFinish, close, plus gameFilesVersion, gameFilesPlan, gameFilesDownload, gameFilesProgress, gameFilesCancel, gameFilesCleanup, gameFilesStatus, downloadGameFiles (the #324 wrapper) and `GAME_FILES_VERSION` (1). Compiled and type-checked in CI, never run | `include/save_relay.h` |
+| `bindings/ios/` | present | `SaveRelay.swift`, `module.modulemap`: init, pull, push, status, setup, signInStart, signInFinish; `deinit` instead of close, plus nativeGameFilesVersion, gameFilesPlan, gameFilesDownload, gameFilesProgress, gameFilesCancel, gameFilesCleanup, gameFilesStatus, downloadGameFiles (the #324 wrapper) and `SaveRelay.gameFilesVersion` (1). Compiled and type-checked in CI, never run | `include/save_relay.h` |
 | `bindings/ios/example/` | present | `RelayCheck.swift` and README: the device-only harness for #289 (Nextcloud); type-checked in CI, never run | `bindings/ios/` |
 | `panel/` | present | React 18, Vite, vitest: `src/api.ts` (envelope types), `src/bridge.ts`, `src/App.tsx`, views, `src/theme.ts`, `tokens.css`, `app.css`, fixtures read by `tests/api_contract.rs`. No slot handling | `src/panel.rs`, `decky/` |
 | `decky/` | present | `plugin.json`, `main.py` (runs `save-relay --json`; stall and ceiling timeouts), `src/` including `launch-options.ts` (the Steam client launch-option calls), `test_main.py` | `panel/` |
@@ -209,7 +210,7 @@ The JSON records `LocalStore` writes, and `steam/cloud.json` through the same wr
 | `docs/wrap.md` | present | wrap, which, install-wrap, Proton, Steam Cloud guidance | |
 | `docs/panel.md` | present | the panel in Game Mode and the browser; the Add games flow | |
 | `docs/services.md` | present | choosing and setting up a service; launcher `status` and `sign-out`; its game-file section is stale | |
-| `docs/assets.md` | present | the game-file installer contract (#305). The code on `main` does not meet it; #331 does and rewrites it | |
+| `docs/assets.md` | present | the game-file installer contract (#305). Its status line says the Dropbox, Nextcloud and Drive sources are implemented for the C interface and tested over fakes and local servers; there is no real Dropbox or Drive check, and pause as a state apart from cancel and handle-based sessions are not built | |
 | `docs/android.md` | present | Android sign-in rules; its "verified on Android 15" line has no recorded run | |
 | `docs/3ds.md` | present | 3DS bridge design; nothing implemented (planned, #300, #319) | |
 | `docs/PRIVACY.md` | present | the OAuth apps' privacy policy; does not yet cover mobile or game files | |
@@ -218,7 +219,7 @@ The JSON records `LocalStore` writes, and `steam/cloud.json` through the same wr
 
 ## C interface
 
-`include/save_relay.h`, implemented in `src/ffi.rs`. Every function that returns `char *` returns one envelope line (§ Envelope) to free with `save_relay_free`. There is no version call and no struct-size field for the save-sync part (`ROADMAP.md` P7).
+`include/save_relay.h`, implemented in `src/ffi.rs`. Every function that returns `char *` returns one envelope line (§ Envelope) to free with `save_relay_free`. The game-file part has a version call (`save_relay_game_files_version`, 1); there is no version call and no struct-size field for the save-sync part (`ROADMAP.md` P7).
 
 | Function | Envelope `command` | Status |
 |---|---|---|
@@ -231,9 +232,9 @@ The JSON records `LocalStore` writes, and `steam/cloud.json` through the same wr
 | `save_relay_sign_in_finish(redirect_url)` | `setup` | same |
 | `save_relay_http_respond(sink, status, headers, body, body_len)` | returns `int` | same |
 | `save_relay_free(pointer)` | - | same |
-| `save_relay_download_game_files(manifest_json, dest_dir)` | `game-files` | implemented (#324), one unit test, not released, no wrapper |
-| `save_relay_game_files_status(manifest_json, dest_dir)` | `game-files-status` | same |
-| `save_relay_game_files_plan`, `_download`, `_progress`, `_cancel`, `_cleanup` | `game-files*` | in review (#331); arguments `app_id`, `dest_dir`, `state_dir`; the two #324 functions stay as compatibility wrappers unless the owner drops them |
+| `save_relay_download_game_files(manifest_json, dest_dir)` | `game-files` | deprecated compatibility wrapper over the new engine (the #324 signature is kept); implemented, tested (`tests/gamefiles_layouts.rs`), not released |
+| `save_relay_game_files_status(manifest_json, dest_dir)` | `game-files-status` | same; Kotlin and Swift wrap both (`downloadGameFiles`, `gameFilesStatus`) |
+| `save_relay_game_files_plan`, `_download`, `_progress`, `_cancel`, `_cleanup`, and `save_relay_game_files_version()` (returns 1, no envelope) | `game-files-plan`, `game-files-download`, `game-files-progress`, `game-files-cancel`, `game-files-cleanup` | implemented, tested (`tests/ffi_game_files.rs`, `tests/ffi_header.rs`), not released; arguments `app_id`, `dest_dir`, `state_dir`; a versioned contract (within version 1 no signature, command or error code in the header changes). The two #324 functions stay as deprecated wrappers, removed after 1.0 (owner ruling 2026-11-25) |
 
 `SaveRelayHost`: `user_data`; folders `home`, `data`, `config`, `documents`; `cred_get`, `cred_set`, `cred_delete`; one `http` callback that receives a `SaveRelayHttpRequest` (method, url, headers, body, `max_response_bytes`) and answers through `save_relay_http_respond`.
 
@@ -280,7 +281,7 @@ Exactly one line on stdout with `--json`, and the return value of every C functi
 {"ok":false,"command":"pull","error":{"code":"auth_failed","message":"the server refused the user name or app password"}}
 ```
 
-In review (#331): `error` gains `class`: `retryable`, `not_yet_uploaded`, `reauth_needed` or `fatal`.
+`error` also carries `class` (`Error::class` in `src/error.rs`): `retryable`, `not_yet_uploaded`, `reauth_needed` or `fatal`; the game-file commands (C interface and `game-files` CLI) set it, and a host that retries keys on the class, not the code.
 
 ### `data` per command
 
@@ -303,8 +304,10 @@ In review (#331): `error` gains `class`: `retryable`, `not_yet_uploaded`, `reaut
 | `answer` | `AnswerData` | `game`, `kind`, `answer`, `message` |
 | `picture` | `PictureData` | `path`, `bytes` |
 | `panel` | `PanelData` | `url`, `port` |
-| `game-files` (C only) | `GameFilesReport` | `game_id`, `total_files`, `downloaded_files`, `skipped_files`, `bytes_downloaded`, `total_bytes`, `complete` |
-| `game-files-status` (C only) | `GameFilesStatus` | `game_id`, `total_files`, `completed_files`, `partial_files`, `bytes_on_disk`, `total_bytes`, `complete` |
+| `game-files` (C only; the #324 wrapper) | `GameFilesReport` | `game_id`, `total_files`, `downloaded_files`, `skipped_files`, `bytes_downloaded`, `total_bytes`, `complete` |
+| `game-files-status` (C only; the #324 wrapper) | `GameFilesStatus` | `game_id`, `total_files`, `completed_files`, `partial_files`, `bytes_on_disk`, `total_bytes`, `complete` |
+| `game-files-plan` (C and CLI) | `Plan` | `app_id`, `files_total`, `bytes_total`, `files_present`, `bytes_present`, `files_partial`, `bytes_partial`, `files_missing`, `bytes_to_fetch`, `conflicts`, `conflict_count` |
+| `game-files-progress` (C only) | `Progress` | `app_id`, `state` (`ready`, `running`, `cancelled`, `complete`, `error`), `files_done`, `files_total`, `bytes_done`, `bytes_total`, `current` |
 
 `action`: `held` · `noop` · `adopted` · `pulled` · `pushed` · `offline` (pull, unreachable: start the game) · `deferred` (push, unreachable) · `conflict`. A `Card`: `format`, `device`, `time`, `playtime_secs`, `place`, `picture`. `Held`: `device`, `since`. `PendingChoice`: `format`, `game`, `kind`, `server`, `local`, `server_card`, `local_card`, `held`, `time`, `answer`. Field names are locked by `tests/api.rs`, `tests/api_contract.rs` and `tests/cli_run.rs`.
 
@@ -342,18 +345,19 @@ A `pull` answer:
 | Code | Meaning |
 |---|---|
 | 0 | done, including `offline` and `deferred` |
-| 1 | `io` |
+| 1 | `io`, `integrity_failed`, `destination_conflict`, `busy` |
 | 2 | `usage`, `manifest_invalid`, `game_unknown`, `no_such_entry`, `save_location_unclear`, `steam_not_found`, `steam_running`, `no_pending_choice` |
 | 3 | `conflict`: a choice is needed, nothing changed |
 | 4 | `not_set_up`, `auth_failed`, `credentials`, `reauth_needed`, `sign_in_failed` |
-| 5 | `server_unreachable` (only from commands with no offline answer, such as history, restore, setup and where: `pull` answers `offline`, `push` `deferred`, `status` `reachable: false`, all exit 0), `server_error`, `state_invalid`, `changed_on_server`, `not_found` |
+| 5 | `server_unreachable` (only from commands with no offline answer, such as history, restore, setup and where: `pull` answers `offline`, `push` `deferred`, `status` `reachable: false`, all exit 0), `server_error`, `state_invalid`, `changed_on_server`, `not_found`, `range_unsupported`, `remote_changed`, `not_yet_uploaded` |
 | 6 | `held`: another machine has the game open, nothing changed |
+| 7 | `game-files download` only (`EXIT_CANCELLED`): stopped by Ctrl-C after a durable checkpoint; nothing is wrong, run it again to continue |
 
 ### Error codes
 
-On `main` (19, `Error::code` in `src/error.rs`): `usage` · `manifest_invalid` · `game_unknown` · `not_set_up` · `auth_failed` · `server_unreachable` · `server_error` · `state_invalid` · `changed_on_server` · `no_such_entry` · `not_found` · `credentials` · `reauth_needed` · `sign_in_failed` · `save_location_unclear` · `steam_not_found` · `steam_running` · `no_pending_choice` · `io`. There is no error class on `main`, no storage-full code, and no structured HTTP status (retry decisions parse message prefixes).
+On `main` before #331 (19, `Error::code` in `src/error.rs`): `usage` · `manifest_invalid` · `game_unknown` · `not_set_up` · `auth_failed` · `server_unreachable` · `server_error` · `state_invalid` · `changed_on_server` · `no_such_entry` · `not_found` · `credentials` · `reauth_needed` · `sign_in_failed` · `save_location_unclear` · `steam_not_found` · `steam_running` · `no_pending_choice` · `io`. There is no storage-full code and no structured HTTP status (retry decisions parse message prefixes; `Error::class` reads the `Server` message prefix).
 
-In review (#331): `range_unsupported` · `remote_changed` · `integrity_failed` · `destination_conflict` · `busy` · `not_yet_uploaded`, and the four classes above.
+Added by #331 (25 in all): `range_unsupported` · `remote_changed` (also a replaced revision, `RemoteRevised`) · `integrity_failed` · `destination_conflict` · `busy` · `not_yet_uploaded`. Classes (`error.class`): `retryable` (unreachable, rate limited, busy, a replaced revision, a retryable server status), `not_yet_uploaded`, `reauth_needed` (not set up, auth failed, reauth needed) and `fatal` (everything else).
 
 ### The launcher's flow
 
@@ -370,7 +374,7 @@ A wrapped game has no launcher: at `conflict` or `held`, `wrap` writes a pending
 
 ## Tests and CI
 
-93 integration test files in `tests/`, plus inline test modules in `src/sync.rs`, `src/transfer.rs`, `src/game_files.rs`, `src/clients.rs`, `src/gdrive.rs`, `src/platform.rs`, `src/creds.rs` (only with feature `keyring`) and `src/wrap.rs` (only on Windows).
+104 integration test files in `tests/`, plus inline test modules in `src/sync.rs`, `src/transfer.rs`, `src/cli/game_files.rs`, `src/error.rs`, `src/ffi.rs`, `src/clients.rs`, `src/gdrive.rs`, `src/platform.rs`, `src/creds.rs` (only with feature `keyring`) and `src/wrap.rs` (only on Windows).
 
 | Area | Test files |
 |---|---|
@@ -385,7 +389,7 @@ A wrapped game has no launcher: at `conflict` or `held`, `wrap` writes a pending
 | Panel | `panel`, `panel_panic`; vitest in `panel/` and `decky/`; `decky/test_main.py` (not in CI) |
 | C interface | `ffi` (needs `--features ffi`), `ffi_header` |
 | Docs (locked) | `docs_wrap_panel`, `manifest_doc`, `services_doc`. None for `docs/assets.md`, `docs/android.md` or the header |
-| In review (#331) | `gamefiles_engine`, `gamefiles_http`, `gamefiles_layouts`, `gamefiles_manifest`, `ffi_game_files` |
+| Game files (#309, #310) | `gamefiles_engine`, `gamefiles_exec`, `gamefiles_fs_safety`, `gamefiles_http`, `gamefiles_layouts`, `gamefiles_manifest`, `gamefiles_providers` (one contract through Dropbox, Nextcloud and Drive), `gamefiles_nextcloud_live` (ignored, real Nextcloud), `cli_game_files`, `ffi_game_files`; helpers in `tests/support_gamefiles/` |
 
 Fixtures: `tests/fixtures/` (`games/`, `saves/`, `sidecar/`, `steam/`, `steam-games/`, `steam-store/`, `ludusavi/`), all made up; `tests/common/` builds the backends. No fixture was captured from a released build.
 
