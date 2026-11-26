@@ -20,7 +20,7 @@ Transfer a bounded manifest and complete snapshot, with validated relative paths
 
 ## Conflict policy for this route
 
-When both copies changed, the owner's stated rule for this 3DS route (#300) is newest timestamp wins, with the losing copy durably retained as a timestamped backup before replacement. This rule does not change ordinary save-relay conflict behavior. The console has no known source for the time a game last saved, so what "newest" means on the console is an open owner decision (section 9, question 6). Until the owner rules, this design asks the owner to choose whenever both copies changed (`needs_choice`), and it still retains the loser. The implementation must define the timestamp source, granularity, skew tolerance, backup identity and a durable ordering that survives a crash. Equal or untrustworthy timestamps require an explicit choice rather than silently selecting a winner. A clock comparison cannot establish recency until the clocks and timestamp provenance have been verified.
+When both copies changed, the owner's rule for this 3DS route (#300) is newest timestamp wins, with the losing copy durably retained as a timestamped backup before replacement. The owner ruled (2026-11-25) that "newest" on the console means the time the client first noticed a change, recorded in `state.json` with a clock offset, compared with the host file mtime (section 5). This rule does not change ordinary save-relay conflict behavior. Equal, skewed or otherwise untrustworthy timestamps require an explicit choice rather than silently selecting a winner, and a clock comparison cannot establish recency until the clocks and timestamp provenance have been verified on a real device.
 
 ## Acceptance and open gates
 
@@ -34,9 +34,9 @@ Neither source review nor synthetic tests satisfy the real-device gate. Keep #30
 
 # Transport and bridge protocol specification (proposal for #319)
 
-Everything below is a proposal an implementation can be built from. Nothing here has been run on a 3DS, in Azahar, or in any TLS stack, and nothing described here is implemented. Claims about console capability are tagged **unverified**, and each one is a gate in the feasibility prototype (see "Stop and revise rules"). Terms: *console* is the libctru client; *bridge* is the host program; *host copy* is the Azahar save folder as tracked through the existing save-relay service; *tid* is a 3DS title id. Where the design depends on a decision that belongs to the owner, this spec states the safe default it holds until the owner rules, and section 9 lists every such question.
+Everything below is a proposal an implementation can be built from, with the owner's rulings of 2026-11-25 written in as decided (section 9). Nothing here has been run on a 3DS, in Azahar, or in any TLS stack, and nothing described here is implemented. Claims about console capability are tagged **unverified**, and each one is a gate in the feasibility prototype (see "Stop and revise rules"). Terms: *console* is the libctru client; *bridge* is the host program; *host copy* is the Azahar save folder as tracked through the existing save-relay service; *tid* is a 3DS title id.
 
-Changes to the text above: (1) the earlier proposal said "mutually authenticated HTTPS"; this spec authenticates the bridge with TLS plus a pinned private CA, and the console with a pairing-derived MAC at the application layer, not a TLS client certificate (reasons in section 1; owner question 4). (2) The wire protocol, enrollment, credential storage and TLS stack, left open above, are proposed here, still subject to the hardware gates.
+Changes to the text above: (1) the earlier proposal said "mutually authenticated HTTPS"; the owner ruled that the console is authenticated by a pairing-derived MAC at the application layer over a pinned private CA, with a TLS client certificate only as optional hardening (reasons in section 1). (2) The wire protocol, enrollment, credential storage and TLS stack, left open above, are proposed here, still subject to the hardware gates.
 
 ## 1. Transport decision
 
@@ -51,7 +51,7 @@ The console speaks HTTPS to the bridge on the LAN. No plain HTTP, no certificate
 | If client certs are broken | the design is blocked | no effect: the MAC is independent of TLS |
 | Defense in depth | TLS only | TLS plus MAC; a TLS validation flaw alone does not let a peer act as the console |
 
-**Proposal: (b) is the baseline.** It needs the fewest unverified console features (one: validate a private root), keeps authentication sound if sslc proves weak, and gives per-device revocation without a PKI. mTLS may be added as hardening only if the prototype shows client certs work; the bridge then requires both and the MAC stays. This departs from the mutually authenticated HTTPS suggested on #300, so it needs the owner's acceptance (section 9, question 4).
+**Decided (owner, 2026-11-25): (b) is required.** It needs the fewest unverified console features (one: validate a private root), keeps authentication sound if sslc proves weak, and gives per-device revocation without a PKI. mTLS is optional hardening only, added if the prototype shows client certs work; the bridge then requires both and the MAC stays.
 
 ### Console TLS capabilities (all **unverified** until a real console run)
 
@@ -68,7 +68,7 @@ The console speaks HTTPS to the bridge on the LAN. No plain HTTP, no certificate
 
 **Trust without name checking.** If sslc does not check names, the fallback is safe only when the paired CA is the *sole* trust root for the request and signs nothing but this bridge's leaf. If sslc also trusts its built-in roots (any public CA, or the console vendor's roots) alongside the added one, a certificate for any name from those roots would be accepted, and the fallback is unsafe: that is stop rule 1. Prototype tests, all required: (1) the bridge leaf validates; (2) a leaf from an unrelated private CA is refused; (3) a real public-CA-issued certificate for an arbitrary name, served on the same address, is refused; (4) a leaf from the same CA with a wrong SAN is refused if names are checked, or the test is recorded as "names unchecked" and the CA is then used only for this one bridge (a new CA per pairing, never reused across bridges).
 
-**Bridge TLS profile (proposed; confirm against the pinned rustls version).** The bridge is built on rustls, matching save-relay's existing HTTP client stack (pure Rust, no OpenSSL). Offered: TLS 1.2 and 1.3, with only ephemeral-key suites: for 1.2, ECDHE-RSA with AES-128-GCM, AES-256-GCM or ChaCha20-Poly1305; for 1.3 the standard AEAD suites. The leaf is RSA-2048 signed with SHA-256, so older console stacks can verify it. rustls does not offer static-RSA key exchange (no forward secrecy) or CBC suites. Whether sslc negotiates one of the offered suites is **unverified** and a prototype gate. If it cannot, the options are the mbedTLS fallback below, or a bridge profile with static RSA or a different TLS library, which weakens forward secrecy and is an exception to the no-OpenSSL rule: that is the owner's written decision (section 9, question 7), never a developer's.
+**Bridge TLS profile (confirm against the pinned rustls version).** The bridge is built on rustls, matching save-relay's existing HTTP client stack (pure Rust, no OpenSSL). Offered: TLS 1.2 and 1.3, with only ephemeral-key suites: for 1.2, ECDHE-RSA with AES-128-GCM, AES-256-GCM or ChaCha20-Poly1305; for 1.3 the standard AEAD suites. The leaf is RSA-2048 signed with SHA-256, so older console stacks can verify it. rustls does not offer static-RSA key exchange (no forward secrecy) or CBC suites. **Decided: there is no static-RSA, OpenSSL or other TLS exception.** Whether sslc negotiates an ECDHE plus AES-GCM or ChaCha20 suite with the bridge's rustls is **unverified** and a prototype gate. If the gate fails, the options are the mbedTLS fallback below or coming back to the owner; nothing is weakened in the meantime.
 
 **Fallback: mbedTLS from devkitPro portlibs over `soc` sockets** (own TCP and TLS 1.2 client). It lets the client pin `sha256(SubjectPublicKeyInfo)` directly and ignore names and dates, and it fixes the suites, at the cost of RAM, more console code, and a random source (**unverified** which one: PS service random bytes are preferred; anything weaker needs owner review). The protocol above the transport does not change. The SPKI pin is part of the pairing bundle either way.
 
@@ -77,11 +77,10 @@ The console speaks HTTPS to the bridge on the LAN. No plain HTTP, no certificate
 Stop the console route and revise this design, without weakening any check, if on the pinned firmware:
 
 1. Neither httpc nor mbedTLS validates the bridge against the paired private CA or pinned key *as the only trusted root*, and refuses another (including a public-CA certificate).
-2. No TLS 1.2 or 1.3 ephemeral-key suite shared with the bridge profile can be negotiated. The only remaining option would be a deliberately old bridge TLS profile; that needs the owner's explicit written decision.
+2. No TLS 1.2 or 1.3 ephemeral-key suite shared with the bridge profile can be negotiated. There is no weaker bridge profile to fall back to (owner ruling); the mbedTLS fallback is tried, and failing that the route returns to the owner.
 3. The console cannot produce 128-bit random values of acceptable quality.
 4. Verification only works with certificate checks disabled, or over plaintext.
 5. Bodies of 64 KiB cannot be moved reliably (shrink the chunk bound and retest; stop if 16 KiB fails).
-6. Only for a cartridge or anti-rollback title: see section 4, "3DS save archives".
 
 ## 2. Pairing, identity, scopes, revocation, rotation
 
@@ -145,21 +144,21 @@ The message is 86 bytes. **Worked layout: content hash** for one file `00000001.
 ### Pairing flow (host-initiated, one console at a time)
 
 1. Owner runs `bridge pair --scope <tid>[,<tid>] --name "<label>"` on the host. The bridge opens a 5-minute window accepting only `POST /v1/pair`.
-2. The host prints a **pairing bundle**: CA cert, bridge address and port, SPKI pin, and a one-time 128-bit `pair_secret`. Delivery, in order of preference: (i) a QR code on the host screen scanned by the console (**unverified**: 3DS camera plus a QR decoder), (ii) the bundle as a file the owner copies to the SD card, (iii) typing the base32 secret and pin on the console keyboard, with the CA copied as a file. The bundle is the trust anchor and must reach the console out of band, never over the network. Any bundle file the host writes is deleted by the bridge on success, expiry or window close; the console deletes its copy after pairing succeeds. A leftover copy is harmless once the secret is spent, and SD deletion is not secure erasure.
+2. The host shows a **pairing bundle** as a QR code: CA cert, bridge address and port, SPKI pin, and a one-time 128-bit `pair_secret`. The owner scans it with the 3DS camera inside the 5-minute window (owner ruling; this replaces the earlier typed-secret delivery). Camera capture and QR decoding on the console, and whether the bundle fits one QR code, are **unverified** and a prototype gate; if the gate fails the pairing design returns to the owner, not to typing. The bundle is the trust anchor and must reach the console out of band, never over the network. The bridge writes no bundle file; if one is ever produced for testing, it is deleted on success, expiry or window close, and the console keeps no copy of the secret after pairing succeeds.
 3. The host also prints a **short code**: 6 digits, for human verification only, not a secret.
 4. The console makes `device_id` and a 16-byte `client_nonce`, then calls `POST /v1/pair` over TLS validated against the bundle's CA with `{device_id, client_nonce, proof}`, the proof as defined in "Byte encodings".
 5. The bridge checks the proof, the window and the attempt count (5 wrong proofs close the window). **The first valid proof consumes `pair_secret`**: the device record is created in state `pending` and the bridge replies `{server_nonce}`. A second valid proof in the same window, from any source, finds the secret spent and is `auth_failed`; it never replaces the pending record. Both sides derive `device_key` as defined above; it never crosses the wire.
 6. Both show the `sas` value. The owner compares the two and confirms on the host; only then the bridge sets the device `active`. A mismatch or no confirmation discards the record, and the secret stays spent. `pair_secret` is single use and erased on success, expiry or window close.
 
-Why not a short code alone: 6 digits are guessable, and cannot authenticate the bridge to a console that does not yet know its CA. The out-of-band bundle carries the trust anchor; the short code only lets the human confirm that both ends derived the same key. The window length and the typed-secret fallback are owner question 1.
+Why not a short code alone: 6 digits are guessable, and cannot authenticate the bridge to a console that does not yet know its CA. The out-of-band QR carries the trust anchor; the comparison code only lets the human confirm that both ends derived the same key.
 
 ### Scopes, revocation, rotation
 
 - **Scope**: per device, a list of titles each with `read` and/or `write`. Changing scope is a host command, effective on the next request.
 - **Check order on every titled request**: (1) session and MAC, (2) device not revoked, (3) **scope**, (4) mapping. An out-of-scope title is `scope_denied` whether or not it is mapped, so the error code never reveals whether an out-of-scope title exists. Only a title inside the scope can reach `game_unknown`.
 - **Revocation**: `bridge device revoke <id>` marks the record revoked and drops its sessions; every later request is `device_revoked` (HTTP 401). A lost console is revoked at the host; no provider credential was ever on it. `bridge device list` shows label, scopes, last seen.
-- **Device key rotation** (hygiene only; on suspicion of theft, revoke and re-pair instead, because a thief holding the old key can rotate first). `POST /v1/rotate` in an authenticated session exchanges nonces; both derive the rotate key defined above. The bridge stores it as `pending_key` and keeps the old key active. The console writes the new key to `device.bin.new` (fsync) *before* it uses it, then opens a session with it. The bridge accepts a session MAC under either key. When a session under `pending_key` succeeds, the bridge makes it the key and drops the old one, and the console then renames `device.bin.new` over `device.bin`. If 10 minutes pass with no use of the new key, the bridge drops `pending_key` and keeps the old key. A console that finds both files tries `device.bin.new` first, then `device.bin`; whichever the bridge accepts is kept and the other deleted. A crash at any step therefore leaves at least one key that the other side accepts. Recommended every 90 days, a warning rather than a block.
-- **Leaf rotation**: reissue under the same CA, no console change. **CA rotation**: re-pair (no overlap scheme in v1; owner question 3).
+- **Device key rotation** (key-only, no CA change; owner ruling). `POST /v1/rotate` in an authenticated session exchanges nonces; both derive the rotate key defined above. The bridge stores it as `pending_key` and keeps the old key active. The console writes the new key to `device.bin.new` (fsync) *before* it uses it, then opens a session with it. The bridge accepts a session MAC under either key. When a session under `pending_key` succeeds, the bridge makes it the key and drops the old one, and the console then renames `device.bin.new` over `device.bin`. If 10 minutes pass with no use of the new key, the bridge drops `pending_key` and keeps the old key. A console that finds both files tries both keys, `device.bin.new` first; whichever the bridge accepts is kept and the other deleted. A crash at any step therefore leaves at least one key that the other side accepts. Recommended every 90 days, a warning rather than a block. On suspected theft or compromise do not rotate: revoke and re-pair, because a thief holding the old key can rotate first.
+- **Leaf rotation**: reissue under the same CA, no console change. **CA change or suspected CA compromise**: revoke every device and re-pair (owner ruling); there is no overlap scheme and no re-pairing without the QR step. The device key stays on the SD card without a PIN in v1.
 - **Re-pair** for an existing `device_id` happens only through the host `pair` command, never from the network.
 
 ### Sessions (replay bounds without trusting the console clock)
@@ -179,8 +178,8 @@ Base path `/v1`. JSON uses `application/json; charset=utf-8`; chunks use `applic
 | Limit | Default | Hard maximum |
 |---|---|---|
 | Files per snapshot | 64 | 256 |
-| Per-file size | 2 MiB | 16 MiB |
-| Total snapshot size | 4 MiB | 16 MiB (mapping may set lower; the sizes of real 3DS saves are **unverified**, so the default is a guess to be checked in the prototype) |
+| Per-file size | 4 MiB | 4 MiB |
+| Total snapshot size | 16 MiB | 16 MiB (a mapping may set lower) |
 | Manifest JSON | 32 KiB | 64 KiB |
 | Chunk body | 64 KiB | 256 KiB |
 | Request headers | 4 KiB | 8 KiB |
@@ -189,7 +188,7 @@ Base path `/v1`. JSON uses `application/json; charset=utf-8`; chunks use `applic
 | Idempotency record kept | 24 h | 7 d |
 | Snapshots listed | 50 | 200 |
 
-The default and maximum snapshot sizes are owner question 2. The retained-loser cap is in section 5.
+The caps are the owner's: 4 MiB per file and 16 MiB per title. The sizes of real 3DS saves are **unverified**; the prototype measures real titles, and a measured size above these caps returns to the owner. The retained-loser cap is in section 5.
 
 **Bounds that apply to byte ranges.** A download's `len` must satisfy `1 <= len <= chunk_bytes` and `offset + len <= size of file n`, else `usage`; the bridge never reads more than `chunk_bytes` for one request. An upload chunk body must be at most `chunk_bytes` and `offset + body length` at most the declared file size, else `payload_too_large`.
 
@@ -213,7 +212,7 @@ The default and maximum snapshot sizes are owner question 2. The retained-loser 
 | `POST /v1/titles/{tid}/stage/{stage}/abort` | write | discard |
 | `POST /v1/titles/{tid}/ack` | write | the console reports it applied a snapshot, and how a conflict was resolved |
 
-`{tid}` is the 16-hex-digit lowercase title id. Byte ranges are query parameters, so no `Range` header support is assumed. A console-loser upload (`stage` with `"purpose":"console_loser"`) exists in the design but is **disabled** until the owner rules (section 9, question 8).
+`{tid}` is the 16-hex-digit lowercase title id. Byte ranges are query parameters, so no `Range` header support is assumed. A console-loser upload (`stage` with `"purpose":"console_loser"`) is part of the design (owner ruling): the console loser is uploaded before the console archive is overwritten (section 5).
 
 ### JSON shapes
 
@@ -221,7 +220,7 @@ The default and maximum snapshot sizes are owner question 2. The retained-loser 
 
 ```json
 {"ok":true,"data":{"titles":[{"title_id":"0004000000abcd00","game_id":"example-game","name":"Example",
-  "access":["read","write"],"max_total_bytes":4194304,
+  "access":["read","write"],"max_total_bytes":16777216,
   "head":{"snapshot_id":"20261125T101500Z-0007","seq":7,"content_sha256":"<hex>"}}]}}
 ```
 
@@ -233,7 +232,7 @@ The default and maximum snapshot sizes are owner question 2. The retained-loser 
   "last_synced":{"snapshot_id":"20261125T101500Z-0007","content_sha256":"<hex>"}}}
 ```
 ```json
-{"ok":true,"data":{"action":"noop|push|pull|needs_choice","reason":"console_changed",
+{"ok":true,"data":{"action":"noop|push|pull|conflict_auto|needs_choice","reason":"console_changed",
   "snapshot_id":"<id, for pull>",
   "info":{"host_changed":true,"console_changed":true,"host_azahar_running":false,
           "console_time":{"meaning":"first_seen_changed","rtc_ms":0},
@@ -241,7 +240,7 @@ The default and maximum snapshot sizes are owner question 2. The retained-loser 
           "offset_s":-3600,"residual_s":2}}}
 ```
 
-How the bridge reads it: `last_synced` is checked against the bridge's snapshot history for that title. If `snapshot_id` is unknown there, or its `content_sha256` differs, the baseline is untrusted and a both-sides-differ situation becomes `needs_choice` with reason `last_synced_unknown`; the bridge never trusts its own per-device `head.json` as the base. A missing `last_synced` counts as changed on both sides that have files. **Host changed** means the SHA of the *live Azahar folder*, re-hashed by the bridge now, differs from `last_synced.content_sha256`; `head.json` is a record, not the test, so a change made by playing in Azahar, or by a relay pull, is seen. `push`: the console is ahead, stage then commit. `pull`: the host is ahead; the bridge has just snapshotted the live folder as `snapshot_id` (read twice, hashed before and after; a mismatch means the folder is being written and the reply is `host_busy`), and the console downloads it. `needs_choice`: both changed (or the baseline is unknown); the console shows both sides with the labelled `info` times and the owner picks. A `conflict_auto` action (a clock-decided winner) is **not offered** until the owner decides what "newest" means (section 5, question 6). The names mirror save-relay's `Noop / Pull / Push / Conflict` plan; `Adopt` is folded into `noop` when both content hashes are equal. `plan` changes nothing.
+How the bridge reads it: `last_synced` is checked against the bridge's snapshot history for that title. If `snapshot_id` is unknown there, or its `content_sha256` differs, the baseline is untrusted and a both-sides-differ situation becomes `needs_choice` with reason `last_synced_unknown`; the bridge never trusts its own per-device `head.json` as the base. A missing `last_synced` counts as changed on both sides that have files. **Host changed** means the SHA of the *live Azahar folder*, re-hashed by the bridge now, differs from `last_synced.content_sha256`; `head.json` is a record, not the test, so a change made by playing in Azahar, or by a relay pull, is seen. `push`: the console is ahead, stage then commit. `pull`: the host is ahead; the bridge has just snapshotted the live folder as `snapshot_id` (read twice, hashed before and after; a mismatch means the folder is being written and the reply is `azahar_running`), and the console downloads it. `needs_choice`: both changed (or the baseline is unknown); the console shows both sides with the labelled `info` times and the owner picks. `conflict_auto`: both changed and the clocks are trusted by the rule in section 5; the named winner applies and the loser is retained. When the rule cannot decide (unreliable clock, tie, unknown baseline) the answer is `needs_choice`. The names mirror save-relay's `Noop / Pull / Push / Conflict` plan; `Adopt` is folded into `noop` when both content hashes are equal. `plan` changes nothing.
 
 `stage` request and response:
 
@@ -268,7 +267,7 @@ A repeat of `stage` with the same `Idempotency-Key` and identical body returns t
 
 ### Errors
 
-Wire envelope: `{"ok":false,"error":{"code":"<code>","message":"<short>","retryable":true|false}}`. It differs from the CLI's `--json` envelope (`src/api.rs`: `command` field, no `retryable`) and the success envelope here likewise carries no `command` field. A message never contains a key, MAC, token, save content or a host path outside the mapping. Codes reuse save-relay's vocabulary (`docs/code-map.md`, "Error codes") with the meanings below; where a name is shared, the meaning on this route is stated so nothing is silently redefined. The rows marked **new** are proposed additions (code-map allows adding, never renaming). They would be added to `Error::code` in `src/error.rs`, to the exit-code table in `docs/code-map.md` and `exit_code` in `src/api.rs` only when the bridge is built; this document changes none of them. Proposed exit-code groups: `scope_denied` and `device_revoked` with 4, `unsupported_version` and `payload_too_large` with 2, `stage_mismatch`, `host_busy` and `losers_full` with 5.
+Wire envelope: `{"ok":false,"error":{"code":"<code>","message":"<short>","retryable":true|false}}`. It differs from the CLI's `--json` envelope (`src/api.rs`: `command` field, no `retryable`) and the success envelope here likewise carries no `command` field. A message never contains a key, MAC, token, save content or a host path outside the mapping. Codes reuse save-relay's vocabulary (`docs/code-map.md`, "Error codes") with the meanings below; where a name is shared, the meaning on this route is stated so nothing is silently redefined. The rows marked **new** are proposed additions (code-map allows adding, never renaming). They would be added to `Error::code` in `src/error.rs`, to the exit-code table in `docs/code-map.md` and `exit_code` in `src/api.rs` only when the bridge is built; this document changes none of them. Proposed exit-code groups: `scope_denied` and `device_revoked` with 4, `unsupported_version` and `payload_too_large` with 2, `stage_mismatch`, `azahar_running` and `losers_full` with 5.
 
 | Code | HTTP | Meaning on this route |
 |---|---|---|
@@ -289,8 +288,8 @@ Wire envelope: `{"ok":false,"error":{"code":"<code>","message":"<short>","retrya
 | `unsupported_version` | 400 | **new**: no common `proto` |
 | `payload_too_large` | 413 | **new**: a limit above |
 | `stage_mismatch` | 409 | **new**: the stage state or `offset` disagrees with the bridge; `data.received` carries the truth |
-| `host_busy` | 409 | **new**: Azahar is running, or the folder changed while it was being read (section 5) |
-| `losers_full` | 409 | **new**: the retained-loser cap would be exceeded (section 5) |
+| `azahar_running` | 409 | **new**: Azahar is running (section 5); also returned when the folder changed while it was being read |
+| `losers_full` | 409 | **new**: the per-title retained-loser byte cap would be exceeded; the console asks the owner (section 5) |
 
 A conflict is not an error: it is the `plan` outcome `needs_choice`, as in save-relay where `conflict` changes nothing until the player chooses. Console retry rule: retry only on `retryable: true` or a timeout, with the same `Idempotency-Key` and a fresh `seq`, at most 3 attempts after 1, 3 and 9 s; never retry a bad MAC. Timeouts mirror `UreqTransport` (`src/http.rs`): connect 5 s, idle (no read or write progress) 60 s (`IDLE_TIMEOUT`), no total deadline.
 
@@ -312,14 +311,14 @@ A conflict is not an error: it is the `plan` outcome `needs_choice`, as in save-
 What a file is on the console: whatever the client enumerates in the title's save archive through libctru's FS (`FSUSER_OpenArchive`, `FSUSER_ControlArchive` for commit). Whether a homebrew app may open another title's save archive, and with what permissions on the pinned custom firmware, is a prototype gate. The manifest does not depend on the answer; an empty archive is an empty `files`.
 
 - **Scope: SD-installed (digital) titles' save data only.** Extdata (extra data, DLC data), system saves and other archives are out of scope and are never read or written.
-- **Anti-rollback (secure value).** Some titles store a counter outside the save files, read and written with `FSUSER_GetSaveDataSecureValue` and `FSUSER_SetSaveDataSecureValue`, and refuse a save restored without it. Whether the pinned custom firmware lets the client read and set it, and which titles use it, are prototype gates. Until verified, the console client refuses to apply a snapshot to a title whose secure value reads as set, and tells the owner why. This is stop rule 6, scoped to those titles; it does not stop the route for others.
-- **Cartridge saves** live in the card's SPI archive, not the SD archive, with different access and size rules. They are **out of scope** for v1 until the owner decides (section 9, question 5); the mapping's `console_archive.kind` accepts only `savedata` on `media` `sd`, and `gamecard` is rejected at validation. If the owner brings them in, they are a separate prototype gate with their own tests.
+- **Anti-rollback (secure value).** Some titles store a counter outside the save files, read and written with `FSUSER_GetSaveDataSecureValue` and `FSUSER_SetSaveDataSecureValue`, and refuse a save restored without it. Whether the pinned custom firmware lets the client read and set it, and which titles use it, are prototype gates. The secure value is a later-milestone gate (owner ruling); in v1 the console client refuses to apply a snapshot to a title whose secure value reads as set, and tells the owner why. That does not stop the route for other titles.
+- **Cartridge saves** live in the card's SPI archive (`ARCHIVE_CARD_SPIDATA`), not the SD archive, with different access and size rules. **Decided: digital SD-installed titles only for v1.** Cartridge saves, and the secure value above, are unverified prototype gates for a later milestone, each with its own tests; the mapping's `console_archive.kind` accepts only `savedata` on `media` `sd`, and `gamecard` is rejected at validation.
 
 ### Title to relay game mapping (host file, owner-authored and reviewed)
 
 ```json
 {"format":1,"titles":[{"title_id":"0004000000abcd00","game_id":"example-game","name":"Example",
-  "console_archive":{"kind":"savedata","media":"sd"},"max_total_bytes":4194304}]}
+  "console_archive":{"kind":"savedata","media":"sd"},"max_total_bytes":16777216}]}
 ```
 The mapping does **not** repeat the Azahar path. The Azahar side of a mapped title is the save path in the title's relay manifest (the existing `saves` template and the `{home}`, `{data}`, `{config}`, `{documents}` variables resolved through `PathVars`, `docs/manifest.md`), so the relay and the bridge cannot disagree about where the host copy lives. Rules: each `title_id` and each `game_id` appears once; `game_id` must equal the relay manifest `id` and satisfy save-relay's game id rules (`src/manifest.rs`); the title's relay manifest must exist and resolve a folder on the bridge host; no two mapped folders overlap; no path is derived from a title string or from anything the console sends: the console sends only a `title_id`, and an unmapped (in-scope) one is `game_unknown`. `bridge mapping check` verifies the agreement: the relay manifest's id equals `game_id`, the resolved folder exists and is a directory, and, when its path contains the 3DS `title/<high>/<low>` segments, they equal the high and low 32 bits of `title_id`.
 
@@ -354,22 +353,22 @@ Offset: the session request carries `rtc_ms`; the bridge computes `d = server_ti
 
 ### Rule (this route only)
 
-**Default until the owner rules (question 6): when both sides changed, the answer is always `needs_choice`.** The owner resolves it on the console UI (`keep_console` or `keep_host`, flows in section 3), and the loser is kept in both cases.
+**Decided rule (owner, 2026-11-25): newest wins by first-seen-changed time, loser retained.** When both sides changed, the console time is `changed_seen_rtc_ms` from `state.json`, mapped to host time with the session offset, and the host time is the newest file mtime in the Azahar folder. The later one wins, and the loser is retained as in the next section. Wherever the clocks cannot support a decision the answer is `needs_choice`, resolved by the owner on the console UI (`keep_console` or `keep_host`, flows in section 3). Both values are proxies, so the rule is a prototype gate to validate on real hardware, and the owner can always override with `needs_choice`.
 
-**Candidate rule A, off by default** (enabled only by an explicit owner decision): newest wins with a reliable clock. 1. `|r| > 60 s`, or `|offset_s| > 26 h`: `needs_choice`, reason `clock_unreliable`. 2. With `t_c = changed_seen_rtc + offset_s` and `t_h` the host time: `|t_c - t_h| <= tolerance` (default 300 s, configurable 60 to 3600 s) is a tie: `needs_choice`, reason `tie`. 3. Else the later one wins and the loser is retained, and `plan` would then also offer `conflict_auto`. Its fragility is the point of the question: both inputs are clocks that other machines or the owner can set, and the console value is a proxy.
+Steps: 1. `|r| > 60 s`, or `|offset_s| > 26 h`: `needs_choice`, reason `clock_unreliable`. 2. With `t_c = changed_seen_rtc + offset_s` and `t_h` the host time: `|t_c - t_h| <= tolerance` (default 300 s, configurable 60 to 3600 s) is a tie: `needs_choice`, reason `tie`. 3. Else the later one wins, `plan` returns `conflict_auto` naming the winner, and the loser is retained. An unknown baseline (`last_synced_unknown`) is always `needs_choice`. The fragility is stated openly: both inputs are clocks that other machines or the owner can set, and the console value is a proxy for the time the game saved.
 
 ### Loser retention and naming
 
 Before either side is overwritten in a both-changed resolution, the side being replaced is retained:
 
 - **Host loser**: the previous host copy is stored as bridge snapshot `<stamp>-<seq>-loser` with the `.save-relay-conflict-loser` marker (the name the relay engine already uses, `src/sync.rs`; the bridge store mirrors it) and enters the relay history through the normal engine, so `save-relay restore` can bring it back. The relay history keeps its own count-based retention (`retention::KEEP = 10`, with the marker exempting a loser); the bridge store follows the same shape.
-- **Console loser**: the archive about to be overwritten is first copied to `sdmc:/3ds/save-relay/backup/<tid>/<stamp>/` on the SD card, verified by re-hash. The bridge never deletes console backups. **The SD copy alone is not durable** (a stolen, failed or reformatted card loses it). The spec therefore also describes uploading the console loser to the bridge (and so to relay history) before overwriting; that upload stays **disabled** until the owner decides whether the SD backup is enough (section 9, question 8). With it disabled, the SD copy is the only copy of the console loser and the console says so on the confirmation screen.
-- **Cap, never silent pruning.** Losers are never pruned to make room. Per title, the bridge counts retained losers and their bytes against a cap (proposed placeholders: 20 losers and 128 MiB per title, owner question 9). When a resolution would exceed it the bridge refuses the commit with `losers_full` and the owner clears old losers on the host by hand. No loser is deleted without the owner doing it.
+- **Console loser**: the archive about to be overwritten is first copied to `sdmc:/3ds/save-relay/backup/<tid>/<stamp>/` on the SD card, verified by re-hash, **and uploaded to the bridge** (owner ruling) as a `console_loser` stage that becomes a `-loser` snapshot and enters relay history. The console overwrites its archive only after the upload is verified; if the upload fails, nothing is overwritten and the owner is told. The SD copy is kept as well, and the bridge never deletes console backups.
+- **Cap, never silent pruning.** Losers are never pruned to make room. Each title has a byte cap on retained losers (owner ruling; the size is configured by the owner and fixed by measuring real titles in the prototype, and none is invented here). Once the cap is reached the bridge refuses new conflicts with `losers_full` and the console asks the owner; the owner clears old losers on the host by hand. No loser is deleted without the owner doing it.
 - Snapshots that something still points at are exempt from ordinary retention: the one a pending (un-acked) pull names, and the one most recently reported as `last_synced` by each active device. They stop being exempt once that device acks or reports a newer one.
 
 ### Crash-safe commit record (console to host)
 
-Order is a per-title integer `seq` in `head.json`, never a timestamp, so two commits cannot tie. A title is committed only while it holds the per-title lock and **Azahar is not running** (the bridge checks for the configured Azahar process; if it cannot tell, it refuses; `host_busy`; owner question 10). `commit` also re-hashes the live Azahar folder first and refuses with `changed_on_server` if it no longer equals the hash `plan` saw (a change made by playing, by a relay pull, or by hand). The journal `journal/<tid>.json` is replaced atomically (write temp, fsync, rename, fsync the directory) **before** each step it names, so a crash always leaves a record of what was about to happen:
+Order is a per-title integer `seq` in `head.json`, never a timestamp, so two commits cannot tie. A title is committed only while it holds the per-title lock and **Azahar is not running** (owner ruling: refuse with `azahar_running`; the bridge checks for the configured Azahar process, and if it cannot tell, it refuses). `commit` also re-hashes the live Azahar folder first and refuses with `changed_on_server` if it no longer equals the hash `plan` saw (a change made by playing, by a relay pull, or by hand). The journal `journal/<tid>.json` is replaced atomically (write temp, fsync, rename, fsync the directory) **before** each step it names, so a crash always leaves a record of what was about to happen:
 
 ```json
 {"format":1,"title_id":"...","device_id":"...","seq":8,"op":"console_to_host",
@@ -407,8 +406,8 @@ The console downloads into `sdmc:/3ds/save-relay/stage/<tid>/`, verifies hashes,
 |---|---|---|---|
 | LAN attacker, passive | sees traffic | TLS to a private CA; no plaintext route | packet sizes and timing |
 | LAN attacker, fake bridge | spoofs DNS or IP, serves a certificate | the paired CA is the only trusted root (stop rule 1) or SPKI pin; session replies and every in-session reply carry a MAC it cannot form; unauthenticated errors are never acted on | relies on unverified console chain validation |
-| LAN attacker, fake console | connects to the bridge | nothing without a pairing or session MAC; pairing only in a 5-minute host-opened window with a 128-bit single-use secret and 5 attempts; per-IP and per-device limits | an attacker who also captures the bundle (shoulder-surf, QR photo) in the window must still pass the owner's short-code confirmation on the host |
-| Stolen console or SD card | reads `device.bin` | scoped to named titles; revoke at the host; no provider credential on the console; on suspicion revoke and re-pair (rotation would let the thief race it) | the thief can read and write those titles until revoked; every overwrite keeps a loser or earlier snapshot (a console loser on the SD card goes with the card unless upload is enabled), so data is recoverable but not private; no PIN in v1 |
+| LAN attacker, fake console | connects to the bridge | nothing without a pairing or session MAC; pairing only in a 5-minute host-opened window with a 128-bit single-use secret and 5 attempts; per-IP and per-device limits | an attacker who also captures the bundle (shoulder-surf, a photo of the QR) in the window must still pass the owner's comparison-code confirmation on the host |
+| Stolen console or SD card | reads `device.bin` | scoped to named titles; revoke at the host; no provider credential on the console; on suspicion revoke and re-pair (rotation would let the thief race it) | the thief can read and write those titles until revoked; every overwrite keeps a loser or earlier snapshot (the console loser is also uploaded to the bridge, so it does not exist only on the card), so data is recoverable but not private; no PIN in v1 |
 | Malicious bridge peer | a rogue LAN host answering at the bridge address, or a process on the host | CA key and device keys are host-user-only; the console checks pin and MAC; the bridge binds only the configured interface | a process running as the host user can read everything: out of scope |
 | Replay | resends captured requests | TLS; per-session increasing `seq`; session expiry; MAC over method, path, seq, body hash and idempotency key; idempotency keys only return the recorded result | none beyond a TLS break plus session key theft |
 | Path escape, hostile manifest | `..`, absolute paths, case collisions, reserved names, huge counts | path rule and limits; mapped roots only; no symlinks | implementation bugs, covered by synthetic tests |
@@ -424,14 +423,14 @@ The console downloads into `sdmc:/3ds/save-relay/stage/<tid>/`, verifies hashes,
 
 - Manifest parse, content hash (the same files from different `device_id`, `origin` and `created` hash equal), path rules (traversal, absolute, backslash, case-fold collision, over-long, NUL, symlink, trailing dot or space, reserved device names, `:`), every limit, `len` and `offset` bounds.
 - All wire byte encodings against the shared vector file (section 2), including the negative vectors; pairing derivation and short code; window expiry, attempt limit, single use, two valid proofs in one window; scopes and the check order (out-of-scope mapped and unmapped titles give the same code); revoke; rotate with a crash at each step; session `seq` replay, gaps and expiry; serialized requests; bad MAC; session reply and response MAC; unauthenticated error reply ignored; idempotency scope per (device, title, verb).
-- `plan` decision table: one side changed (both directions), equal hashes, first sync, empty side, unknown `last_synced`, both changed gives `needs_choice`, 3600 s DST step and large residual in `info`, owner choice for both `keep_console` and `keep_host`; the live folder changed by hand after `plan` (`changed_on_server`); Azahar running (`host_busy`); candidate rule A tests only if enabled.
+- `plan` decision table: one side changed (both directions), equal hashes, first sync, empty side, unknown `last_synced`, both changed with a reliable clock gives `conflict_auto` and with an unreliable clock or a tie `needs_choice`, 3600 s DST step and large residual in `info`, owner choice for both `keep_console` and `keep_host`; the live folder changed by hand after `plan` (`changed_on_server`); Azahar running (`azahar_running`), and the loser upload failing (nothing overwritten).
 - Stage, chunk, resume at each offset, wrong offset (`stage_mismatch` with `received`), idempotent replays, verify mismatch, abort, TTL.
 - Commit journal with crash injection before and after every state and every rename on a fake filesystem, each recovery row above, a Windows-style refusal to rename a held directory, losers retained and exempt from retention, the loser cap (`losers_full`), pinned snapshots, `ack` and `pending_console_ack`.
 - Mapping validation (overlap, duplicates, missing directory, disagreement with the relay manifest, `gamecard` rejected) and the error-code table.
 - Wire fixtures for every JSON shape, shared with the console client's parser so both sides read the same files.
 - Bridge-side TLS only: a loopback server with a generated test CA accepts a client trusting that CA and refuses one that does not; the bridge's offered suites are exactly the list above.
 
-**Only a real 3DS plus Azahar round trip proves (#300):** that httpc or the fallback stack negotiates with the bridge on the pinned firmware and one of the offered ephemeral suites; that the paired root is the only trusted root and a real public-CA certificate is refused; name or IP validation and clock behavior; client certs (optional); sustained 64 KiB chunks; QR scan or manual code entry; RTC meaning, zone and precision; whether the title's save archive can be opened, enumerated, written and committed, whether power loss before commit is safe, and how the secure value behaves; the real file set and sizes of a title; Azahar reading the written folder and the game loading it, both directions, and the Azahar process check; both-changed resolution and loser recovery on real data; host-side revocation of a real console. Record versions and outcomes without publishing save contents or credentials.
+**Only a real 3DS plus Azahar round trip proves (#300):** that httpc or the fallback stack negotiates with the bridge on the pinned firmware and one of the offered ephemeral suites; that the paired root is the only trusted root and a real public-CA certificate is refused; name or IP validation and clock behavior; client certs (optional); sustained 64 KiB chunks; 3DS camera QR capture and decode, and fit of the bundle in one QR code; RTC meaning, zone and precision; whether the title's save archive can be opened, enumerated, written and committed, whether power loss before commit is safe, and how the secure value behaves; the real file set and sizes of a title; Azahar reading the written folder and the game loading it, both directions, and the Azahar process check; both-changed resolution and loser recovery on real data; host-side revocation of a real console. Record versions and outcomes without publishing save contents or credentials.
 
 Neither these tests nor a source review close the real-device gate. The stop rules in section 1 apply the moment a prototype contradicts a capability tagged **unverified**.
 
@@ -451,19 +450,19 @@ No versions are asserted here. Each row is filled, with its source, when the pro
 | Bridge Rust toolchain and server TLS crate (and its supported suites) | to pin | |
 | Licenses of every vendored piece linked into the console client | to confirm | |
 
-## 9. Open owner decisions
+## 9. Owner rulings (2026-11-25)
 
-None of these is decided by this document. Each shows the safe default the spec holds until the owner answers.
+The owner ruled on all ten open questions; the spec above holds each as decided. What stays open is prototype and hardware verification, not owner choice.
 
-| # | Question | Default held until answered |
+| # | Ruling | Where |
 |---|---|---|
-| 1 | Is a 5-minute pairing window acceptable, and is typing the secret on the console acceptable if QR is not feasible? | 5-minute window; typed secret listed as the last-resort delivery (section 2) |
-| 2 | Is the default total snapshot cap of 4 MiB (hard maximum 16 MiB) acceptable? | 4 MiB default, 16 MiB maximum (section 3) |
-| 3 | Is re-pairing on CA rotation acceptable, with the device key on the SD card without a PIN? | re-pair on CA rotation; no PIN in v1 (sections 2 and 6) |
-| 4 | Accept an application-layer HMAC in place of the mutually authenticated HTTPS proposed on #300, with mTLS only as optional hardening? | HMAC baseline; mTLS optional hardening only (section 1) |
-| 5 | Cartridge saves: in scope (the card's SPI archive), or digital SD titles only for v1? | SD-installed titles only; `gamecard` rejected (section 4) |
-| 6 | What does "newest" mean on the console without a save-time source: a recorded first-seen-changed time (candidate rule A), or always ask when both changed? | always `needs_choice` when both changed; the loser is kept (section 5) |
-| 7 | If sslc cannot negotiate an ephemeral suite, may the bridge use a static-RSA (no forward secrecy) or non-rustls TLS profile, an exception to the no-OpenSSL rule? | no: stop rule 2 applies and the route is revised (section 1) |
-| 8 | Must a console loser also go up to the bridge and relay history, or is the SD-card backup enough? | keep the loser on the SD card, upload disabled and flagged pending this decision (section 5) |
-| 9 | A per-title cap on retained losers, or never prune? | never prune; placeholder cap of 20 losers and 128 MiB per title that refuses new losers instead of pruning (section 5) |
-| 10 | May the bridge write to the Azahar folder while Azahar is running, or must it refuse? | refuse (`host_busy`); fails closed if the process check cannot tell (section 5) |
+| 1 | Console identity: application-layer HMAC over the pinned private CA is required; mTLS is optional hardening only | section 1 |
+| 2 | Digital SD titles only for v1; cartridge saves (`ARCHIVE_CARD_SPIDATA`) and the secure value are unverified prototype gates for a later milestone | section 4 |
+| 3 | "Newest" on the console is the first-seen-changed time, kept in `state.json` with a clock offset, compared with the host mtime | section 5 |
+| 4 | No static-RSA or OpenSSL exception; "sslc negotiates an ECDHE plus AES-GCM or ChaCha20 suite with rustls" is a prototype gate, and a failure comes back to the owner | section 1 |
+| 5 | The console loser is uploaded to the bridge (relay history) before overwriting, and the SD copy is kept too | section 5 |
+| 6 | Per-title byte cap on retained losers; at the cap, refuse new conflicts and ask; never prune silently | section 5 |
+| 7 | Refuse with `azahar_running` while Azahar is running | section 5 |
+| 8 | Pairing: a QR code scanned with the 3DS camera inside the 5-minute window, then the comparison code; QR capture and decoding on the console are a prototype gate (replaces the typed code) | section 2 |
+| 9 | Size caps: 4 MiB per file and 16 MiB per title; the prototype measures real titles | section 3 |
+| 10 | A CA change or suspected compromise means revoke and re-pair; key-only rotation uses `device.bin.new` and tries both keys | section 2 |
