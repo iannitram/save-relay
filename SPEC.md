@@ -97,7 +97,7 @@ One small library and command-line tool that every port's launcher calls: pull b
   - Q4: the desktop `save-relay game-files` command is in 1.0.
   - Q7: the two #324 C functions (`save_relay_download_game_files`, `save_relay_game_files_status`) stay as deprecated wrappers on the new engine and are removed after 1.0.
   - Q8: before the installer's C interface freezes, add an entry point that verifies and publishes a file the iOS app downloaded itself (background `URLSession`).
-  - Q10: `game-files/<app>/<os>/` is the standard layout. The host chooses the layout, never the remote manifest. ACNH's existing `acnh-universal-game/android` is read in place as a legacy layout, with no migration.
+  - Q10: `game-files/<app>/<os>/` is the standard layout. ACNH's existing `acnh-universal-game/android` is read in place as a legacy layout, with no migration.
   - Q11: phones write the open-elsewhere mark (M11) at launch, and clear it with a successful push when the app pauses or goes to the background. A failed push leaves the mark up as a warning.
 - Rulings 2026-11-01 (question tool): the Baton, `wrap` and save cards with a Game Mode panel, all in 1.0; the open-elsewhere mark "Never blocks, always asks (Recommended)"; the card picture "Port writes it, wrap grabs Steam's (Recommended)".
 - The open-elsewhere mark is a small `playing.json` beside `state.json` (device, time, revision read), written at `pull` and removed at `push`; the plan table gains a row for it before Pull.
