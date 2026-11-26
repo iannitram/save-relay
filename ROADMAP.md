@@ -58,7 +58,7 @@ Owner rulings that shape this roadmap, newest first. The eleven rulings of 2026-
 - **Owner ruling 2026-11-16:** the audit's Minor list was split into four issues (#269-#272).
 - **Owner ruling 2026-11-12:** Android bindings are a Should for 1.0 ("Bindings into 1.0 too"). Superseded by the ruling of 2026-11-25 (Q2): Android is a Must.
 
-`SPEC.md` was approved on 2026-11-17 and edited on 2026-11-24 (installer scope, a changed Won't) without a new approval line. The rulings above (Q1, Q2, Q5) change it again: the amendment is owed under #308 as step P12, and this roadmap does not edit `SPEC.md`.
+`SPEC.md` was approved on 2026-11-17 and edited on 2026-11-24 (installer scope, a changed Won't) without a new approval line. The rulings above (Q1, Q2, Q5) change it again. Step P12 made that amendment under #308: `SPEC.md` now carries M19, Must M20 (Android) and the narrowed M17, and its approval line is back to "not yet" until the owner approves the amended Musts.
 
 ## Where it stands (2026-11-25)
 
@@ -135,7 +135,7 @@ Order: agent work (P) lands, then `v1.0.0-rc.3` (R), then the owner gates G1-G7 
 | P9 | needs issue: save-sync safety | symlinks treated the same on upload and download; bounded response sizes on every backend read; a local safety copy before a pull replaces saves; one lock per game across CLI, panel, wrap and the C interface; a rotated refresh token stored when it is issued, and its failure reported | agent | each has a test; see Known risks K4-K8 |
 | P10 | needs issue: docs sync for the installer and the launcher contract | `docs/PRIVACY.md` (what is uploaded, mobile apps, game-file downloads, the shared Dropbox app folder); `README.md`; `docs/services.md` "Planned game-file downloads"; `docs/assets.md` contradictions; `docs/android.md` "verified on Android 15" without a recorded run; slot-suffixed ids in the header and `docs/manifest.md`; `GLOSSARY.md` (app id and game id, new terms); ADRs for the installer, slot ids, strict scope, the launcher contract; an iOS integration guide; supported OS versions and CPU types; `SECURITY.md` (new) and a threat model; the README's SmartScreen note for the unsigned Windows binary (Q6); how to remove Save Relay from a machine; doc tests for `docs/assets.md`, `docs/android.md` and the header | agent; after P1 | each doc matches `main`; doc tests in CI |
 | P11 | needs issue: `CHANGELOG.md` by version | entries for everything since the #308 audit; a released / unreleased split; the misplaced top line fixed | agent | rc.3 notes can be cut from it |
-| P12 | #308 (owed; `SPEC.md` is not edited here) | amend `SPEC.md` for the rulings of 2026-11-25: add M19 (a thin app downloads, resumes and verifies prepared files from Dropbox, Nextcloud and Google Drive; device proof on all three), make Android a Must, amend M17 to the CLI on Apple Silicon only; cite the owner ruling and add the approval line | agent, with the owner's approval line | `SPEC.md` carries M19, the Android Must and the amended M17; before the G6 and G2 rows are used |
+| P12 | #308 (`SPEC.md` amended; the owner's approval line is still owed) | amend `SPEC.md` for the rulings of 2026-11-25: add M19 (a thin app downloads, resumes and verifies prepared files from Dropbox, Nextcloud and Google Drive; device proof on all three), make Android a Must, amend M17 to the CLI on Apple Silicon only; cite the owner ruling and add the approval line | agent, with the owner's approval line | `SPEC.md` carries M19, the Android Must and the amended M17; before the G6 and G2 rows are used |
 | P13 | #328 | the publisher: chunked resumable uploads of prepared game files to the three services, so Drive installs work with `drive.file` (Q3) | agent; after P1 | on `main` with tests on all three providers through fakes; label and milestone 1.0 set (H1) |
 
 ### R: the release candidate
@@ -183,7 +183,7 @@ Each needs the owner's device, account or signing identity. An agent prepares; o
 | M16 | `tests/steam_games_flow.rs` | G7 |
 | M17 (CLI on Apple Silicon, ruling Q5) | CI macOS | G1, G2 |
 | M18 | `tests/ffi*.rs` | G3, G4, P4, P2a |
-| M19 installer (ruling Q1; `SPEC.md` amended by P12) | P1's and P13's tests | G6 |
+| M19 installer (ruling Q1; `SPEC.md` M19) | P1's and P13's tests | G6 |
 | Android (a Must, ruling Q2) | CI `mobile` and `bindings`; the Android asset check (P5) | G4, G6 |
 
 ### H: housekeeping for the Project Manager
