@@ -11,15 +11,15 @@ features:
 - panel: The panel, its Game Mode shell and the Add games view (F62-F64, F68, F72-F78) (release: 1.0)
 - hardening: The audit's blockers and should-fix items, and the shore-up steps of this roadmap (B1-B6, F79-F87, F90, #329) (release: 1.0)
 - release: Release candidates, device checks and the 1.0 acceptance (F24, F26, F67, F71) (release: 1.0)
-- mac-build: The supported macOS build and Apple signing (F88, F91) (release: 1.0)
-- mobile-bindings: The iOS library and Android bindings (F70, F89, F92, F93, #306) (release: 1.0)
+- mac-build: The supported macOS build, the CLI on Apple Silicon only, and Apple signing (F88, F91) (release: 1.0)
+- mobile-bindings: The iOS library, the Android bindings with a release asset, and the iOS verify-and-publish entry point (F70, F89, F92, F93, #306) (release: 1.0)
 - save-slots: Follow the selected save slot (#240, #301, #313) (release: 1.0)
-- thin-app-install: Shared resumable game-file installation through Dropbox, Nextcloud and Google Drive (#305, #309, #310) (release: 1.0)
-- publisher: Chunked resumable uploads of prepared game files (#328) (release: after-1.0)
+- thin-app-install: Shared resumable game-file installation through Dropbox, Nextcloud and Google Drive, with the desktop `save-relay game-files` command (#305, #309, #310, #325) (release: 1.0)
+- publisher: Chunked resumable uploads of prepared game files, so Google Drive installs work with `drive.file` (#328) (release: 1.0)
 - threeds-bridge: 3DS and Azahar saves through a paired bridge (#300, #319) (release: after-1.0)
 - launcher-reuse: craft-launcher starts the Decky plugin from this repo's `decky/` (#292) (release: after-1.0)
 
-One line per feature, in the pipeline's block format: `- <id>: <title> (release: 1.0|after-1.0)`. `publisher` is filed after-1.0 only until owner question Q3 is answered. Labels that exist today: `feature:mac-build`, `feature:mobile-bindings`, `feature:save-slots`; the rest are housekeeping step H1.
+One line per feature, in the pipeline's block format: `- <id>: <title> (release: 1.0|after-1.0)`. `publisher` moved into 1.0 and `threeds-bridge` stays after-1.0 by the owner rulings of 2026-11-25. Labels that exist today: `feature:mac-build`, `feature:mobile-bindings`, `feature:save-slots`; the rest are housekeeping step H1.
 
 ## Status terms
 
@@ -38,16 +38,27 @@ A green fake-backed test, a published archive, a source inspection or a sentence
 
 ## Decisions
 
-Owner rulings that shape this roadmap, as already recorded in this repo, newest first.
+Owner rulings that shape this roadmap, newest first. The eleven rulings of 2026-11-25 answer the roadmap's former owner questions Q1-Q11 (#308); the Q number is kept so earlier references still resolve.
 
+- **Owner ruling 2026-11-25 (Q1): the installer is a 1.0 Must, new M19.** A thin app downloads, resumes and verifies prepared files from Dropbox, Nextcloud and Google Drive. Device proof on all three services gates 1.0. `SPEC.md` is amended in step P12.
+- **Owner ruling 2026-11-25 (Q2): Android becomes a 1.0 Must, with a release asset** (`.aar` or `.so`). Android is the installer's 1.0 reference consumer.
+- **Owner ruling 2026-11-25 (Q3): the publisher (#328) is in 1.0,** so Google Drive installs work with `drive.file`.
+- **Owner ruling 2026-11-25 (Q4): the desktop `save-relay game-files` command is in 1.0.**
+- **Owner ruling 2026-11-25 (Q5): M17 is amended to the CLI on Apple Silicon only.** No Mac library asset and no Intel build for 1.0.
+- **Owner ruling 2026-11-25 (Q6): Windows is unsigned by decision for 1.0.** The README covers SmartScreen; signing comes after 1.0.
+- **Owner ruling 2026-11-25 (Q7): the two #324 C functions stay** as deprecated compatibility wrappers on the new engine, removed after 1.0.
+- **Owner ruling 2026-11-25 (Q8): iOS** gets, before the installer C interface freezes, an entry point that verifies and publishes an externally downloaded file (background `URLSession`).
+- **Owner ruling 2026-11-25 (Q9): 3DS.** An automatic newest-wins pick, with the loser kept and uploaded, satisfies M3 ("not silent"). The 3DS bridge is an After 1.0 feature.
+- **Owner ruling 2026-11-25 (Q10): payload selection.** `game-files/<app>/<os>/` is the standard layout. ACNH's existing `acnh-universal-game/android` is read in place as a legacy layout, with no migration.
+- **Owner ruling 2026-11-25 (Q11): phones write the open-elsewhere mark** at launch and clear it on a successful push when the app pauses or goes to the background. A failed push leaves the mark up as a warning.
 - **Owner direction 2026-11-24:** Save Relay is the shared hub for Android/iOS chunks that thin apps pull, install and resume, alongside the save relay itself. Support Dropbox, Nextcloud and Google Drive. This is not an app store; the launcher repo is a separate component and is out of this implementation scope. Use ACNH's current downloader as the consumer reference. #305 defines the contract, #309 implements the core, #310 exposes CLI/mobile calls. For #300, use devkitPro/libctru and design the relay transport first.
 - **Owner ruling 2026-11-17:** "The ipad os and mac versions are obviously going to need to support an external controller. Make sure that's in the road map"; confirmed: "Yes, 1.0, Mac and iPad (Recommended)". Save Relay has no Mac or iPad app of its own, so it adds no step here; each port's roadmap carries it.
 - **Owner ruling 2026-11-17:** "The save relay Mac and iOS functions need to be brought into 1.0" and "Revise the roadmap"; confirmed: "Yes, all into 1.0 (Recommended)". macOS and iOS are Musts M17 and M18 in `SPEC.md`; `v1.0.0` waits on gates G1-G4 below (R43).
 - **Owner ruling 2026-11-17:** "Fold the save relay into the Mac app via a step in the roadmap. Should be a 1.0 that exists in every universal app with and ios and Mac component. Revise all roadmaps if you need to."
 - **Owner ruling 2026-11-16:** the audit's Minor list was split into four issues (#269-#272).
-- **Owner ruling 2026-11-12:** Android bindings are a Should for 1.0 ("Bindings into 1.0 too").
+- **Owner ruling 2026-11-12:** Android bindings are a Should for 1.0 ("Bindings into 1.0 too"). Superseded by the ruling of 2026-11-25 (Q2): Android is a Must.
 
-`SPEC.md` was approved on 2026-11-17 and edited on 2026-11-24 (installer scope, a changed Won't) without a new approval line. That is owner question Q1.
+`SPEC.md` was approved on 2026-11-17 and edited on 2026-11-24 (installer scope, a changed Won't) without a new approval line. The rulings above (Q1, Q2, Q5) change it again: the amendment is owed under #308 as step P12, and this roadmap does not edit `SPEC.md`.
 
 ## Where it stands (2026-11-25)
 
@@ -63,11 +74,11 @@ Owner rulings that shape this roadmap, as already recorded in this repo, newest 
 | Add games (M16) | yes | `tests/steam_games_flow.rs`, `tests/cli_steam_games.rs`, panel `add-games.dom.test.tsx` | rc.2 | none (#212: the Steam client call was source-inspected only) |
 | macOS build (M17) | yes; signing is wired (`scripts/macos-sign.sh`) | CI `rust` on macOS, unsigned | rc.2, **unsigned** arm64 CLI; no Mac library asset | none (#287, #238) |
 | iOS library and C interface (M18) | yes | `tests/ffi.rs`, `tests/ffi_header.rs` on desktop hosts; CI `mobile` and `bindings` are build and type-check only | rc.2: arm64 device static library zip | none (#289) |
-| Android bindings (Should) | yes | as iOS; no emulator run | no Android asset in any release | none (no gate issue, Q2) |
+| Android bindings (Must since 2026-11-25) | yes | as iOS; no emulator run | no Android asset in any release (a release asset is now required, P5) | none (no gate issue yet; G4 and G6 cover it) |
 | Save slots | desktop `--slot`: yes; slot-suffixed manifest ids through the C interface (#313): yes | `tests/cli_run.rs`, `tests/ffi.rs`, `examples/slot-contract-v1.0.0-rc.2.json` | `--slot` in rc.1 and rc.2; the C-interface part is not released | none |
 | Game-file installer, interim (#324) | Dropbox only: `src/game_files.rs`, two C functions | one unit test | not released | none |
 | Game-file installer, three services (#309, #310) | in review (#331, draft) | on the branch only | no | none |
-| Publisher (#328) | planned (#328) | - | - | - |
+| Publisher (#328), in 1.0 | planned (#328) | - | - | - |
 | 3DS bridge (#300, #319) | planned; design in `docs/3ds.md`, transport design in review (#330, draft) | - | - | - |
 
 ### Implemented and tested on main since rc.2, not released
@@ -95,29 +106,15 @@ Owner rulings that shape this roadmap, as already recorded in this repo, newest 
 | #331 | draft | the installer; lands #309 and #310 (step P1) |
 | #323 | open, conflicting | superseded by #331; close when #331 lands |
 | #326 | draft | superseded by #331; close when #331 lands |
-| #330 | draft | 3DS transport design; waits on Q9 |
+| #330 | draft | 3DS transport design; After 1.0 (ruling Q9), not a 1.0 blocker |
 
 ## Owner questions
 
-Agents do not decide these. Each blocks the step named.
-
-| Q | Question | Blocks |
-|---|---|---|
-| Q1 | Re-approve `SPEC.md` with the installer as a Must (M19: a thin app downloads, resumes and verifies prepared files on each of the three services), or keep it outside the Musts and ship it after 1.0? | P1 acceptance, G6, Final |
-| Q2 | Android: stay a Should, or become a Must for the installer (its reference consumer is Android)? Is an Android release asset part of 1.0? If not, name iOS as the 1.0 installer consumer. | P5, G6 |
-| Q3 | Google Drive installs need the publisher (#328) or a file picker, because `drive.file` cannot read files the app did not create. Publisher in 1.0, or Drive marked "needs publisher" for installs in 1.0? | P1 Done-when, G6 |
-| Q4 | Is the desktop installer (`save-relay game-files`, Linux consumer of #325) part of 1.0? | P1, R04 |
-| Q5 | M17 says "CLI and the library" for the Mac. Ship a Mac library asset, or is the CLI enough? Are Intel Macs out for 1.0? | P5, G2 |
-| Q6 | Sign the Windows binary for 1.0, or record it as unsigned by decision? | P5 |
-| Q7 | Keep or remove the two #324 C functions once #331 lands? Nothing released depends on them. | P1 |
-| Q8 | iOS installs: add a mode where the app moves bytes in a background session and the library validates and publishes, before the installer C interface is frozen? | P2 |
-| Q9 | 3DS: bridge or direct homebrew, the conflict rule (`docs/3ds.md` says newest wins, M3 says never silently), and the milestone. | #330, #319 |
-| Q10 | How a thin app selects its per-OS payload (`game-files/<app>/<os>/`, or the OS in the app id) and how ACNH's existing `acnh-universal-game/android` folder migrates. | P2 |
-| Q11 | Phones and the open-elsewhere mark: does a phone write it, and when must a phone app push? | P4, G3 |
+None open. Q1-Q11 were ruled on 2026-11-25 and are written into Decisions above; the steps they governed are updated below.
 
 ## Run order to 1.0
 
-Order: agent work (P) lands, then `v1.0.0-rc.3` (R), then the owner gates G1-G7 run against that tag, then the design pass (D), then the 1.0 acceptance (G8 and G9, which depend on D1) and the final tag. **rc.3 is not cut while the interim #324 downloader is exported in the header:** either #331 has replaced it or the two exports are removed or feature-gated. P rows are independent unless a row says otherwise; an owner gate blocks only its dependents. A defect found at a gate gets its own issue, a fix and a new RC before the gate is repeated.
+Order: agent work (P) lands, then `v1.0.0-rc.3` (R), then the owner gates G1-G7 run against that tag, then the design pass (D), then the 1.0 acceptance (G8 and G9, which depend on D1) and the final tag. **rc.3 is not cut while the interim #324 downloader is exported in the header as it is:** #331 must have replaced its engine, and the two C functions remain only as deprecated compatibility wrappers on the new engine (Q7). P rows are independent unless a row says otherwise; an owner gate blocks only its dependents. A defect found at a gate gets its own issue, a fix and a new RC before the gate is repeated.
 
 "needs issue" marks a step with no issue yet, with the title to file.
 
@@ -126,23 +123,26 @@ Order: agent work (P) lands, then `v1.0.0-rc.3` (R), then the owner gates G1-G7 
 | Step | Issue | What | Blocker | Done when |
 |---|---|---|---|---|
 | P0 | #308 | this roadmap and the code map rewritten against `b0ce9dc` | agent | merged; `PIPELINE.md` Notes updated (H5) |
-| P1 | #309, #310 / PR #331 | one installer engine for the three services with the CLI lane included; replaces `src/game_files.rs`; closes #323 and #326 | agent; Q1, Q3, Q4, Q7 for scope | on `main`; `docs/assets.md` holds without exception (no overwrite of a player file, containment and no-follow on every path, bounded range answers, SHA-256 before publication); tests on all three providers through fakes; the interim downloader's behaviour is gone; #331 is rebased on P0 and moves the code map rows from "in review (#331)" to present in the same PR (it also edits `CHANGELOG.md` and `docs/code-map.md`) |
-| P2 | needs issue: installer contract gaps before the C interface is versioned | a host-chosen layout argument so mobile reaches a legacy root, with an ACNH migration test over its partial folder; the changed-manifest update path (today it ends in `destination_conflict`); a free-space check and a storage-full error; the wording of pause (cancel keeps the checkpoint; one download per process) made the same in `SPEC.md`, `docs/assets.md` and the header | agent; Q8, Q10 | decided in #331 or split; the header documents each |
+| P1 | #309, #310 / PR #331 | one installer engine for the three services with the CLI lane included; replaces `src/game_files.rs`; closes #323 and #326 | agent | on `main`; `docs/assets.md` holds without exception (no overwrite of a player file, containment and no-follow on every path, bounded range answers, SHA-256 before publication); tests on all three providers through fakes; the desktop `save-relay game-files` command is in (Q4); the interim downloader's behaviour is gone and the two #324 C functions are deprecated wrappers on the new engine, removed after 1.0 (Q7); #331 is rebased on P0 and moves the code map rows from "in review (#331)" to present in the same PR (it also edits `CHANGELOG.md` and `docs/code-map.md`) |
+| P2 | needs issue: installer contract gaps before the C interface is versioned | the standard layout `game-files/<app>/<os>/` and a host-chosen layout argument so a legacy root (ACNH's `acnh-universal-game/android`) is read in place, with no migration (Q10) and a test over its partial folder; the changed-manifest update path (today it ends in `destination_conflict`); a free-space check and a storage-full error; the wording of pause (cancel keeps the checkpoint; one download per process) made the same in `SPEC.md`, `docs/assets.md` and the header | agent; after P2a | decided in #331 or split; the header documents each |
+| P2a | needs issue: iOS verify-and-publish entry point (Q8) | a C entry point that verifies and publishes a file the app downloaded outside the library (background `URLSession`), with the Swift wrapper; written and documented before the installer C interface is frozen or versioned | agent; before P2 and P3 | in the header, `src/ffi.rs` and the Swift wrapper, with a test through `tests/ffi.rs`; the header documents it |
 | P3 | needs issue: header and bindings parity test | Kotlin, JNI and Swift wrap every exported C function; a test fails when the header, `src/ffi.rs`, a `repr(C)` layout or a wrapper drifts | agent; after P1 | CI `bindings` fails on a missing wrapper |
-| P4 | needs issue: C interface covers M18 | play-anyway, history, restore, where, sign-out and account status through the C interface; `held` through `tests/ffi.rs`; the phone rules for the mark written into `docs/android.md` and an iOS guide | agent; Q11 | a phone app can answer every envelope the desktop launcher can |
-| P5 | needs issue: release workflow gates | secret-bearing steps in a protected environment, tag-only, before any Apple secret is added; a final (non-rc) tag fails when the Mac binary is unsigned; the tagged commit must be on `main` with a successful check; deployment targets set for macOS and iOS; version equality across the three version files checked; release notes name the tag Mac ports pin; NOTICE and licences in every asset | agent; Q2, Q5, Q6 for assets | a pull-request run of `release.yml` sees no secret; a dry tag run fails unsigned |
+| P4 | needs issue: C interface covers M18 | play-anyway, history, restore, where, sign-out and account status through the C interface; `held` through `tests/ffi.rs`; the phone rules for the mark (Q11: write it at launch; clear it on a successful push when the app pauses or goes to the background; a failed push leaves it up as a warning) written into `docs/android.md` and an iOS guide | agent | a phone app can answer every envelope the desktop launcher can |
+| P5 | needs issue: release workflow gates | secret-bearing steps in a protected environment, tag-only, before any Apple secret is added; a final (non-rc) tag fails when the Mac binary is unsigned; the tagged commit must be on `main` with a successful check; deployment targets set for macOS and iOS; version equality across the three version files checked; release notes name the tag Mac ports pin; NOTICE and licences in every asset; an Android release asset (`.aar` or `.so`, Q2); the Mac asset is the arm64 CLI only, with no library asset and no Intel build (Q5); Windows stays unsigned by decision, so the unsigned check applies to the Mac binary only (Q6) | agent | a pull-request run of `release.yml` sees no secret; a dry tag run fails unsigned |
 | P6 | needs issue: CI on main and coverage | the stale comment at `check.yml:18-19` corrected (it calls Linux and Windows "the 1.0 platforms" and macOS a matter for "the game ports' 2.0"; macOS is a Must, M17); no cancel-in-progress on `main`; `main` protected with required checks and no direct pushes; `decky/test_main.py` run; the release configuration (musl, `--release`, `panel-dist` on Windows and macOS, Decky and iOS zips) built on pull requests; tests in the `--no-default-features --features ffi` configuration; job timeouts; pinned toolchain or MSRV; checksummed Kotlin and rclone downloads; dependency audit and an update bot; the duplicate `mobile` builds removed | agent | every `main` commit has a completed check |
 | P7 | needs issue: stored-data and C ABI compatibility rule | what a 1.x build promises to read (server tree, `state.json`, `playing.json`, cards, local files, manifest formats 1 and 2, installer checkpoints); a locked test reading a tree written by rc.2; what an older build does with format 2; one version call for the whole C interface | agent | rule in `SPEC.md` or an ADR; the test on `main` |
 | P8 | needs issue: split what is left of #249 | (a) the panel serves its token on an unauthenticated page and sends no anti-framing headers; (b) the Decky backend accepts commands and flags the panel audit removed | agent | two issues filed and fixed; then #249 closes (H2) |
 | P9 | needs issue: save-sync safety | symlinks treated the same on upload and download; bounded response sizes on every backend read; a local safety copy before a pull replaces saves; one lock per game across CLI, panel, wrap and the C interface; a rotated refresh token stored when it is issued, and its failure reported | agent | each has a test; see Known risks K4-K8 |
-| P10 | needs issue: docs sync for the installer and the launcher contract | `docs/PRIVACY.md` (what is uploaded, mobile apps, game-file downloads, the shared Dropbox app folder); `README.md`; `docs/services.md` "Planned game-file downloads"; `docs/assets.md` contradictions; `docs/android.md` "verified on Android 15" without a recorded run; slot-suffixed ids in the header and `docs/manifest.md`; `GLOSSARY.md` (app id and game id, new terms); ADRs for the installer, slot ids, strict scope, the launcher contract; an iOS integration guide; supported OS versions and CPU types; `SECURITY.md` (new) and a threat model; how to remove Save Relay from a machine; doc tests for `docs/assets.md`, `docs/android.md` and the header | agent; after P1 | each doc matches `main`; doc tests in CI |
+| P10 | needs issue: docs sync for the installer and the launcher contract | `docs/PRIVACY.md` (what is uploaded, mobile apps, game-file downloads, the shared Dropbox app folder); `README.md`; `docs/services.md` "Planned game-file downloads"; `docs/assets.md` contradictions; `docs/android.md` "verified on Android 15" without a recorded run; slot-suffixed ids in the header and `docs/manifest.md`; `GLOSSARY.md` (app id and game id, new terms); ADRs for the installer, slot ids, strict scope, the launcher contract; an iOS integration guide; supported OS versions and CPU types; `SECURITY.md` (new) and a threat model; the README's SmartScreen note for the unsigned Windows binary (Q6); how to remove Save Relay from a machine; doc tests for `docs/assets.md`, `docs/android.md` and the header | agent; after P1 | each doc matches `main`; doc tests in CI |
 | P11 | needs issue: `CHANGELOG.md` by version | entries for everything since the #308 audit; a released / unreleased split; the misplaced top line fixed | agent | rc.3 notes can be cut from it |
+| P12 | #308 (owed; `SPEC.md` is not edited here) | amend `SPEC.md` for the rulings of 2026-11-25: add M19 (a thin app downloads, resumes and verifies prepared files from Dropbox, Nextcloud and Google Drive; device proof on all three), make Android a Must, amend M17 to the CLI on Apple Silicon only; cite the owner ruling and add the approval line | agent, with the owner's approval line | `SPEC.md` carries M19, the Android Must and the amended M17; before the G6 and G2 rows are used |
+| P13 | #328 | the publisher: chunked resumable uploads of prepared game files to the three services, so Drive installs work with `drive.file` (Q3) | agent; after P1 | on `main` with tests on all three providers through fakes; label and milestone 1.0 set (H1) |
 
 ### R: the release candidate
 
 | Step | Issue | What | Blocker | Done when |
 |---|---|---|---|---|
-| R1 | needs issue: `v1.0.0-rc.3` | version bump in the three files; tag after P1 and P5 (P3, P4 and P7 if they change the C interface); every asset downloaded and checked against `SHA256SUMS`; the run URL, checksums and `version` output copied into the issue, because rc.2's run evidence can no longer be retrieved | agent; after P1, P5 | the release exists; consumers (Uncharted-Universal, ACNH-Universal) pin the tag, not a git commit |
+| R1 | needs issue: `v1.0.0-rc.3` | version bump in the three files; tag after P1, P2a, P5 and P13 (P3, P4 and P7 if they change the C interface); every asset downloaded and checked against `SHA256SUMS`; the run URL, checksums and `version` output copied into the issue, because rc.2's run evidence can no longer be retrieved | agent; after P1, P2a, P5, P13 | the release exists; consumers (Uncharted-Universal, ACNH-Universal) pin the tag, not a git commit |
 | R2 | - | each later fix that a gate turns up ships in a further RC (rc.4, ...) under the same checklist | agent | - |
 
 ### G: owner gates
@@ -151,12 +151,12 @@ Each needs the owner's device, account or signing identity. An agent prepares; o
 
 | Step | Issue | What the owner does | Depends on | Done when |
 |---|---|---|---|---|
-| G1 | #287 | sets the six Apple secrets the release workflow reads (`MACOS_CERTIFICATE_P12_BASE64`, `MACOS_CERTIFICATE_PASSWORD`, `MACOS_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD`; today only the two Google secrets are set); runs a pull and push on a Mac against Nextcloud | P5 first; then an RC | a signed, notarized Mac asset in an RC, and the round-trip output on #287. Longest chain to 1.0: start first |
-| G2 | #238 | - (agent closes) | G1; Q5 | README names the Mac as supported and the tag ports pin; M17 device-verified by #287 |
-| G3 | #289 | runs `bindings/ios/example/` on an iPhone: a save pushed from the Mac pulls on the phone and back, matching hashes | G1, R1; Q11 | output on #289 |
+| G1 | #287 | sets the six Apple secrets the release workflow reads (`MACOS_CERTIFICATE_P12_BASE64`, `MACOS_CERTIFICATE_PASSWORD`, `MACOS_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD`; today only the two Google secrets are set); runs a pull and push on a Mac against Nextcloud | P5 first; then an RC | a signed, notarized arm64 Mac CLI asset in an RC, and the round-trip output on #287. Longest chain to 1.0: start first |
+| G2 | #238 | - (agent closes) | G1; P12 | README names the Apple Silicon Mac CLI as supported and the tag ports pin; M17 (as amended) device-verified by #287 |
+| G3 | #289 | runs `bindings/ios/example/` on an iPhone: a save pushed from the Mac pulls on the phone and back, matching hashes | G1, R1 | output on #289 |
 | G4 | needs issue: mobile sign-in on real phones | Dropbox and Google Drive sign-in on one Android phone and one iPhone; records how each OS receives the redirect and whether Google accepts the desktop client from a phone. A new client type or redirect is an owner console step beside #36 | R1 | output on the issue; never run so far |
 | G5 | #47 | real Dropbox and Drive round trips (`tests/live_services.rs`), Drive's 409 on a reused id, Game Mode code flows on a handheld | R1 | output on #47 |
-| G6 | needs issue: installer acceptance on devices | downloads, interrupts, resumes and verifies prepared files on each service in scope, on the consumer platforms in scope | P1, R1; Q1-Q4 | output on the issue |
+| G6 | needs issue: installer acceptance on devices | downloads, interrupts, resumes and verifies prepared files on each of Dropbox, Nextcloud and Google Drive (Drive through the publisher), on Android (the reference consumer), on iOS (through P2a) and with the desktop `save-relay game-files` command | P1, P2a, P13, R1; P12 | output on the issue for all three services; gates 1.0 |
 | G7 | #212 | on a handheld: Add games sets a launch option through the Steam client | R1 | pass: close #212. Fail: ship the list-only and Desktop Mode fallback the issue documents (needs issue), new RC, repeat. #212 needs milestone 1.0 (H1) |
 | G8 | #72 | suspend hand-off; wrap and install-wrap on a PC and a handheld, one Proton game; the panel in Game Mode; whether Game Mode has an unlocked Secret Service; the musl binary on SteamOS | D1 | output on #72 |
 | G9 | #26 | Uncharted on the three PCs through Play; the launcher's bundled Save Relay version recorded | G5, G8, D1 | output on #26. Uncharted-Universal #163 (launcher integration) is closed; its open consumers of an RC are tracked there |
@@ -181,15 +181,16 @@ Each needs the owner's device, account or signing identity. An agent prepares; o
 | M11-M14 | `tests/baton.rs`, `tests/wrap*.rs` | G8 |
 | M15 | panel and decky suites | G8, D1 |
 | M16 | `tests/steam_games_flow.rs` | G7 |
-| M17 | CI macOS | G1, G2 |
-| M18 | `tests/ffi*.rs` | G3, G4, P4 |
-| installer (M19 if Q1 says so) | P1's tests | G6 |
+| M17 (CLI on Apple Silicon, ruling Q5) | CI macOS | G1, G2 |
+| M18 | `tests/ffi*.rs` | G3, G4, P4, P2a |
+| M19 installer (ruling Q1; `SPEC.md` amended by P12) | P1's and P13's tests | G6 |
+| Android (a Must, ruling Q2) | CI `mobile` and `bindings`; the Android asset check (P5) | G4, G6 |
 
 ### H: housekeeping for the Project Manager
 
 | Step | What |
 |---|---|
-| H1 | Labels and milestones: most issues carry no `feature:<id>` label and no milestone; ten of the thirteen feature ids have no label. Set milestone 1.0 on #212, #309, #310, #308; move #240 out of After 1.0 (it shipped in rc.1); label and milestone #300, #319, #325, #328; relabel #305 and #310 from `feature:mobile-bindings` to `feature:thin-app-install`, and label #309 the same; label #313 `feature:save-slots` (it has no feature label) |
+| H1 | Labels and milestones: set milestone 1.0 and label `feature:publisher` on #328; most issues carry no `feature:<id>` label and no milestone; ten of the thirteen feature ids have no label. Set milestone 1.0 on #212, #309, #310, #308; move #240 out of After 1.0 (it shipped in rc.1); label and milestone #300 and #319 (After 1.0) and #325 (1.0); relabel #305 and #310 from `feature:mobile-bindings` to `feature:thin-app-install`, and label #309 the same; label #313 `feature:save-slots` (it has no feature label) |
 | H2 | #249 stays open until P8's two issues exist, then closes |
 | H3 | #325: part (a) is #309/#310, part (b) is #328, part (c) is outside this repo; rewrite or close it with those links |
 | H4 | #26's body still cites the closed Uncharted-Universal #163 and omits the Mac, iOS and installer gates |
@@ -217,14 +218,14 @@ F numbers are historical ids in issue titles. All are closed and released in rc.
 | F62-F64 | #67-#69 | the panel front end, `save-relay panel`, the Decky plugin | `panel/`, `panel`, `decky/` | M15 | - |
 | F65-F68 | #70-#73 | M11-M14 integration tests, docs, device checks, the panel's design pass | `tests/`, `docs/wrap.md`, `docs/panel.md` | M11-M15 | #72 (G8), #73 (D1) |
 | F69 | #48 | manifest `saves_from: "launcher"` | `manifest`, `cli` | M7 | - |
-| F70 | #49 | Android and iOS library builds with the C interface | `ffi`, `include/save_relay.h` | M18; Should (Android) | - |
+| F70 | #49 | Android and iOS library builds with the C interface | `ffi`, `include/save_relay.h` | M18; Android (Must) | - |
 | F71 | #205 | the first release candidate | `Cargo.toml`, `release.yml` | M8 | - |
 | F72-F78 | #207-#213 | Steam Cloud answers and their cache, `steam-games`, `install-wrap --no-steam-cloud`, `launch-option`, the Add games view, its tests and docs | `steam::cloud`, `cli`, `api`, `steam::launch`, `panel`, `panel/`, `decky/` | M16 | #212 (G7) |
 | F79-F85 | #242-#248 | the audit's should-fix items S1-S13 | `sync`, `wrap`, `ludusavi`, `cli`, `decky/`, `http`, `dropbox`, `gdrive`, `transfer`, `plan`, workflows | M1-M3, M5, M7-M9, M11-M13, M15 | - |
 | F86 | #249 (split into #266, #267, #268) | panel token and API surface, in-flight restore state, Game Mode B and D-pad, `install-wrap` edge cases (S14-S17) | `panel`, `panel/`, `decky/`, `steam::launch` | M13, M15 | #249 (P8, H2) |
 | F87 | #250 (split into #269-#272) | the audit's Minor list | various | various | - |
 | F88 | #238 | the supported macOS build | `release.yml`, `README.md` | M17 | #238 (G2) |
-| F89 | #254 | Android and iOS bindings with platform browser sign-in | `bindings/`, `ffi`, `oauth` | M18; Should (Android) | - |
+| F89 | #254 | Android and iOS bindings with platform browser sign-in | `bindings/`, `ffi`, `oauth` | M18; Android (Must) | - |
 | F90 | #280 | the slow-upload test flake on macOS, closed by #284 | `tests/` | - | - |
 | F91 | #287 | Apple signing secrets and a Mac round trip | - | M17 | #287 (G1) |
 | F92 | #288 | the iOS library as a release asset | `release.yml` | M18 | - |
@@ -234,11 +235,11 @@ F numbers are historical ids in issue titles. All are closed and released in rc.
 
 | Platform | Save sync | Installer | Release asset | Open risk |
 |---|---|---|---|---|
-| Linux x86_64 (SteamOS handhelds) | implemented, tested (CI `rust`, `integration` with real Nextcloud), released rc.2 | interim: none on the CLI; in review (#331): C interface and engine, no CLI command yet; Linux is a consumer through #325 (Q4) | static musl binary; Decky zip | Game Mode may have no unlocked Secret Service and may show no browser (code flows are the default there); the musl binary and the Decky plugin have build-only automation; Proton saves kept in the registry are not covered; no aarch64 build |
-| Windows x86_64 (desktop) | implemented, tested (CI `rust`, `integration` with rclone), released rc.2 | as Linux | unsigned `.exe` (Q6) | names that cannot exist on Windows are an `io` error, not a skip; no arm64 build |
-| macOS arm64 | implemented, tested (CI `rust`, `integration` with rclone), released rc.2 unsigned | as Linux | unsigned CLI; no library asset (Q5); no Intel build | signing has not started (G1); `install-wrap` and the Steam-running check are untried on a Mac; no minimum macOS version is set |
-| iOS arm64 | implemented; tested on desktop hosts only | interim C functions have no Swift wrapper; in review (#331); blocking download does not fit background transfers (Q8) | device static library zip in rc.2; no simulator slice or XCFramework | no device run (G3, G4); no minimum iOS version is set in the build |
-| Android arm64 | implemented; tested on desktop hosts only | as iOS; reference consumer (Q2) | none | no device gate; minimum API (24) is visible only in CI's linker name; no reference credential store |
+| Linux x86_64 (SteamOS handhelds) | implemented, tested (CI `rust`, `integration` with real Nextcloud), released rc.2 | interim: none on the CLI; in review (#331): C interface and engine, no CLI command yet; the desktop `save-relay game-files` command is in 1.0 (Q4, P1) | static musl binary; Decky zip | Game Mode may have no unlocked Secret Service and may show no browser (code flows are the default there); the musl binary and the Decky plugin have build-only automation; Proton saves kept in the registry are not covered; no aarch64 build |
+| Windows x86_64 (desktop) | implemented, tested (CI `rust`, `integration` with rclone), released rc.2 | as Linux | unsigned `.exe`, unsigned by owner decision for 1.0; the README covers SmartScreen (Q6) | names that cannot exist on Windows are an `io` error, not a skip; no arm64 build |
+| macOS arm64 | implemented, tested (CI `rust`, `integration` with rclone), released rc.2 unsigned | as Linux | arm64 CLI only by owner decision (Q5); no library asset and no Intel build for 1.0 | signing has not started (G1); `install-wrap` and the Steam-running check are untried on a Mac; no minimum macOS version is set |
+| iOS arm64 | implemented; tested on desktop hosts only | interim C functions have no Swift wrapper; in review (#331); blocking download does not fit background transfers; the verify-and-publish entry point is P2a (Q8) | device static library zip in rc.2; no simulator slice or XCFramework | no device run (G3, G4); no minimum iOS version is set in the build |
+| Android arm64 | implemented; tested on desktop hosts only | as iOS; the installer's 1.0 reference consumer (Q2); the legacy ACNH layout is read in place (Q10) | a release asset (`.aar` or `.so`) is required for 1.0 (P5); none today | no device gate; minimum API (24) is visible only in CI's linker name; no reference credential store |
 
 What differs per OS lives in `platform` (folders), `creds::KeyringStore` (Secret Service, Credential Manager, Keychain; never exercised in CI), the file-system edge of `scan` and `transfer`, signal handling in `wrap`,. The browser is opened with `xdg-open`, `rundll32 url.dll,FileProtocolHandler` or `open`, with no shell. `install-wrap` edits `localconfig.vdf`, which Steam rewrites while it runs, so it refuses then and keeps a dated backup. The Decky plugin is Linux Game Mode only; `save-relay panel` runs on all three desktops. Mobile builds leave out the `http` and `keyring` features: the app supplies transport, credential store and browser session through callbacks.
 
@@ -248,7 +249,7 @@ Verified security and correctness findings with no issue of their own. Each is a
 
 | K | Risk | Where | Step |
 |---|---|---|---|
-| K1 | The interim downloader on `main` is exported over the C ABI and breaks `docs/assets.md`: it renames over existing files, has no symlink or containment guard, accepts a 200 answer to a range request, reads an unbounded body, and uses 4 MiB chunks against a 1 MiB contract. Not released; must not be | `src/game_files.rs`, `include/save_relay.h` | P1 before R1 |
+| K1 | The interim downloader on `main` is exported over the C ABI and breaks `docs/assets.md`: it renames over existing files, has no symlink or containment guard, accepts a 200 answer to a range request, reads an unbounded body, and uses 4 MiB chunks against a 1 MiB contract. Not released; must not be. The two C functions stay only as deprecated compatibility wrappers on the new engine, removed after 1.0 (Q7) | `src/game_files.rs`, `include/save_relay.h` | P1 before R1 |
 | K2 | `release.yml` passes the OAuth and signing secrets to pull-request and manual runs with no environment gate; a branch that edits the workflow can read them. Today that exposes the two Google secrets; it gets worse the moment G1 adds Apple's | `.github/workflows/release.yml` | P5 before G1 |
 | K3 | A tag ships an unsigned Mac binary with only a warning; nothing stops `v1.0.0` doing the same | `scripts/macos-sign.sh` | P5 |
 | K4 | Symlinks are skipped silently on upload and followed on download | `src/scan.rs`, `src/transfer.rs` | P9 |
@@ -259,7 +260,7 @@ Verified security and correctness findings with no issue of their own. Each is a
 | K9 | The panel serves its token on an unauthenticated page and sends no anti-framing headers | `src/panel.rs` | P8 |
 | K10 | The Decky backend accepts commands and flags the panel audit removed | `decky/main.py` | P8 |
 | K11 | Every stored format is "equals 1 or fail"; nothing tests that a newer build reads what rc.2 wrote; manifest format 2 is already rejected by rc.2 | `src/state.rs`, `src/manifest.rs` | P7 |
-| K12 | A pull through the C interface writes a mark that never expires; a phone has no play-anyway and may be ended before it pushes | `src/presence.rs`, `src/ffi.rs` | P4, Q11 |
+| K12 | A pull through the C interface writes a mark that never expires; a phone has no play-anyway and may be ended before it pushes | `src/presence.rs`, `src/ffi.rs` | P4 (rule: Q11) |
 | K13 | The save-sync C interface has no version or struct-size negotiation; struct layouts and wrapper mirrors are not tested; no run on a mobile target, no sanitizer or Miri job | `src/ffi.rs`, `bindings/` | P3, P7 |
 | K14 | 9 of the 14 pushes to `main` since rc.2 had their check cancelled; the audited commit had no completed check at audit time; `main` is unprotected; the tag workflow does not require a passing check | `.github/workflows/check.yml` | P6, P5 |
 | K15 | WebDAV over plain `http://` sends the app password with only a text warning; a self-hosted server with a private CA cannot connect over HTTPS (bundled roots only); undocumented | `src/webdav.rs`, `src/http.rs` | P10 documents; After 1.0 A6 |
@@ -269,6 +270,7 @@ Verified security and correctness findings with no issue of their own. Each is a
 | K19 | Removing the binary or the Decky plugin leaves Steam launch options pointing at a missing program; `localconfig.vdf` backups are never pruned | `src/steam/launch.rs` | P10 documents; needs issue: uninstall command and backup pruning |
 | K20 | `sign-out` deletes local tokens but does not revoke them at the provider | `src/cli.rs` | After 1.0 A8 |
 | K21 | Mobile sign-in uses the desktop Google client and a loopback redirect; how an iPhone receives the redirect is undocumented and unrun; Android has no reference credential store | `src/clients.rs`, `bindings/` | G4, P10 |
+| K23 | The Windows binary is unsigned by owner decision for 1.0: SmartScreen warns on first run | `release.yml`, `README.md` | P10 (README note); signing After 1.0, A7 |
 | K22 | A source build needs a second repository (`craft-libs`, pinned by commit) and, for Drive, build-time Google secrets it does not have | `Cargo.toml`, `src/clients.rs` | R1 (consumers pin release assets) |
 
 Statements removed from the earlier roadmap because no evidence backs them: "Dropbox works according to the owner" (#47 has no owner run) and the Android 15 device verification in `docs/android.md` (P10).
@@ -277,20 +279,20 @@ Statements removed from the earlier roadmap because no evidence backs them: "Dro
 
 | A | Item | Issue |
 |---|---|---|
-| A1 | Publisher: chunked resumable uploads of prepared files to the three services (unless Q3 moves it into 1.0) | #328 |
-| A2 | 3DS and Azahar through a paired bridge; other emulators; an SD-card-only route | #300, #319, PR #330 |
+| A1 | Remove the two deprecated #324 C functions kept as compatibility wrappers in 1.0 (Q7) | no issue yet |
+| A2 | 3DS and Azahar through a paired bridge (owner ruling Q9: an automatic newest-wins pick with a kept and uploaded loser satisfies M3); other emulators; an SD-card-only route | #300, #319, PR #330 |
 | A3 | craft-launcher reuses `decky/` | #292 |
 | A4 | Linux cloud-build hosting outside this repo | #325 part (c) |
-| A5 | iOS simulator slice and XCFramework; Intel Mac, Linux aarch64 and Windows arm64 binaries; a packaged Android library | no issue yet |
+| A5 | iOS simulator slice and XCFramework; Intel Mac, Linux aarch64 and Windows arm64 binaries; a Mac library asset | no issue yet |
 | A6 | A private CA or the system trust store for self-hosted Nextcloud | no issue yet |
-| A7 | Signed checksums and build provenance; Windows signing if Q6 defers it | no issue yet |
+| A7 | Signed checksums and build provenance; Windows signing (unsigned for 1.0 by owner decision, Q6) | no issue yet |
 | A8 | Revoke tokens at the provider on sign-out | no issue yet |
 | A9 | One sign-in shared by several thin apps on a phone (account, device name, root) | no issue yet |
 | A10 | Observability: a persistent log, a log hook in the C interface, installer progress by callback | no issue yet |
 | A11 | Slots in the panel | no issue yet |
 | A12 | Installer: small-file parallelism, network-policy guidance (metered, Wi-Fi only) | no issue yet |
 | A13 | Refactors with no behaviour change: a structured HTTP status in `Error` instead of message prefixes; one shared retry and refresh layer for the three providers, with `Retry-After` on WebDAV; `Remote` without Drive- and WebDAV-specific hooks; `cli.rs` split; the mobile library without wrap, panel, Steam, ludusavi and the fakes; `Transport` and `Remote` with cancel, progress and `Send` for uploads and parallel chunks; the injected environment used everywhere instead of `std::env` | no issue yet |
-| A14 | The panel's views on Android and iOS; moving saves between services; more services (OneDrive, S3); upload only changed files; Nextcloud chunked upload (overlaps A1); `save-relay forget <game>`; pruning old conflict backups; registry saves for wrapped games; launchers other than Steam | no issue yet |
+| A14 | The panel's views on Android and iOS; moving saves between services; more services (OneDrive, S3); upload only changed files; Nextcloud chunked upload (overlaps the publisher, P13); `save-relay forget <game>`; pruning old conflict backups; registry saves for wrapped games; launchers other than Steam | no issue yet |
 
 Closed and not pending: #240 (save slots, released in rc.1) and #295 (local writes use `craft-atomic`).
 
@@ -326,7 +328,7 @@ Closed and not pending: #240 (save slots, released in rc.1) and #295 (local writ
 5. The tool: CLI, integration tests on three OSes, release binaries, manifest guide (F22-F25). Done.
 6. The other two services (F27-F47). Done, except the live acceptance (G5).
 7. Mark, wrap, cards, panel, Add games, audit hardening, Mac and mobile builds (F48-F93). Done, except the owner gates G1-G8 and the design pass D1.
-8. The installer and the steps P1-P11, then `v1.0.0-rc.3` (R1). In progress.
+8. The installer, the publisher, the iOS entry point and the steps P1-P13, then `v1.0.0-rc.3` (R1). In progress.
 9. Owner gates G1-G7 against the release candidate.
 10. **Design pass** (R04; D1, #73): the last stage before 1.0. Save Relay has a screen, the panel, in Game Mode and in the browser, so the pass is not skipped.
 11. 1.0 acceptance (G8, #72; G9, #26) and the `v1.0.0` tag (F1, F2).
