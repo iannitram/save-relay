@@ -90,6 +90,12 @@ final class CheckTransfer: NSObject, URLSessionDataDelegate {
         if data.count > limit - bytes.count { failed = true; dataTask.cancel(); return }
         bytes.append(data)
     }
+    // The core sends requests with redirects off (src/http.rs) and judges a 3xx itself; following
+    // one here could rewrite PROPFIND/PUT or carry Authorization to another host.
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(nil)
+    }
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
         lock.lock(); if error != nil { failed = true }; lock.unlock(); done.signal()
     }
