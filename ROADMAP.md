@@ -76,8 +76,8 @@ Owner rulings that shape this roadmap, newest first. The eleven rulings of 2026-
 | iOS library and C interface (M18) | yes | `tests/ffi.rs`, `tests/ffi_header.rs` on desktop hosts; CI `mobile` and `bindings` are build and type-check only | rc.2: arm64 device static library zip | none (#289) |
 | Android bindings (Must since 2026-11-25) | yes | as iOS; no emulator run | no Android asset in any release (a release asset is now required, P5) | none (no gate issue yet; G4 and G6 cover it) |
 | Save slots | desktop `--slot`: yes; slot-suffixed manifest ids through the C interface (#313): yes | `tests/cli_run.rs`, `tests/ffi.rs`, `examples/slot-contract-v1.0.0-rc.2.json` | `--slot` in rc.1 and rc.2; the C-interface part is not released | none |
-| Game-file installer, interim (#324) | Dropbox only: `src/game_files.rs`, two C functions | one unit test | not released | none |
-| Game-file installer, three services (#309, #310) | in review (#331, draft) | on the branch only | no | none |
+| Game-file installer, interim (#324) | replaced by #331: the two C functions are deprecated wrappers on the new engine (`src/game_files.rs`), removed after 1.0 (Q7) | through the engine's tests and `tests/ffi_game_files.rs` | not released | none |
+| Game-file installer, three services (#309, #310) | implemented on `main` (#331, merged 2026-11-25 as `bc3a7b1`): `src/gamefiles/`, the desktop `save-relay game-files` command, the C calls and the Kotlin and Swift wrappers | tested through fakes of all three providers (`tests/gamefiles_*.rs`, `tests/cli_game_files.rs`, `tests/ffi_game_files.rs`); CI green on 11 checks | no | none |
 | Publisher (#328), in 1.0 | planned (#328) | - | - | - |
 | 3DS bridge (#300, #319) | planned; design in `docs/3ds.md`, transport design in review (#330, draft) | - | - | - |
 
@@ -93,7 +93,7 @@ Owner rulings that shape this roadmap, newest first. The eleven rulings of 2026-
 | #311 / #317 | a password typed at a terminal is refused; stable install instructions | `tests/cli_terminal_password.rs` |
 | #305 / #312 | installer contract, `docs/assets.md` (document only) | - |
 | #321 | `docs/3ds.md` (document only) | - |
-| #324 | interim Dropbox-only downloader and two C exports; does not meet `docs/assets.md` (Known risks K1) | one unit test in `src/game_files.rs` |
+| #324 | interim Dropbox-only downloader and two C exports; replaced by #331, which keeps the two exports as deprecated wrappers on the new engine (K1) | `tests/ffi_game_files.rs` |
 | #313 / #327 | slot-suffixed manifest ids through the C interface | `tests/ffi.rs` |
 | #322 | `bindings/ios/example/` harness for #289 | CI `bindings` type-check only |
 | #329 / #332 | debug-only `SAVE_RELAY_TEST_STEAM_RUNNING` seam so tests do not depend on a running Steam | `tests/cli_install_wrap_bulk.rs`, `tests/steam_games_flow.rs` |
@@ -103,9 +103,9 @@ Owner rulings that shape this roadmap, newest first. The eleven rulings of 2026-
 
 | PR | State | Disposition |
 |---|---|---|
-| #331 | draft | the installer; lands #309 and #310 (step P1) |
-| #323 | open, conflicting | superseded by #331; close when #331 lands |
-| #326 | draft | superseded by #331; close when #331 lands |
+| #331 | merged 2026-11-25 (`bc3a7b1`) | the installer (step P1); #309 and #310 stay open for device proof (G6) |
+| #323 | closed 2026-11-25 | superseded by #331 |
+| #326 | closed 2026-11-25 | superseded by #331 |
 | #330 | draft | 3DS transport design; After 1.0 (ruling Q9), not a 1.0 blocker |
 
 ## Owner questions
@@ -114,7 +114,7 @@ None open. Q1-Q11 were ruled on 2026-11-25 and are written into Decisions above;
 
 ## Run order to 1.0
 
-Order: agent work (P) lands, then `v1.0.0-rc.3` (R), then the owner gates G1-G7 run against that tag, then the design pass (D), then the 1.0 acceptance (G8 and G9, which depend on D1) and the final tag. **rc.3 is not cut while the interim #324 downloader is exported in the header as it is:** #331 must have replaced its engine, and the two C functions remain only as deprecated compatibility wrappers on the new engine (Q7). P rows are independent unless a row says otherwise; an owner gate blocks only its dependents. A defect found at a gate gets its own issue, a fix and a new RC before the gate is repeated.
+Order: agent work (P) lands, then `v1.0.0-rc.3` (R), then the owner gates G1-G7 run against that tag, then the design pass (D), then the 1.0 acceptance (G8 and G9, which depend on D1) and the final tag. **rc.3 was not to be cut while the interim #324 downloader was exported as it was:** #331 (merged 2026-11-25) replaced its engine, and the two C functions remain only as deprecated compatibility wrappers on the new engine (Q7). P rows are independent unless a row says otherwise; an owner gate blocks only its dependents. A defect found at a gate gets its own issue, a fix and a new RC before the gate is repeated.
 
 "needs issue" marks a step with no issue yet, with the title to file.
 
@@ -123,7 +123,7 @@ Order: agent work (P) lands, then `v1.0.0-rc.3` (R), then the owner gates G1-G7 
 | Step | Issue | What | Blocker | Done when |
 |---|---|---|---|---|
 | P0 | #308 | this roadmap and the code map rewritten against `b0ce9dc` | agent | merged; `PIPELINE.md` Notes updated (H5) |
-| P1 | #309, #310 / PR #331 | one installer engine for the three services with the CLI lane included; replaces `src/game_files.rs`; closes #323 and #326 | agent | on `main`; `docs/assets.md` holds without exception (no overwrite of a player file, containment and no-follow on every path, bounded range answers, SHA-256 before publication); tests on all three providers through fakes; the desktop `save-relay game-files` command is in (Q4); the interim downloader's behaviour is gone and the two #324 C functions are deprecated wrappers on the new engine, removed after 1.0 (Q7); #331 is rebased on P0 and moves the code map rows from "in review (#331)" to present in the same PR (it also edits `CHANGELOG.md` and `docs/code-map.md`) |
+| P1 | #309, #310 / PR #331 | one installer engine for the three services with the CLI lane included; replaces `src/game_files.rs`; closes #323 and #326 | agent | merged 2026-11-25 as `bc3a7b1` after R25 review and 11 green checks; fake-tested, not released, not device-verified. Criteria: on `main`; `docs/assets.md` holds without exception (no overwrite of a player file, containment and no-follow on every path, bounded range answers, SHA-256 before publication); tests on all three providers through fakes; the desktop `save-relay game-files` command is in (Q4); the interim downloader's behaviour is gone and the two #324 C functions are deprecated wrappers on the new engine, removed after 1.0 (Q7); #331 is rebased on P0 and moves the code map rows from "in review (#331)" to present in the same PR (it also edits `CHANGELOG.md` and `docs/code-map.md`) |
 | P2 | needs issue: installer contract gaps before the C interface is versioned | the standard layout `game-files/<app>/<os>/` and a host-chosen layout argument so a legacy root (ACNH's `acnh-universal-game/android`) is read in place, with no migration (Q10) and a test over its partial folder; the changed-manifest update path (today it ends in `destination_conflict`); a free-space check and a storage-full error; the wording of pause (cancel keeps the checkpoint; one download per process) made the same in `SPEC.md`, `docs/assets.md` and the header | agent; after P2a | decided in #331 or split; the header documents each |
 | P2a | needs issue: iOS verify-and-publish entry point (Q8) | a C entry point that verifies and publishes a file the app downloaded outside the library (background `URLSession`), with the Swift wrapper; written and documented before the installer C interface is frozen or versioned | agent; before P2 and P3 | in the header, `src/ffi.rs` and the Swift wrapper, with a test through `tests/ffi.rs`; the header documents it |
 | P3 | needs issue: header and bindings parity test | Kotlin, JNI and Swift wrap every exported C function; a test fails when the header, `src/ffi.rs`, a `repr(C)` layout or a wrapper drifts | agent; after P1 | CI `bindings` fails on a missing wrapper |
@@ -235,10 +235,10 @@ F numbers are historical ids in issue titles. All are closed and released in rc.
 
 | Platform | Save sync | Installer | Release asset | Open risk |
 |---|---|---|---|---|
-| Linux x86_64 (SteamOS handhelds) | implemented, tested (CI `rust`, `integration` with real Nextcloud), released rc.2 | interim: none on the CLI; in review (#331): C interface, engine and the desktop `save-relay game-files` command (Q4, P1) | static musl binary; Decky zip | Game Mode may have no unlocked Secret Service and may show no browser (code flows are the default there); the musl binary and the Decky plugin have build-only automation; Proton saves kept in the registry are not covered; no aarch64 build |
+| Linux x86_64 (SteamOS handhelds) | implemented, tested (CI `rust`, `integration` with real Nextcloud), released rc.2 | implemented and fake-tested on `main` (#331): C interface, engine and the desktop `save-relay game-files` command (Q4, P1); not released | static musl binary; Decky zip | Game Mode may have no unlocked Secret Service and may show no browser (code flows are the default there); the musl binary and the Decky plugin have build-only automation; Proton saves kept in the registry are not covered; no aarch64 build |
 | Windows x86_64 (desktop) | implemented, tested (CI `rust`, `integration` with rclone), released rc.2 | as Linux | unsigned `.exe`, unsigned by owner decision for 1.0; the README covers SmartScreen (Q6) | names that cannot exist on Windows are an `io` error, not a skip; no arm64 build |
 | macOS arm64 | implemented, tested (CI `rust`, `integration` with rclone), released rc.2 unsigned | as Linux | arm64 CLI only by owner decision (Q5); no library asset and no Intel build for 1.0 | signing has not started (G1); `install-wrap` and the Steam-running check are untried on a Mac; no minimum macOS version is set |
-| iOS arm64 | implemented; tested on desktop hosts only | interim C functions have no Swift wrapper; in review (#331); blocking download does not fit background transfers; the verify-and-publish entry point is P2a (Q8) | device static library zip in rc.2; no simulator slice or XCFramework | no device run (G3, G4); no minimum iOS version is set in the build |
+| iOS arm64 | implemented; tested on desktop hosts only | Swift wrapper on `main` (#331), tested on desktop hosts only; blocking download does not fit background transfers; the verify-and-publish entry point is P2a (Q8) | device static library zip in rc.2; no simulator slice or XCFramework | no device run (G3, G4); no minimum iOS version is set in the build |
 | Android arm64 | implemented; tested on desktop hosts only | as iOS; the installer's 1.0 reference consumer (Q2); the legacy ACNH layout is read in place (Q10) | a release asset (`.aar` or `.so`) is required for 1.0 (P5); none today | no device gate; minimum API (24) is visible only in CI's linker name; no reference credential store |
 
 What differs per OS lives in `platform` (folders), `creds::KeyringStore` (Secret Service, Credential Manager, Keychain; never exercised in CI), the file-system edge of `scan` and `transfer`, signal handling in `wrap`,. The browser is opened with `xdg-open`, `rundll32 url.dll,FileProtocolHandler` or `open`, with no shell. `install-wrap` edits `localconfig.vdf`, which Steam rewrites while it runs, so it refuses then and keeps a dated backup. The Decky plugin is Linux Game Mode only; `save-relay panel` runs on all three desktops. Mobile builds leave out the `http` and `keyring` features: the app supplies transport, credential store and browser session through callbacks.
@@ -249,7 +249,7 @@ Verified security and correctness findings with no issue of their own. Each is a
 
 | K | Risk | Where | Step |
 |---|---|---|---|
-| K1 | The interim downloader on `main` is exported over the C ABI and breaks `docs/assets.md`: it renames over existing files, has no symlink or containment guard, accepts a 200 answer to a range request, reads an unbounded body, and uses 4 MiB chunks against a 1 MiB contract. Not released; must not be. The two C functions stay only as deprecated compatibility wrappers on the new engine, removed after 1.0 (Q7) | `src/game_files.rs`, `include/save_relay.h` | P1 before R1 |
+| K1 | Before #331, the interim downloader on `main` was exported over the C ABI and broke `docs/assets.md`: it renamed over existing files, had no symlink or containment guard, accepted a 200 answer to a range request, read an unbounded body, and used 4 MiB chunks against a 1 MiB contract. #331 (merged 2026-11-25) routes both functions through the new engine, which refuses to overwrite a mismatching file (`destination_conflict`); not device-verified. It was never released. The two C functions stay only as deprecated compatibility wrappers on the new engine, removed after 1.0 (Q7) | `src/game_files.rs`, `include/save_relay.h` | P1 before R1 |
 | K2 | `release.yml` passes the OAuth and signing secrets to pull-request and manual runs with no environment gate; a branch that edits the workflow can read them. Today that exposes the two Google secrets; it gets worse the moment G1 adds Apple's | `.github/workflows/release.yml` | P5 before G1 |
 | K3 | A tag ships an unsigned Mac binary with only a warning; nothing stops `v1.0.0` doing the same | `scripts/macos-sign.sh` | P5 |
 | K4 | Symlinks are skipped silently on upload and followed on download | `src/scan.rs`, `src/transfer.rs` | P9 |
@@ -308,7 +308,7 @@ Closed and not pending: #240 (save slots, released in rc.1) and #295 (local writ
 | algesten/ureq + rustls (`ring`) | MIT / Apache-2.0, ISC | the HTTP client behind feature `http`; a build machine needs a C compiler |
 | open-source-cooperative/keyring-rs | MIT / Apache-2.0 | the credential store behind feature `keyring` |
 | rust-random/getrandom; RustCrypto `sha2`; `serde`, `serde_json`; `quick-xml` | MIT / Apache-2.0; MIT | PKCE randomness, hashes, JSON, PROPFIND |
-| in review (#331): `caseless`, `unicode-normalization` | MIT / Apache-2.0 | installer path comparison |
+| `caseless`, `unicode-normalization` (added by #331) | MIT / Apache-2.0 | installer path comparison |
 | SteamDeckHomebrew decky-loader | GPL-2.0, host, used not linked | runs the Game Mode panel |
 | @decky/ui, @decky/api; @decky/rollup | LGPL-2.1; BSD-3-Clause | the Decky plugin and its build |
 | React 18, Vite, vitest, TypeScript, `qrcode` | MIT; Apache-2.0 (TypeScript) | the panel |
