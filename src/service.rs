@@ -9,6 +9,7 @@ use crate::clients::{Client, ClientSet};
 use crate::creds::{self, CredentialStore, Secret};
 use crate::dropbox::Dropbox;
 use crate::error::{Error, Result};
+use crate::gamefiles::GameSource;
 use crate::gdrive::Drive;
 use crate::http::Transport;
 use crate::local::Config;
@@ -191,29 +192,55 @@ pub fn open_with(
     })
 }
 
-/// Open the configured Dropbox backend directly for resumable game-file downloads (#305).
-pub fn open_dropbox(
+/// A game-file source opened for the configured service, with the token source (when the
+/// service uses OAuth) so the caller can persist a rotated refresh token afterwards.
+pub struct OpenedGameSource {
+    pub source: Box<dyn GameSource>,
+    pub tokens: Option<TokenSource>,
+}
+
+/// The game-file source (`gamefiles::GameSource`) of the service this machine is set up for:
+/// `webdav::WebDav` with the app password for Nextcloud, `dropbox::Dropbox` or `gdrive::Drive`
+/// with a `TokenSource` over the stored refresh token (Drive keeps `drive.file`). No credential
+/// stored is `Error::NotSetUp`. Every game-file entry point opens its source here, so no caller
+/// is tied to one service.
+pub fn open_game_source(
     config: &Config,
     store: &dyn CredentialStore,
     transport: Arc<dyn Transport>,
     clock: Clock,
     clients: &ClientSet,
-) -> Result<(Dropbox, TokenSource)> {
+) -> Result<OpenedGameSource> {
     let service = Service::from_server(&config.server)?;
-    if service != Service::Dropbox {
-        return Err(Error::Usage(
-            "resumable game-file downloads require Dropbox".into(),
-        ));
+    if !service.uses_oauth() {
+        let url = webdav::files_url(&config.server, &config.user)?;
+        let account = creds::account(&config.server, &config.user)?;
+        let password = store.get(&account)?.ok_or(Error::NotSetUp)?;
+        return Ok(OpenedGameSource {
+            source: Box::new(WebDav::new(&url, &config.user, password, transport)),
+            tokens: None,
+        });
     }
     let refresh = store
         .get(&token_account(service, &config.user)?)?
         .ok_or(Error::NotSetUp)?;
-    let client = client_for(service, clients, None)?;
+    let kind = match service {
+        Service::Gdrive => store.get(&google_client_account(&config.user))?,
+        _ => None,
+    };
+    let client = client_for(service, clients, kind.as_ref().map(Secret::expose))?;
     let provider =
         oauth::provider(service).ok_or_else(|| Error::Usage("no OAuth provider".into()))?;
     let tokens = TokenSource::new(provider, client, refresh, transport.clone(), clock);
     let handle = tokens.clone();
-    Ok((Dropbox::new(tokens, transport), handle))
+    let source: Box<dyn GameSource> = match service {
+        Service::Gdrive => Box::new(Drive::new(tokens, transport, clock)),
+        _ => Box::new(Dropbox::new(tokens, transport)),
+    };
+    Ok(OpenedGameSource {
+        source,
+        tokens: Some(handle),
+    })
 }
 
 /// The `Remote` of an OAuth service over `tokens`.

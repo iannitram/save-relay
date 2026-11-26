@@ -86,3 +86,75 @@ fn serializes_as_its_key() {
         assert_eq!(serde_json::from_str::<Service>(&text).unwrap(), s);
     }
 }
+
+#[test]
+fn game_sources_open_for_every_service_and_need_its_sign_in() {
+    use save_relay::creds::MemoryStore;
+    use save_relay::local::Config;
+    use save_relay::service::open_game_source;
+    use std::sync::Arc;
+
+    struct Silent;
+    impl save_relay::http::Transport for Silent {
+        fn send(
+            &self,
+            _: &save_relay::http::Request,
+        ) -> save_relay::Result<save_relay::http::Response> {
+            Err(Error::Unreachable("no network in this test".into()))
+        }
+    }
+    let config = |server: &str| Config {
+        format: 1,
+        server: server.into(),
+        user: "me@example.org".into(),
+        root: "save-relay".into(),
+        device: "pc".into(),
+    };
+    let clients = save_relay::clients::ClientSet::shipped();
+    let open = |server: &str| {
+        open_game_source(
+            &config(server),
+            &MemoryStore::new(),
+            Arc::new(Silent),
+            save_relay::stamp::now,
+            &clients,
+        )
+        .map(|_| ())
+    };
+    // All three services have a source (#309): without a stored sign-in each is "not set up",
+    // never "range unsupported", and no request is sent.
+    for server in ["https://cloud.example.org", "gdrive", "dropbox"] {
+        assert!(
+            matches!(open(server), Err(Error::NotSetUp)),
+            "{server}: {:?}",
+            open(server)
+        );
+    }
+    use save_relay::creds::{CredentialStore, Secret};
+    let signed_in = |server: &str, account: &str| {
+        let store = MemoryStore::new();
+        store.set(account, &Secret::new("stored")).unwrap();
+        open_game_source(
+            &config(server),
+            &store,
+            Arc::new(Silent),
+            save_relay::stamp::now,
+            &clients,
+        )
+        .map(|opened| opened.source.service())
+    };
+    let nextcloud =
+        save_relay::creds::account("https://cloud.example.org", "me@example.org").unwrap();
+    assert_eq!(
+        signed_in("https://cloud.example.org", &nextcloud).unwrap(),
+        "nextcloud"
+    );
+    assert_eq!(
+        signed_in("gdrive", "gdrive:me@example.org").unwrap(),
+        "gdrive"
+    );
+    assert_eq!(
+        signed_in("dropbox", "dropbox:me@example.org").unwrap(),
+        "dropbox"
+    );
+}

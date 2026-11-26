@@ -1,16 +1,56 @@
 #include <jni.h>
+#include <pthread.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "save_relay.h"
 
+/*
+ * Host lifetime (#310). Rust keeps the `user_data` of the host it was last initialised with for
+ * as long as any call uses it, and a game-file download calls back into the app for minutes or
+ * hours. So the callbacks never read a process-wide global ref: they get a `HostRef` as
+ * `user_data`, and the Java object it names is released only under the write lock, which waits
+ * for the callbacks that are just taking their reference (the read lock is held only for that,
+ * never across the Java call, so a slow request cannot stall init or close) and makes later
+ * callbacks fail cleanly (a retryable network error) instead of touching a deleted reference.
+ *
+ *   - nativeInit builds a new HostRef and hands it to save_relay_init. The library refuses
+ *     (error code "busy") to replace the host while a download runs; then the new HostRef is
+ *     dropped and the running download keeps the one it started with.
+ *   - nativeShutdown releases the current HostRef's Java object (after waiting for callbacks).
+ *   - A HostRef's struct itself is never freed: a previous host may still be referenced from
+ *     Rust by a short call, and it is a few words per init.
+ */
+typedef struct HostRef {
+  jobject host; /* global ref; NULL once released */
+  jmethodID credential_get;
+  jmethodID credential_set;
+  jmethodID credential_delete;
+  jmethodID http;
+} HostRef;
+
 static JavaVM *g_vm = NULL;
-static jobject g_host = NULL;
-static jmethodID g_credential_get = NULL;
-static jmethodID g_credential_set = NULL;
-static jmethodID g_credential_delete = NULL;
-static jmethodID g_http = NULL;
+static HostRef *g_current = NULL;
+static pthread_rwlock_t g_lock = PTHREAD_RWLOCK_INITIALIZER;
+/* Serialises nativeInit (the library's install and our swap of g_current) and nativeShutdown, so
+ * the order this file's bookkeeping sees is the order the library installed hosts in. Taken
+ * before g_lock; never held by a callback. */
+static pthread_mutex_t g_init_lock = PTHREAD_MUTEX_INITIALIZER;
+
+/* A local reference to the host's Java object, or NULL once it was released. The read lock is
+ * held only while the reference is taken, never across the Java call: a slow request must not
+ * make nativeShutdown or nativeInit (write lock) wait for the network. The local reference keeps
+ * the object alive for the call even if the global one is deleted meanwhile. */
+static jobject host_object(JNIEnv *env, HostRef *ref) {
+  jobject object = NULL;
+  pthread_rwlock_rdlock(&g_lock);
+  if (ref->host != NULL) {
+    object = (*env)->NewLocalRef(env, ref->host);
+  }
+  pthread_rwlock_unlock(&g_lock);
+  return object;
+}
 
 static JNIEnv *get_env(int *attached) {
   JNIEnv *env = NULL;
@@ -38,18 +78,23 @@ static void release_env(int attached) {
 
 static int host_credential_get(void *user_data, const char *account,
                                uint8_t *buf, size_t cap, size_t *len) {
-  (void)user_data;
   int attached = 0;
   int result = 2;
-  JNIEnv *env = get_env(&attached);
-  if (env == NULL || g_host == NULL || buf == NULL || len == NULL) {
+  HostRef *ref = (HostRef *)user_data;
+  JNIEnv *env = ref == NULL ? NULL : get_env(&attached);
+  jobject target = env == NULL ? NULL : host_object(env, ref);
+  if (target != NULL && (buf == NULL || len == NULL)) {
+    (*env)->DeleteLocalRef(env, target);
+    target = NULL;
+  }
+  if (target == NULL) {
     release_env(attached);
     return 2;
   }
   jstring jaccount = (*env)->NewStringUTF(env, account);
   if (jaccount != NULL) {
     jbyteArray secret = (jbyteArray)(*env)->CallObjectMethod(
-        env, g_host, g_credential_get, jaccount);
+        env, target, ref->credential_get, jaccount);
     if ((*env)->ExceptionCheck(env)) {
       (*env)->ExceptionClear(env);
     } else if (secret == NULL) {
@@ -69,25 +114,28 @@ static int host_credential_get(void *user_data, const char *account,
     }
     (*env)->DeleteLocalRef(env, jaccount);
   }
+  (*env)->DeleteLocalRef(env, target);
   release_env(attached);
   return result;
 }
 
 static int host_credential_set(void *user_data, const char *account,
                                const char *secret) {
-  (void)user_data;
   int attached = 0;
   int result = 2;
-  JNIEnv *env = get_env(&attached);
-  if (env == NULL || g_host == NULL) {
+  HostRef *ref = (HostRef *)user_data;
+  JNIEnv *env = ref == NULL ? NULL : get_env(&attached);
+  jobject target = env == NULL ? NULL : host_object(env, ref);
+  if (target == NULL) {
     release_env(attached);
     return 2;
   }
   jstring jaccount = (*env)->NewStringUTF(env, account);
   jstring jsecret = (*env)->NewStringUTF(env, secret);
   if (jaccount != NULL && jsecret != NULL) {
-    jboolean ok = (*env)->CallBooleanMethod(env, g_host, g_credential_set,
-                                            jaccount, jsecret);
+    jboolean ok = (*env)->CallBooleanMethod(env, target,
+                                            ref->credential_set, jaccount,
+                                            jsecret);
     if ((*env)->ExceptionCheck(env)) {
       (*env)->ExceptionClear(env);
     } else {
@@ -100,23 +148,25 @@ static int host_credential_set(void *user_data, const char *account,
   if (jsecret != NULL) {
     (*env)->DeleteLocalRef(env, jsecret);
   }
+  (*env)->DeleteLocalRef(env, target);
   release_env(attached);
   return result;
 }
 
 static int host_credential_delete(void *user_data, const char *account) {
-  (void)user_data;
   int attached = 0;
   int result = 2;
-  JNIEnv *env = get_env(&attached);
-  if (env == NULL || g_host == NULL) {
+  HostRef *ref = (HostRef *)user_data;
+  JNIEnv *env = ref == NULL ? NULL : get_env(&attached);
+  jobject target = env == NULL ? NULL : host_object(env, ref);
+  if (target == NULL) {
     release_env(attached);
     return 2;
   }
   jstring jaccount = (*env)->NewStringUTF(env, account);
   if (jaccount != NULL) {
-    jboolean ok = (*env)->CallBooleanMethod(env, g_host, g_credential_delete,
-                                            jaccount);
+    jboolean ok = (*env)->CallBooleanMethod(env, target,
+                                            ref->credential_delete, jaccount);
     if ((*env)->ExceptionCheck(env)) {
       (*env)->ExceptionClear(env);
     } else {
@@ -124,20 +174,22 @@ static int host_credential_delete(void *user_data, const char *account) {
     }
     (*env)->DeleteLocalRef(env, jaccount);
   }
+  (*env)->DeleteLocalRef(env, target);
   release_env(attached);
   return result;
 }
 
 static int host_http(void *user_data, const SaveRelayHttpRequest *request,
                      SaveRelayHttpSink *sink) {
-  (void)user_data;
   if (request == NULL || sink == NULL) {
     return 2;
   }
   int attached = 0;
   int result = 1;
-  JNIEnv *env = get_env(&attached);
-  if (env == NULL || g_host == NULL) {
+  HostRef *ref = (HostRef *)user_data;
+  JNIEnv *env = ref == NULL ? NULL : get_env(&attached);
+  jobject target = env == NULL ? NULL : host_object(env, ref);
+  if (target == NULL) {
     release_env(attached);
     return 1;
   }
@@ -156,7 +208,7 @@ static int host_http(void *user_data, const SaveRelayHttpRequest *request,
   if (method != NULL && url != NULL && body != NULL &&
       !(*env)->ExceptionCheck(env)) {
     jbyteArray answer = (jbyteArray)(*env)->CallObjectMethod(
-        env, g_host, g_http, method, url, headers, body,
+        env, target, ref->http, method, url, headers, body,
         (jlong)request->max_response_bytes);
     if ((*env)->ExceptionCheck(env)) {
       (*env)->ExceptionClear(env);
@@ -209,6 +261,7 @@ static int host_http(void *user_data, const SaveRelayHttpRequest *request,
   if (body != NULL) {
     (*env)->DeleteLocalRef(env, body);
   }
+  (*env)->DeleteLocalRef(env, target);
   release_env(attached);
   return result;
 }
@@ -238,52 +291,46 @@ JNIEXPORT jlong JNICALL Java_org_saverelay_SaveRelay_nativeInit(
   const char *config_text = ENTER_STRING(config);
   const char *documents_text = ENTER_STRING(documents);
 
-  if (g_host != NULL) {
-    (*env)->DeleteGlobalRef(env, g_host);
-    g_host = NULL;
-  }
-  g_credential_get = NULL;
-  g_credential_set = NULL;
-  g_credential_delete = NULL;
-  g_http = NULL;
-
-  if (host != NULL) {
+  /* Build the new host aside; the current one is replaced only if the library accepts it. */
+  HostRef *fresh = (HostRef *)calloc(1, sizeof(HostRef));
+  if (fresh != NULL && host != NULL) {
     jclass cls = (*env)->GetObjectClass(env, host);
     if (cls != NULL) {
-      g_credential_get = (*env)->GetMethodID(
+      fresh->credential_get = (*env)->GetMethodID(
           env, cls, "credentialGet", "(Ljava/lang/String;)[B");
-      if (g_credential_get == NULL) {
+      if (fresh->credential_get == NULL) {
         (*env)->ExceptionClear(env);
       }
-      g_credential_set = (*env)->GetMethodID(
+      fresh->credential_set = (*env)->GetMethodID(
           env, cls, "credentialSet",
           "(Ljava/lang/String;Ljava/lang/String;)Z");
-      if (g_credential_set == NULL) {
+      if (fresh->credential_set == NULL) {
         (*env)->ExceptionClear(env);
       }
-      g_credential_delete = (*env)->GetMethodID(
+      fresh->credential_delete = (*env)->GetMethodID(
           env, cls, "credentialDelete", "(Ljava/lang/String;)Z");
-      if (g_credential_delete == NULL) {
+      if (fresh->credential_delete == NULL) {
         (*env)->ExceptionClear(env);
       }
-      g_http = (*env)->GetMethodID(
+      fresh->http = (*env)->GetMethodID(
           env, cls, "http", "(Ljava/lang/String;Ljava/lang/String;"
-                           "Ljava/lang/String;[BJ)[B");
-      if (g_http == NULL) {
+                            "Ljava/lang/String;[BJ)[B");
+      if (fresh->http == NULL) {
         (*env)->ExceptionClear(env);
       }
       (*env)->DeleteLocalRef(env, cls);
     }
-    if (g_credential_get != NULL && g_credential_set != NULL &&
-        g_credential_delete != NULL && g_http != NULL) {
-      g_host = (*env)->NewGlobalRef(env, host);
+    if (fresh->credential_get != NULL && fresh->credential_set != NULL &&
+        fresh->credential_delete != NULL && fresh->http != NULL) {
+      fresh->host = (*env)->NewGlobalRef(env, host);
     }
   }
 
+  pthread_mutex_lock(&g_init_lock);
   char *line;
-  if (g_host != NULL && home_text != NULL && data_text != NULL &&
-      config_text != NULL) {
-    SaveRelayHost native = {g_host, home_text, data_text, config_text,
+  if (fresh != NULL && fresh->host != NULL && home_text != NULL &&
+      data_text != NULL && config_text != NULL) {
+    SaveRelayHost native = {fresh, home_text, data_text, config_text,
                             documents_text, host_credential_get,
                             host_credential_set, host_credential_delete,
                             host_http};
@@ -291,6 +338,27 @@ JNIEXPORT jlong JNICALL Java_org_saverelay_SaveRelay_nativeInit(
   } else {
     line = save_relay_init(NULL);
   }
+
+  /* The library took the new host only if it said so (it refuses while a download runs). */
+  int accepted = fresh != NULL && fresh->host != NULL && line != NULL &&
+                 strstr(line, "\"ok\":true") != NULL;
+  HostRef *old = NULL;
+  if (accepted) {
+    pthread_rwlock_wrlock(&g_lock);
+    old = g_current;
+    g_current = fresh;
+    if (old != NULL && old->host != NULL) {
+      (*env)->DeleteGlobalRef(env, old->host);
+      old->host = NULL;
+    }
+    pthread_rwlock_unlock(&g_lock);
+  } else if (fresh != NULL) {
+    if (fresh->host != NULL) {
+      (*env)->DeleteGlobalRef(env, fresh->host);
+    }
+    free(fresh);
+  }
+  pthread_mutex_unlock(&g_init_lock);
 
   LEAVE_STRING(home, home_text);
   LEAVE_STRING(data, data_text);
@@ -319,10 +387,17 @@ JNIEXPORT void JNICALL Java_org_saverelay_SaveRelay_nativeFree(
 JNIEXPORT void JNICALL Java_org_saverelay_SaveRelay_nativeShutdown(
     JNIEnv *env, jobject thiz) {
   (void)thiz;
-  if (g_host != NULL) {
-    (*env)->DeleteGlobalRef(env, g_host);
-    g_host = NULL;
+  /* Later callbacks fail cleanly; ones already calling Java keep their own local reference.
+   * The library's own copy of
+   * `user_data` stays valid memory (HostRef structs are never freed). */
+  pthread_mutex_lock(&g_init_lock);
+  pthread_rwlock_wrlock(&g_lock);
+  if (g_current != NULL && g_current->host != NULL) {
+    (*env)->DeleteGlobalRef(env, g_current->host);
+    g_current->host = NULL;
   }
+  pthread_rwlock_unlock(&g_lock);
+  pthread_mutex_unlock(&g_init_lock);
 }
 
 JNIEXPORT jlong JNICALL Java_org_saverelay_SaveRelay_nativePull(
@@ -406,5 +481,83 @@ JNIEXPORT jlong JNICALL Java_org_saverelay_SaveRelay_nativeSignInFinish(
   const char *redirect_text = ENTER_STRING(redirect);
   char *line = save_relay_sign_in_finish(redirect_text);
   LEAVE_STRING(redirect, redirect_text);
+  return (jlong)(intptr_t)line;
+}
+
+JNIEXPORT jlong JNICALL Java_org_saverelay_SaveRelay_nativeGameFilesPlan(
+    JNIEnv *env, jobject thiz, jstring app, jstring dest, jstring state) {
+  (void)thiz;
+  const char *app_text = ENTER_STRING(app);
+  const char *dest_text = ENTER_STRING(dest);
+  const char *state_text = ENTER_STRING(state);
+  char *line = save_relay_game_files_plan(app_text, dest_text, state_text);
+  LEAVE_STRING(app, app_text);
+  LEAVE_STRING(dest, dest_text);
+  LEAVE_STRING(state, state_text);
+  return (jlong)(intptr_t)line;
+}
+
+JNIEXPORT jlong JNICALL Java_org_saverelay_SaveRelay_nativeGameFilesDownload(
+    JNIEnv *env, jobject thiz, jstring app, jstring dest, jstring state) {
+  (void)thiz;
+  const char *app_text = ENTER_STRING(app);
+  const char *dest_text = ENTER_STRING(dest);
+  const char *state_text = ENTER_STRING(state);
+  char *line = save_relay_game_files_download(app_text, dest_text, state_text);
+  LEAVE_STRING(app, app_text);
+  LEAVE_STRING(dest, dest_text);
+  LEAVE_STRING(state, state_text);
+  return (jlong)(intptr_t)line;
+}
+
+JNIEXPORT jlong JNICALL Java_org_saverelay_SaveRelay_nativeGameFilesProgress(
+    JNIEnv *env, jobject thiz) {
+  (void)env;
+  (void)thiz;
+  return (jlong)(intptr_t)save_relay_game_files_progress();
+}
+
+JNIEXPORT jlong JNICALL Java_org_saverelay_SaveRelay_nativeGameFilesCancel(
+    JNIEnv *env, jobject thiz) {
+  (void)env;
+  (void)thiz;
+  return (jlong)(intptr_t)save_relay_game_files_cancel();
+}
+
+JNIEXPORT jlong JNICALL Java_org_saverelay_SaveRelay_nativeGameFilesCleanup(
+    JNIEnv *env, jobject thiz, jstring state) {
+  (void)thiz;
+  const char *state_text = ENTER_STRING(state);
+  char *line = save_relay_game_files_cleanup(state_text);
+  LEAVE_STRING(state, state_text);
+  return (jlong)(intptr_t)line;
+}
+
+JNIEXPORT jint JNICALL Java_org_saverelay_SaveRelay_nativeGameFilesVersion(
+    JNIEnv *env, jobject thiz) {
+  (void)env;
+  (void)thiz;
+  return (jint)save_relay_game_files_version();
+}
+
+JNIEXPORT jlong JNICALL Java_org_saverelay_SaveRelay_nativeDownloadGameFiles(
+    JNIEnv *env, jobject thiz, jstring manifest, jstring dest) {
+  (void)thiz;
+  const char *manifest_text = ENTER_STRING(manifest);
+  const char *dest_text = ENTER_STRING(dest);
+  char *line = save_relay_download_game_files(manifest_text, dest_text);
+  LEAVE_STRING(manifest, manifest_text);
+  LEAVE_STRING(dest, dest_text);
+  return (jlong)(intptr_t)line;
+}
+
+JNIEXPORT jlong JNICALL Java_org_saverelay_SaveRelay_nativeGameFilesStatus(
+    JNIEnv *env, jobject thiz, jstring manifest, jstring dest) {
+  (void)thiz;
+  const char *manifest_text = ENTER_STRING(manifest);
+  const char *dest_text = ENTER_STRING(dest);
+  char *line = save_relay_game_files_status(manifest_text, dest_text);
+  LEAVE_STRING(manifest, manifest_text);
+  LEAVE_STRING(dest, dest_text);
   return (jlong)(intptr_t)line;
 }

@@ -479,3 +479,106 @@ impl crate::remote::Remote for WebDav {
         true
     }
 }
+
+/// A strong entity tag as the server sent it (`"abc"`), or `None` for a missing, empty or weak
+/// (`W/"abc"`) one. A weak tag may stay the same across byte-different versions, so it is never
+/// an identity: no `If-Match`, and the download leans on the manifest's size (the
+/// `Content-Range` total) and the final SHA-256 alone.
+pub fn strong_etag(value: Option<&str>) -> Option<String> {
+    let value = value?.trim();
+    (value.len() >= 2 && value.starts_with('"') && value.ends_with('"')).then(|| value.to_string())
+}
+
+impl WebDav {
+    /// A game-file GET: `Accept-Encoding: identity`, the answer bounded to `max` bytes, with
+    /// `extra` headers. 401/403 is `AuthFailed`, 404 is `NotFound(path)`, 412 is
+    /// `RemoteRevised`, 429 and 5xx are `Server("webdav <status>")` (retryable), and a body
+    /// past `max` is `over_bound`'s `RangeUnsupported`. Any other status is returned for the
+    /// caller to judge. No response text reaches an error.
+    fn game_get(
+        &self,
+        path: &str,
+        extra: &[(&str, String)],
+        max: usize,
+    ) -> Result<crate::http::Response> {
+        let mut request = crate::http::Request::new("GET", &self.url(path))
+            .header("Authorization", &self.auth)
+            .header("Accept-Encoding", "identity")
+            .max_response_bytes(max);
+        for (name, value) in extra {
+            request = request.header(name, value);
+        }
+        let response = self
+            .transport
+            .send(&request)
+            .map_err(|error| crate::gamefiles::over_bound(error, path))?;
+        match response.status {
+            401 | 403 => Err(Error::AuthFailed),
+            404 => Err(Error::NotFound(path.to_string())),
+            412 => Err(Error::RemoteRevised(format!(
+                "{path} has another ETag on the server now"
+            ))),
+            status @ (429 | 500..=599) => Err(Error::Server(format!("webdav {status}"))),
+            _ => Ok(response),
+        }
+    }
+}
+
+/// Game files from the account's WebDAV files root (docs/assets.md): a plain GET for the
+/// manifest and `GET` with `Range: bytes=start-end` for payload chunks. The identity of a file
+/// is its strong `ETag`; a resumed or later chunk sends it as `If-Match`, so the server answers
+/// 412 (`remote_changed`, retryable from the start of that file) rather than another version's
+/// bytes. A 200 to a range, a 416, a multipart or encoded answer, or a body longer than asked
+/// is judged by `engine::validate` (or refused by the response bound) as `range_unsupported`;
+/// an unbounded body is never read.
+impl crate::gamefiles::GameSource for WebDav {
+    fn service(&self) -> &'static str {
+        "nextcloud"
+    }
+
+    fn read_bounded(&self, path: &str, max: usize) -> Result<Vec<u8>> {
+        crate::gamefiles::check_file_path(path)?;
+        let max = max.min(crate::gamefiles::MANIFEST_MAX_BYTES);
+        let response = self
+            .game_get(path, &[], max)
+            .map_err(|error| crate::gamefiles::over_manifest_bound(error, path, max))?;
+        match response.status {
+            200 => Ok(response.body),
+            status => Err(Error::Server(format!("webdav {status} for {path}"))),
+        }
+    }
+
+    fn fetch(&self, path: &str, start: u64, len: u64) -> Result<crate::gamefiles::RangeAnswer> {
+        self.fetch_matching(path, start, len, None)
+    }
+
+    fn fetch_matching(
+        &self,
+        path: &str,
+        start: u64,
+        len: u64,
+        expected: Option<&str>,
+    ) -> Result<crate::gamefiles::RangeAnswer> {
+        crate::gamefiles::check_file_path(path)?;
+        let end = crate::gamefiles::range_end(start, len)?;
+        let mut extra = vec![("Range", format!("bytes={start}-{end}"))];
+        // Only a strong tag binds the bytes; a weak one is never sent or kept.
+        if let Some(tag) = strong_etag(expected) {
+            extra.push(("If-Match", tag));
+        }
+        let response = self.game_get(path, &extra, crate::gamefiles::range_response_bound(len))?;
+        match response.status {
+            200 | 206 | 416 => {}
+            status => return Err(Error::Server(format!("webdav {status} for {path}"))),
+        }
+        let header = |name: &str| response.header_value(name).map(str::to_string);
+        Ok(crate::gamefiles::RangeAnswer {
+            status: response.status,
+            content_range: header("Content-Range"),
+            content_encoding: header("Content-Encoding"),
+            content_type: header("Content-Type"),
+            identity: strong_etag(response.header_value("ETag")),
+            body: response.body,
+        })
+    }
+}

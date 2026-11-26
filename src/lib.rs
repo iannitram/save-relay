@@ -15,6 +15,7 @@ pub mod fake;
 #[cfg(feature = "ffi")]
 pub mod ffi;
 pub mod game_files;
+pub mod gamefiles;
 pub mod gdrive;
 pub mod glob;
 pub mod http;

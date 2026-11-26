@@ -10,6 +10,9 @@
 //! `http::Transport` with a bearer token from `oauth::TokenSource`.
 
 use crate::error::{Error, Result};
+use crate::gamefiles::{
+    over_bound, over_manifest_bound, range_end, range_response_bound, GameSource, RangeAnswer,
+};
 use crate::http::{Request, Response, Transport};
 use crate::oauth::TokenSource;
 use crate::remote::{Precondition, Remote, RemoteEntry};
@@ -102,6 +105,9 @@ pub enum Op {
     Copy,
     Move,
     Delete,
+    /// A ranged download (`GameSource::fetch`): 206 is success, and 200 and 416 are handed to
+    /// the caller, which judges the range.
+    Range,
 }
 
 /// What a backend does with an answer.
@@ -124,6 +130,7 @@ pub enum Outcome {
 /// | status | summary starts with | op | outcome |
 /// |---|---|---|---|
 /// | 200 | | any | Ok |
+/// | 206, 416 | | Range | Ok (the caller judges the range) |
 /// | 401 | | any | Refresh |
 /// | 429, 500-599 | | any | Retry |
 /// | 409 | `path/conflict/folder` | Mkcol | Ok (already a folder) |
@@ -146,7 +153,8 @@ pub fn classify(op: Op, status: u16, body: &str, path: &str) -> Outcome {
         })
         .unwrap_or_default();
     match status {
-        200 | 206 => return Outcome::Ok,
+        200 => return Outcome::Ok,
+        206 | 416 if op == Op::Range => return Outcome::Ok,
         401 => return Outcome::Refresh,
         429 | 500..=599 => return Outcome::Retry,
         409 => {}
@@ -286,6 +294,19 @@ impl Dropbox {
     }
 
     fn send(&self, request: Request, op: Op, path: &str) -> Result<Response> {
+        self.send_with(request, op, path, 3)
+    }
+
+    /// `send` with `max_retries` waits on 429/5xx inside the call. The game-file reads pass 0:
+    /// the engine owns their retry budget and waits in stop-aware slices, so a cancel is never
+    /// stuck behind this loop's sleeps and the budgets do not multiply.
+    fn send_with(
+        &self,
+        request: Request,
+        op: Op,
+        path: &str,
+        max_retries: u32,
+    ) -> Result<Response> {
         let mut refreshed = false;
         let mut retries = 0;
         loop {
@@ -294,14 +315,21 @@ impl Dropbox {
                 .clone()
                 .header("Authorization", &format!("Bearer {}", token.expose()));
             let response = self.transport.send(&outgoing)?;
-            match classify(op, response.status, &response.text(), path) {
+            // The body is read for an error summary only on an error status: a successful range
+            // answer is up to 32 MiB of payload, never copied into a String.
+            let outcome = if matches!(response.status, 200 | 206) {
+                classify(op, response.status, "", path)
+            } else {
+                classify(op, response.status, &response.text(), path)
+            };
+            match outcome {
                 Outcome::Ok => return Ok(response),
                 Outcome::Refresh if !refreshed => {
                     self.tokens.invalidate();
                     refreshed = true;
                 }
                 Outcome::Refresh => return Err(Error::ReauthNeeded("Dropbox".into())),
-                Outcome::Retry if retries < 3 => {
+                Outcome::Retry if retries < max_retries => {
                     let seconds = response
                         .header_value("Retry-After")
                         .and_then(|s| s.parse::<u64>().ok())
@@ -310,8 +338,25 @@ impl Dropbox {
                     (self.sleep)(Duration::from_secs(seconds));
                     retries += 1;
                 }
-                // Never echo service-controlled text, which may contain a token.
-                Outcome::Retry | Outcome::Err(Error::Server(_)) => {
+                // Out of waits: the caller (the engine) owns the rest of the retrying, and
+                // is told how long the service asked it to wait. Never echo service-controlled
+                // text, which may contain a token.
+                Outcome::Retry => {
+                    let message = format!("dropbox {}", response.status);
+                    return Err(
+                        match response
+                            .header_value("Retry-After")
+                            .and_then(|s| s.trim().parse::<u64>().ok())
+                        {
+                            Some(seconds) => Error::RateLimited {
+                                message,
+                                retry_after_secs: Some(seconds),
+                            },
+                            None => Error::Server(message),
+                        },
+                    );
+                }
+                Outcome::Err(Error::Server(_)) => {
                     return Err(Error::Server(format!("dropbox {}", response.status)));
                 }
                 Outcome::Err(error) => return Err(error),
@@ -377,25 +422,73 @@ impl Dropbox {
             .and_then(|v| v["email"].as_str().map(str::to_string))
             .ok_or_else(|| Error::Server("dropbox: no email in the answer".into()))
     }
+}
 
-    /// Download a byte range `[start, end_inclusive]` of `path` inside the Dropbox App folder.
-    /// Returns the received bytes and whether the server responded with HTTP 206 Partial Content.
-    pub fn get_range(&self, path: &str, start: u64, end_inclusive: u64) -> Result<(Vec<u8>, bool)> {
+/// The longest body `GameSource::read_bounded` accepts for a manifest (docs/assets.md).
+const MAX_SMALL_FILE: usize = crate::gamefiles::MANIFEST_MAX_BYTES;
+
+impl GameSource for Dropbox {
+    fn service(&self) -> &'static str {
+        "dropbox"
+    }
+
+    fn read_bounded(&self, path: &str, max: usize) -> Result<Vec<u8>> {
         checked(path)?;
-        if end_inclusive < start {
-            return Err(Error::Usage("invalid byte range".into()));
-        }
-        let response = self.send(
+        let response = self.send_with(
             Request::new("POST", &format!("{CONTENT}/files/download"))
+                .header("Content-Type", "application/octet-stream")
+                .header("Accept-Encoding", "identity")
                 .header(
                     "Dropbox-API-Arg",
                     &header_json(&json!({"path": api_path(path)})),
                 )
-                .header("Range", &format!("bytes={start}-{end_inclusive}")),
+                .max_response_bytes(max.min(MAX_SMALL_FILE)),
             Op::Get,
             path,
-        )?;
-        Ok((response.body, response.status == 206))
+            0,
+        );
+        response
+            .map(|response| response.body)
+            .map_err(|error| over_manifest_bound(error, path, MAX_SMALL_FILE))
+    }
+
+    fn fetch(&self, path: &str, start: u64, len: u64) -> Result<RangeAnswer> {
+        checked(path)?;
+        let end = range_end(start, len)?;
+        let response = self.send_with(
+            Request::new("POST", &format!("{CONTENT}/files/download"))
+                .header("Content-Type", "application/octet-stream")
+                .header("Accept-Encoding", "identity")
+                .header("Range", &format!("bytes={start}-{end}"))
+                .header(
+                    "Dropbox-API-Arg",
+                    &header_json(&json!({"path": api_path(path)})),
+                )
+                .max_response_bytes(range_response_bound(len)),
+            Op::Range,
+            path,
+            0,
+        );
+        let response = response.map_err(|error| over_bound(error, path))?;
+        let header = |name: &str| response.header_value(name).map(str::to_string);
+        // A 206 is bound to the file version by its `rev`: without a valid one the engine
+        // could not tell a replaced file from this one, so it is an error, never `None`.
+        let identity = response
+            .header_value("Dropbox-API-Result")
+            .and_then(|result| parse_rev(result).ok());
+        if response.status == 206 && identity.is_none() {
+            return Err(Error::Server(
+                "dropbox: a ranged answer without a valid rev in Dropbox-API-Result".into(),
+            ));
+        }
+        Ok(RangeAnswer {
+            status: response.status,
+            content_range: header("Content-Range"),
+            content_encoding: header("Content-Encoding"),
+            content_type: header("Content-Type"),
+            identity,
+            body: response.body,
+        })
     }
 }
 

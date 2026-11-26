@@ -15,6 +15,7 @@
 pub mod guard;
 
 use crate::error::{Error, Result};
+use crate::gamefiles::{GameSource, RangeAnswer};
 use crate::http::{Request, Response, Transport};
 use crate::oauth::TokenSource;
 use crate::remote::{Precondition, Remote, RemoteEntry};
@@ -268,6 +269,9 @@ fn too_slow() -> Error {
     Error::Unreachable("drive: the write took too long".into())
 }
 
+/// Retries (with waits) of one save-sync request after a 429 or 5xx.
+const SYNC_RETRIES: u32 = 3;
+
 impl Drive {
     pub fn new(tokens: TokenSource, transport: Arc<dyn Transport>, clock: Clock) -> Drive {
         Drive {
@@ -285,17 +289,26 @@ impl Drive {
     }
 
     fn send(&self, request: Request, path: &str, held_since: Option<u64>) -> Result<Response> {
-        self.send_inner(request, path, held_since, false)
+        self.send_inner(request, path, held_since, &[], SYNC_RETRIES)
     }
 
-    // Keep raw 409 only for the claim step. Never include response bodies in errors: an
-    // API or proxy can echo credentials. Recheck a guarded upload's deadline on every retry.
+    /// A game-file request: no retries or waits in here. The engine owns the retry budget and
+    /// waits in stop-aware slices, so a cancel is never stuck behind this loop's sleeps and the
+    /// budgets do not multiply. A 429/5xx comes back at once (with its `Retry-After`).
+    fn send_game(&self, request: Request, path: &str, pass: &[u16]) -> Result<Response> {
+        self.send_inner(request, path, None, pass, 0)
+    }
+
+    // `pass` lists statuses handed back raw: 409 for the claim step, 416 for a game-file range.
+    // Never include response bodies in errors: an API or proxy can echo credentials. Recheck a
+    // guarded upload's deadline on every retry.
     fn send_inner(
         &self,
         request: Request,
         path: &str,
         held_since: Option<u64>,
-        claiming: bool,
+        pass: &[u16],
+        max_retries: u32,
     ) -> Result<Response> {
         let mut refreshed = false;
         let mut retries = 0;
@@ -319,24 +332,41 @@ impl Drive {
                 refreshed = true;
                 continue;
             }
-            let rate_limited = response.status == 403
-                && serde_json::from_slice::<Value>(&response.body)
-                    .ok()
-                    .and_then(|body| body["error"]["errors"].as_array().cloned())
-                    .is_some_and(|errors| {
-                        errors.iter().any(|error| {
-                            matches!(
-                                error["reason"].as_str(),
-                                Some("rateLimitExceeded" | "userRateLimitExceeded")
-                            )
-                        })
-                    });
+            let reasons = if response.status == 403 {
+                error_reasons(&response.body)
+            } else {
+                Vec::new()
+            };
+            let rate_limited = reasons.iter().any(|reason| {
+                matches!(
+                    reason.as_str(),
+                    "rateLimitExceeded" | "userRateLimitExceeded"
+                )
+            });
             if response.status == 429
                 || response.status >= 500 && response.status <= 599
                 || rate_limited
             {
-                if retries == 3 {
-                    return Err(Error::Server(format!("drive: HTTP {}", response.status)));
+                if retries >= max_retries {
+                    // A rate-limited 403 that outlasts the retries is still a rate limit:
+                    // say 429, so it stays retryable and is never read as a refusal.
+                    let message = if rate_limited {
+                        "drive: HTTP 429 (rate limited)".to_string()
+                    } else {
+                        format!("drive: HTTP {}", response.status)
+                    };
+                    return Err(
+                        match response
+                            .header_value("Retry-After")
+                            .and_then(|value| value.trim().parse::<u64>().ok())
+                        {
+                            Some(seconds) => Error::RateLimited {
+                                message,
+                                retry_after_secs: Some(seconds),
+                            },
+                            None => Error::Server(message),
+                        },
+                    );
                 }
                 let seconds = response
                     .header_value("Retry-After")
@@ -349,8 +379,12 @@ impl Drive {
             }
             return match response.status {
                 200..=299 => Ok(response),
-                409 if claiming => Ok(response),
+                status if pass.contains(&status) => Ok(response),
                 404 => Err(Error::NotFound(path.into())),
+                403 => Err(Error::Server(match reasons.first() {
+                    Some(reason) => format!("drive: HTTP 403 ({reason})"),
+                    None => "drive: HTTP 403".into(),
+                })),
                 status => Err(Error::Server(format!("drive: HTTP {status}"))),
             };
         }
@@ -511,7 +545,8 @@ impl Drive {
                     ),
                 &file.name,
                 None,
-                true,
+                &[409],
+                SYNC_RETRIES,
             )?;
             let claim = if response.status == 409 {
                 let taken = self
@@ -695,6 +730,41 @@ impl Drive {
     }
 }
 
+/// The `error.errors[].reason` values of a Drive error body, in order. Only short ASCII-letter
+/// reasons are kept, so no other service text reaches an error message.
+fn error_reasons(body: &[u8]) -> Vec<String> {
+    serde_json::from_slice::<Value>(body)
+        .ok()
+        .and_then(|body| body["error"]["errors"].as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|error| error["reason"].as_str())
+        .filter(|reason| {
+            !reason.is_empty()
+                && reason.len() <= 64
+                && reason.bytes().all(|byte| byte.is_ascii_alphabetic())
+        })
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The ids in a `files.list` page whose `mimeType` is a Google Workspace type other than a
+/// folder (`application/vnd.google-apps.*`): files with no stored bytes.
+fn google_native_ids(body: &[u8]) -> Vec<String> {
+    serde_json::from_slice::<Value>(body)
+        .ok()
+        .and_then(|page| page["files"].as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter(|file| {
+            file["mimeType"].as_str().is_some_and(|mime| {
+                mime.starts_with("application/vnd.google-apps.") && mime != FOLDER_MIME
+            })
+        })
+        .filter_map(|file| file["id"].as_str().map(str::to_owned))
+        .collect()
+}
+
 fn oldest(files: Vec<DriveFile>) -> Vec<DriveFile> {
     let mut by_name = BTreeMap::<String, DriveFile>::new();
     for file in files {
@@ -706,6 +776,244 @@ fn oldest(files: Vec<DriveFile>) -> Vec<DriveFile> {
         }
     }
     by_name.into_values().collect()
+}
+
+/// The most `files.list` pages one path segment of a game file may take to resolve.
+const GAME_LOOKUP_PAGES: usize = 16;
+/// The longest `files.list` page a game-file lookup reads.
+const GAME_LOOKUP_BYTES: usize = 256 * 1024;
+/// The longest `files.get` metadata answer a game-file check reads.
+const GAME_METADATA_BYTES: usize = 64 * 1024;
+/// The fields a game-file metadata check asks for.
+const GAME_FIELDS: &str = "id,name,mimeType,size,version,trashed";
+
+/// A 403 that is not a rate limit, on a game file, by Drive's reason. Only an access reason
+/// names `drive.file` (the app reads only files it created or was given; the scope is never
+/// widened); a file Drive flags as abusive, a Google Docs-type file and a download policy each
+/// say so instead. `acknowledgeAbuse` is never set.
+fn no_access(error: Error, path: &str) -> Error {
+    let Error::Server(message) = &error else {
+        return error;
+    };
+    let Some(rest) = message.strip_prefix("drive: HTTP 403") else {
+        return error;
+    };
+    let reason = rest
+        .strip_prefix(" (")
+        .and_then(|rest| rest.strip_suffix(')'))
+        .unwrap_or("");
+    let why = match reason {
+        "" | "appNotAuthorizedToFile" | "insufficientFilePermissions" | "forbidden" => {
+            "this app may read only files it created or was given (drive.file)"
+        }
+        "cannotDownloadAbusiveFile" => {
+            "Drive flagged this file as malware or abuse and will not serve it; replace the file"
+        }
+        "fileNotDownloadable" => {
+            "this is a Google Docs, Sheets or Slides file, not a stored file; upload the real file"
+        }
+        "downloadQuotaExceeded" => {
+            "Drive's download quota for this file is used up; Drive lifts it on its own schedule, and this download is not retried automatically"
+        }
+        "domainPolicy" | "cannotDownloadFile" => {
+            "a Drive or domain policy does not allow downloading this file"
+        }
+        _ => "Drive refused the download",
+    };
+    let shown = if reason.is_empty() {
+        String::new()
+    } else {
+        format!(" ({reason})")
+    };
+    // A fixed 403 status first, then the path: digits in the path never decide the class.
+    Error::Server(format!("drive: HTTP 403{shown} for {path}: {why}"))
+}
+
+/// A lookup or metadata answer past its bound is a service error, not a range problem.
+fn too_long(error: Error, path: &str, what: &str) -> Error {
+    match crate::gamefiles::over_bound(error, path) {
+        Error::RangeUnsupported(_) => Error::Server(format!("drive: {what} is too long")),
+        other => no_access(other, path),
+    }
+}
+
+impl Drive {
+    /// The one child called `name` of folder `parent`, for the game file `path`: a bounded,
+    /// paginated `files.list` (at most `GAME_LOOKUP_PAGES` pages of `GAME_LOOKUP_BYTES`).
+    /// None is `NotFound(path)` (under `drive.file` that includes a file the app may not see);
+    /// two or more is an error naming the path, never a pick, unlike save sync's oldest-wins.
+    fn game_child(&self, parent: &DriveFile, name: &str, path: &str) -> Result<(DriveFile, bool)> {
+        let base = format!(
+            "{API}/files?q={}&fields={LIST_FIELDS}&spaces=drive&pageSize=100",
+            encode_segment(&children_query(&parent.id, Some(name)))
+        );
+        let mut url = base.clone();
+        let mut found: Option<(DriveFile, bool)> = None;
+        for _ in 0..GAME_LOOKUP_PAGES {
+            let response = self
+                .send_game(
+                    Request::new("GET", &url).max_response_bytes(GAME_LOOKUP_BYTES),
+                    path,
+                    &[],
+                )
+                .map_err(|error| too_long(error, path, "a folder listing page"))?;
+            let page = parse_files(&response.text())?;
+            let native = google_native_ids(&response.body);
+            for file in page.files.into_iter().filter(|file| file.name == name) {
+                if found.is_some() {
+                    return Err(Error::Server(format!(
+                        "drive: more than one item is named '{name}' on the way to {path}; remove or rename the extra one"
+                    )));
+                }
+                let is_native = native.contains(&file.id);
+                found = Some((file, is_native));
+            }
+            match page.next_page {
+                None => return found.ok_or_else(|| Error::NotFound(path.into())),
+                Some(next) => url = format!("{base}&pageToken={}", encode_segment(&next)),
+            }
+        }
+        Err(Error::Server(
+            "drive: too many listing pages looking up a game file".into(),
+        ))
+    }
+
+    /// The game file at `path`, resolved afresh from My Drive's root one segment at a time. A
+    /// folder, or a missing segment, is `NotFound(path)`; a file without a version (or version
+    /// 0) is an error, never taken as version 0.
+    fn game_file(&self, path: &str) -> Result<DriveFile> {
+        crate::gamefiles::check_file_path(path)?;
+        let mut current = root();
+        let mut native = false;
+        for part in path.split('/') {
+            if !current.is_dir {
+                return Err(Error::NotFound(path.into()));
+            }
+            (current, native) = self.game_child(&current, part, path)?;
+        }
+        if current.is_dir {
+            return Err(Error::NotFound(path.into()));
+        }
+        if native {
+            // Docs, Sheets and Slides have no stored bytes to fetch in ranges; never ask.
+            return Err(Error::Server(format!(
+                "drive: {path} is a Google Docs, Sheets or Slides file, not a stored file; upload the real file"
+            )));
+        }
+        if current.version == 0 {
+            return Err(Error::Server(format!("drive: no version for {path}")));
+        }
+        Ok(current)
+    }
+
+    /// `file`'s current metadata; trashed is `NotFound(path)`.
+    fn game_metadata(&self, file: &DriveFile, path: &str) -> Result<DriveFile> {
+        let response = self
+            .send_game(
+                Request::new(
+                    "GET",
+                    &format!(
+                        "{API}/files/{}?fields={GAME_FIELDS}",
+                        encode_segment(&file.id)
+                    ),
+                )
+                .max_response_bytes(GAME_METADATA_BYTES),
+                path,
+                &[],
+            )
+            .map_err(|error| too_long(error, path, "a metadata answer"))?;
+        let trashed = serde_json::from_slice::<Value>(&response.body)
+            .ok()
+            .and_then(|value| value["trashed"].as_bool())
+            .unwrap_or(false);
+        if trashed {
+            return Err(Error::NotFound(path.into()));
+        }
+        parse_file(&response.text())
+    }
+
+    fn media_url(file: &DriveFile) -> String {
+        format!("{API}/files/{}?alt=media", encode_segment(&file.id))
+    }
+}
+
+/// Game files from Drive under `drive.file` (docs/assets.md). Each request resolves the path
+/// afresh (bounded lookups, duplicates refused), so a chunk costs one `files.list` per path
+/// segment, the media request and one metadata check. The identity is `<file id>:<version>`:
+/// a resumed or later chunk whose file now has another id or version is `remote_changed`
+/// before any bytes are asked for, and a version or size that changed while a chunk was in
+/// flight is `remote_changed` after it. These checks do not bind the media bytes atomically:
+/// only the final size and SHA-256 against the manifest allow publication.
+impl GameSource for Drive {
+    fn service(&self) -> &'static str {
+        "gdrive"
+    }
+
+    fn read_bounded(&self, path: &str, max: usize) -> Result<Vec<u8>> {
+        let max = max.min(crate::gamefiles::MANIFEST_MAX_BYTES);
+        let file = self.game_file(path)?;
+        let response = self
+            .send_game(
+                Request::new("GET", &Self::media_url(&file))
+                    .header("Accept-Encoding", "identity")
+                    .max_response_bytes(max),
+                path,
+                &[],
+            )
+            .map_err(|error| {
+                no_access(
+                    crate::gamefiles::over_manifest_bound(error, path, max),
+                    path,
+                )
+            })?;
+        Ok(response.body)
+    }
+
+    fn fetch(&self, path: &str, start: u64, len: u64) -> Result<RangeAnswer> {
+        self.fetch_matching(path, start, len, None)
+    }
+
+    fn fetch_matching(
+        &self,
+        path: &str,
+        start: u64,
+        len: u64,
+        expected: Option<&str>,
+    ) -> Result<RangeAnswer> {
+        let end = crate::gamefiles::range_end(start, len)?;
+        let file = self.game_file(path)?;
+        let identity = format!("{}:{}", file.id, file.version);
+        if expected.is_some_and(|want| want != identity) {
+            return Err(Error::RemoteRevised(format!(
+                "{path} is another file or version on Drive now"
+            )));
+        }
+        let response = self
+            .send_game(
+                Request::new("GET", &Self::media_url(&file))
+                    .header("Range", &format!("bytes={start}-{end}"))
+                    .header("Accept-Encoding", "identity")
+                    .max_response_bytes(crate::gamefiles::range_response_bound(len)),
+                path,
+                &[416],
+            )
+            .map_err(|error| no_access(crate::gamefiles::over_bound(error, path), path))?;
+        let after = self.game_metadata(&file, path)?;
+        if after.version != file.version || after.size != file.size {
+            return Err(Error::RemoteRevised(format!(
+                "{path} changed on Drive while a chunk was read"
+            )));
+        }
+        let header = |name: &str| response.header_value(name).map(str::to_string);
+        Ok(RangeAnswer {
+            status: response.status,
+            content_range: header("Content-Range"),
+            content_encoding: header("Content-Encoding"),
+            content_type: header("Content-Type"),
+            identity: Some(identity),
+            body: response.body,
+        })
+    }
 }
 
 impl Remote for Drive {

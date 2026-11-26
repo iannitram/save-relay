@@ -9,7 +9,9 @@ interface SaveRelayHost {
     fun credentialDelete(account: String): Boolean
     /**
      * Performs one HTTP request and returns [SaveRelayResponse.toWire], or `null` on a transport
-     * failure (DNS, TLS, connection, timeout, or response over [maxResponseBytes]).
+     * failure (DNS, TLS, connection, timeout). When [maxResponseBytes] is not 0, read at most
+     * `maxResponseBytes + 1` body bytes and return them: a longer answer is refused as too large
+     * (a range the server ignored), which `null` would turn into a retryable network failure.
      *
      * Android `HttpURLConnection` notes (see `docs/android.md`):
      * - For `POST` with no `Content-Type` header, set `Content-Type: application/octet-stream`.

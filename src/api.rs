@@ -393,6 +393,16 @@ pub fn success<T: Serialize>(command: &str, data: &T) -> String {
 /// `{"ok":false,"command":<command>,"error":{"code":<error.code()>,"message":<error's Display>}}`
 /// on one line, no trailing newline.
 pub fn failure(command: &str, error: &Error) -> String {
+    failure_line(command, error, false)
+}
+
+/// `failure` with `error.class` added (`retryable`, `not_yet_uploaded`, `reauth_needed`,
+/// `fatal`), for the game-files commands, whose callers decide whether to retry.
+pub fn failure_with_class(command: &str, error: &Error) -> String {
+    failure_line(command, error, true)
+}
+
+fn failure_line(command: &str, error: &Error, with_class: bool) -> String {
     #[derive(Serialize)]
     struct FailureEnvelope<'a> {
         ok: bool,
@@ -404,6 +414,10 @@ pub fn failure(command: &str, error: &Error) -> String {
     struct ErrorDetail {
         code: &'static str,
         message: String,
+        /// Only on the game-files commands (`failure_with_class`): `retryable`,
+        /// `not_yet_uploaded`, `reauth_needed` or `fatal` (`Error::class`).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        class: Option<&'static str>,
     }
 
     serde_json::to_string(&FailureEnvelope {
@@ -412,6 +426,7 @@ pub fn failure(command: &str, error: &Error) -> String {
         error: ErrorDetail {
             code: error.code(),
             message: error.to_string(),
+            class: with_class.then(|| error.class().key()),
         },
     })
     .expect("serializing API failure envelope should not fail")
@@ -431,8 +446,9 @@ pub fn exit_code_for(action: Action) -> i32 {
 /// 2 `usage`, `manifest_invalid`, `game_unknown`, `no_such_entry`, `save_location_unclear`,
 /// `steam_not_found`, `steam_running`, `no_pending_choice`;
 /// 4 `not_set_up`, `auth_failed`, `credentials`, `reauth_needed`, `sign_in_failed`;
-/// 5 `server_unreachable`, `server_error`, `state_invalid`, `changed_on_server`, `not_found`;
-/// 1 anything else (`io`).
+/// 5 `server_unreachable`, `server_error`, `state_invalid`, `changed_on_server`, `not_found`,
+/// `range_unsupported`, `remote_changed`, `not_yet_uploaded`;
+/// 1 anything else (`io`, `integrity_failed`, `destination_conflict`, `busy`).
 pub fn exit_code(error: &Error) -> i32 {
     match error {
         Error::Usage(_)
@@ -450,11 +466,19 @@ pub fn exit_code(error: &Error) -> i32 {
         | Error::SignInFailed(_) => 4,
         Error::Unreachable(_)
         | Error::Server(_)
+        | Error::RateLimited { .. }
+        | Error::RangeUnsupported(_)
+        | Error::RemoteChanged(_)
+        | Error::RemoteRevised(_)
+        | Error::NotYetUploaded(_)
         | Error::StateInvalid(_)
         | Error::Changed
         | Error::ChangedRepair(_)
         | Error::MissingDriveClaim { .. }
         | Error::NotFound(_) => 5,
-        Error::Io(_) => 1,
+        Error::Io(_)
+        | Error::IntegrityFailed(_)
+        | Error::DestinationConflict(_)
+        | Error::Busy(_) => 1,
     }
 }
