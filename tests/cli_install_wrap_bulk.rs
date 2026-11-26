@@ -111,9 +111,20 @@ impl Machine {
         self.run_now(args)
     }
 
-    /// `run` without taking the lock: for a caller that holds it already.
+    /// `run` without taking the lock: for a caller that holds it already. Steam counts as not
+    /// running (`SAVE_RELAY_TEST_STEAM_RUNNING=0`), so a host with Steam open passes too
+    /// (issue #329).
     fn run_now(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_save-relay"))
+        self.command(args)
+            .env("SAVE_RELAY_TEST_STEAM_RUNNING", "0")
+            .output()
+            .unwrap()
+    }
+
+    /// The CLI on this machine's folders, with the real Steam-running check.
+    fn command(&self, args: &[&str]) -> Command {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_save-relay"));
+        command
             .args(args)
             .env("SAVE_RELAY_STEAM_DIR", &self.steam)
             .env("HOME", &self.home)
@@ -122,8 +133,8 @@ impl Machine {
             .env("XDG_CONFIG_HOME", &self.config)
             .env("LOCALAPPDATA", &self.data)
             .env("APPDATA", &self.config)
-            .output()
-            .unwrap()
+            .env_remove("SAVE_RELAY_TEST_STEAM_RUNNING");
+        command
     }
 
     fn localconfig(&self) -> PathBuf {
@@ -277,8 +288,38 @@ fn steam_running_guard_precedes_cache_reads() {
         "malformed cache",
     )
     .unwrap();
-    let output = machine.run_now(&["install-wrap", "--no-steam-cloud", "--json"]);
+    let output = machine
+        .command(&["install-wrap", "--no-steam-cloud", "--json"])
+        .output()
+        .unwrap();
     assert!(!output.status.success());
     let envelope: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(envelope["error"]["code"], "steam_running");
+}
+
+/// The test seam (issue #329) on every platform: with Steam forced running, `install-wrap`
+/// refuses before it reads a cache or touches `localconfig.vdf`.
+#[test]
+fn forced_steam_running_refuses_and_writes_nothing() {
+    let machine = Machine::new(&[504231, 504232]);
+    let before = fs::read(machine.localconfig()).unwrap();
+    fs::write(
+        machine.data.join("save-relay/steam/cloud.json"),
+        "malformed cache",
+    )
+    .unwrap();
+    for args in [
+        &["install-wrap", "--no-steam-cloud", "--json"][..],
+        &["install-wrap", "--json", "504231"][..],
+    ] {
+        let output = machine
+            .command(args)
+            .env("SAVE_RELAY_TEST_STEAM_RUNNING", "1")
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        let envelope: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(envelope["error"]["code"], "steam_running", "{args:?}");
+    }
+    assert_eq!(fs::read(machine.localconfig()).unwrap(), before);
 }

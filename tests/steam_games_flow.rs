@@ -335,6 +335,8 @@ fn m16_lists_wraps_and_syncs_only_the_no_cloud_fixture_game() {
     install
         .args(["install-wrap", "--no-steam-cloud", "--json"])
         .env("SAVE_RELAY_STEAM_DIR", &machine.steam)
+        // The fixture Steam is closed whatever the host runs (issue #329).
+        .env("SAVE_RELAY_TEST_STEAM_RUNNING", "0")
         .env("HOME", &machine.vars.home)
         .env("USERPROFILE", &machine.vars.home)
         .env("APPDATA", &machine.vars.config)

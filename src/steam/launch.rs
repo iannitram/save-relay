@@ -131,6 +131,29 @@ pub fn installed_among(
     wanted.intersection(&installed).copied().collect()
 }
 
+/// The variable the integration tests set (issue #329): in a debug build, `1` makes
+/// `steam_running` answer true and `0` false without looking at the host, so a test with a
+/// fixture Steam folder does not depend on a real Steam being open (on Windows the check is
+/// `tasklist`, which sees the host). Any other value, or unset, runs the real check. A release
+/// build never reads it.
+pub const TEST_STEAM_RUNNING_VAR: &str = "SAVE_RELAY_TEST_STEAM_RUNNING";
+
+/// The answer `TEST_STEAM_RUNNING_VAR` forces, in a debug build only; `None` otherwise.
+#[cfg(debug_assertions)]
+pub fn test_steam_running_from_env(var: &dyn Fn(&str) -> Option<String>) -> Option<bool> {
+    match var(TEST_STEAM_RUNNING_VAR)?.trim() {
+        "1" => Some(true),
+        "0" => Some(false),
+        _ => None,
+    }
+}
+
+/// A release build has no test override.
+#[cfg(not(debug_assertions))]
+pub fn test_steam_running_from_env(_: &dyn Fn(&str) -> Option<String>) -> Option<bool> {
+    None
+}
+
 /// True when Steam is running. Linux (`steam_running_linux` with `/proc`): a pid in one of
 /// `LINUX_PID_FILES` under `home` names a Steam process, meaning its `comm` is `steam`; failing
 /// that, some numeric folder of `/proc` has a `steam` comm, which finds Flatpak Steam (its pid
@@ -138,8 +161,11 @@ pub fn installed_among(
 /// `MAC_PID_FILE` answers `kill -0` (unverified on a real Mac: the pid file's place is from
 /// Steam's usual layout). Windows: `tasklist` lists `steam.exe`. Android and iOS have no Steam:
 /// false. A check that cannot run, a pid file that is not a number, or a `/proc` that cannot be
-/// listed, is `Error::Io`.
+/// listed, is `Error::Io`. A debug build first honours `TEST_STEAM_RUNNING_VAR` (issue #329).
 pub fn steam_running(platform: Platform, home: &Path) -> Result<bool> {
+    if let Some(running) = test_steam_running_from_env(&|name| std::env::var(name).ok()) {
+        return Ok(running);
+    }
     match platform {
         Platform::Linux => steam_running_linux(home, Path::new("/proc")),
         Platform::Mac => match read_pid(&home.join(MAC_PID_FILE))? {
