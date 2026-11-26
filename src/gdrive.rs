@@ -396,6 +396,48 @@ impl Drive {
         }
     }
 
+    // Asset path resolution is bounded independently of save synchronization's listing API.
+    fn asset_child(&self, parent: &str, name: &str) -> Result<DriveFile> {
+        let base = format!(
+            "{API}/files?q={}&fields={LIST_FIELDS}&spaces=drive",
+            encode_segment(&children_query(parent, Some(name)))
+        );
+        let mut url = base.clone();
+        let mut found = None;
+        for _ in 0..128 {
+            let response = self.send(
+                Request::new("GET", &url).max_response_bytes(256 * 1024),
+                parent,
+                None,
+            )?;
+            let page = parse_files(&response.text())?;
+            for file in page.files.into_iter().filter(|f| f.name == name) {
+                if found.is_some() {
+                    return Err(Error::Server("drive: ambiguous asset path".into()));
+                }
+                found = Some(file);
+            }
+            match page.next_page {
+                None => return found.ok_or_else(|| Error::NotFound(name.into())),
+                Some(next) => url = format!("{base}&pageToken={}", encode_segment(&next)),
+            }
+        }
+        Err(Error::Server("drive: too many asset listing pages".into()))
+    }
+
+    fn asset_metadata(&self, id: &str, path: &str) -> Result<DriveFile> {
+        let response = self.send(
+            Request::new(
+                "GET",
+                &format!("{API}/files/{}?fields={FILE_FIELDS}", encode_segment(id)),
+            )
+            .max_response_bytes(256 * 1024),
+            path,
+            None,
+        )?;
+        parse_file(&response.text())
+    }
+
     // Resolve afresh so renames, deletion and concurrently-created duplicate folders cannot
     // leave a machine using a different tree. All callers use the same oldest-wins rule.
     fn resolve(&self, path: &str) -> Result<DriveFile> {
@@ -842,20 +884,13 @@ impl Remote for Drive {
             if part.is_empty() || !file.is_dir {
                 return Err(Error::NotFound(path.into()));
             }
-            let matching: Vec<_> = self
-                .children(&file.id, Some(part))?
-                .into_iter()
-                .filter(|f| f.name == part)
-                .collect();
-            if matching.len() != 1 {
-                return Err(Error::Server(
-                    "drive: missing or ambiguous asset path".into(),
-                ));
-            }
-            file = matching.into_iter().next().expect("one match");
+            file = self.asset_child(&file.id, part)?;
         }
         if file.is_dir {
             return Err(Error::NotFound(path.into()));
+        }
+        if file.version == 0 {
+            return Err(Error::Server("drive: missing asset version".into()));
         }
         let current = format!("{}:{}", file.id, file.version);
         if identity.is_some_and(|want| want != current) {
@@ -872,8 +907,8 @@ impl Remote for Drive {
             path,
             None,
         )?;
-        let seen = self.metadata(&file.id, path)?;
-        if seen.version != file.version || seen.size != file.size {
+        let seen = self.asset_metadata(&file.id, path)?;
+        if seen.version == 0 || seen.version != file.version || seen.size != file.size {
             return Err(Error::Changed);
         }
         crate::assets::validate_range_response(&response, offset, length, file.size)?;

@@ -1,7 +1,9 @@
 //! Installer asset manifest validation. Transfer and mobile APIs are not yet implemented.
 use crate::error::{Error, Result};
+use caseless::Caseless;
 use serde::Deserialize;
 use std::collections::BTreeSet;
+use unicode_normalization::UnicodeNormalization;
 
 const MAX_MANIFEST: usize = 4 * 1024 * 1024;
 const MAX_FILES: usize = 100_000;
@@ -41,6 +43,16 @@ fn valid_id(id: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"._-".contains(&b))
 }
 
+fn folded(path: &str) -> String {
+    path.chars()
+        .nfd()
+        .default_case_fold()
+        .nfkd()
+        .default_case_fold()
+        .nfkd()
+        .collect()
+}
+
 fn valid_path(path: &str) -> bool {
     if path.is_empty() || path.len() > 4096 {
         return false;
@@ -56,7 +68,12 @@ fn valid_path(path: &str) -> bool {
         {
             return false;
         }
-        let stem = p.split('.').next().unwrap_or("").to_ascii_uppercase();
+        let normalized = folded(p);
+        let stem = normalized
+            .split('.')
+            .next()
+            .unwrap_or("")
+            .to_ascii_uppercase();
         if matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL") {
             return false;
         }
@@ -98,7 +115,7 @@ pub fn parse_manifest(raw: &[u8], app_id: &str, allow_legacy: bool) -> Result<As
         {
             return Err(invalid());
         }
-        let folded = f.path.to_lowercase();
+        let folded = folded(&f.path);
         if folded == "user"
             || folded.starts_with("user/")
             || folded == "config.ini"
@@ -165,4 +182,51 @@ pub fn validate_range_response(
         return Err(invalid_range());
     }
     Ok(())
+}
+
+#[cfg(unix)]
+pub mod safe_dir;
+
+#[cfg(unix)]
+pub mod session;
+
+/// Read a trusted host-selected manifest path in bounded chunks. This never calls `Remote::get`.
+pub fn fetch_manifest(remote: &dyn crate::remote::Remote, path: &str) -> Result<Vec<u8>> {
+    if !valid_path(path) {
+        return Err(invalid());
+    }
+    let mut output = Vec::new();
+    let mut identity: Option<String> = None;
+    loop {
+        let chunk = remote.read_range(
+            path,
+            output.len() as u64,
+            crate::remote::MAX_RANGE_BYTES,
+            identity.as_deref(),
+        )?;
+        if chunk.total == 0
+            || chunk.total > MAX_MANIFEST as u64
+            || chunk.bytes.is_empty()
+            || chunk.bytes.len() > crate::remote::MAX_RANGE_BYTES
+            || output
+                .len()
+                .checked_add(chunk.bytes.len())
+                .is_none_or(|n| n > MAX_MANIFEST || n as u64 > chunk.total)
+            || identity.as_ref().is_some_and(|id| id != &chunk.identity)
+        {
+            return Err(invalid());
+        }
+        if let Some(previous) = identity.as_ref() {
+            if previous != &chunk.identity {
+                return Err(Error::Changed);
+            }
+        } else {
+            identity = Some(chunk.identity);
+        }
+        let total = chunk.total;
+        output.extend_from_slice(&chunk.bytes);
+        if output.len() as u64 == total {
+            return Ok(output);
+        }
+    }
 }

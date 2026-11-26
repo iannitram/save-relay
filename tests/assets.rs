@@ -21,6 +21,9 @@ fn rejects_unsafe_and_colliding_paths() {
         vec!["a", "a/b"],
         vec!["A", "a"],
         vec!["CON.txt"],
+        vec!["COM¹.txt"],
+        vec!["café", "cafe\u{301}"],
+        vec!["STRASSE", "straße"],
         vec!["a\\b"],
     ] {
         assert!(
@@ -118,4 +121,210 @@ fn webdav_range_is_bounded_and_conditional() {
         .unwrap();
     assert_eq!(chunk.bytes, b"cd");
     assert_eq!(chunk.total, 6);
+}
+
+#[cfg(unix)]
+#[test]
+fn session_resumes_durable_bytes_and_never_replaces() {
+    use save_relay::{
+        assets::session::{AssetOptions, AssetSession},
+        remote::{ensure_dir, MemoryRemote, Precondition, Remote},
+    };
+    use std::{fs, sync::Arc};
+    let root = std::env::temp_dir().join(format!("sr-assets-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    let dest = root.join("dest");
+    let state = root.join("state");
+    fs::create_dir_all(&dest).unwrap();
+    fs::create_dir_all(&state).unwrap();
+    let remote = Arc::new(MemoryRemote::new());
+    ensure_dir(remote.as_ref(), "game-files/game/files/data").unwrap();
+    remote
+        .put(
+            "game-files/game/files/data/a",
+            b"abc",
+            &Precondition::Absent,
+        )
+        .unwrap();
+    let raw = manifest(&["data/a"], "game");
+    let mut session = AssetSession::open(
+        remote.clone(),
+        &raw,
+        AssetOptions {
+            app_id: "game",
+            allow_legacy: false,
+            source_root: "game-files/game/files",
+            scope: "test-account",
+            destination: &dest,
+            state_dir: &state,
+        },
+    )
+    .unwrap();
+    assert_eq!(session.step().unwrap().durable_bytes, 3);
+    assert!(!session.progress().complete);
+    assert!(AssetSession::open(
+        remote.clone(),
+        &raw,
+        AssetOptions {
+            app_id: "game",
+            allow_legacy: false,
+            source_root: "game-files/game/files",
+            scope: "test-account",
+            destination: &dest,
+            state_dir: &state
+        }
+    )
+    .is_err());
+    drop(session);
+    // Uncheckpointed tail is truncated rather than treated as durable.
+    use std::io::Write;
+    fs::OpenOptions::new()
+        .append(true)
+        .open(state.join("part-0"))
+        .unwrap()
+        .write_all(b"bad")
+        .unwrap();
+    let mut resumed = AssetSession::open(
+        remote,
+        &raw,
+        AssetOptions {
+            app_id: "game",
+            allow_legacy: false,
+            source_root: "game-files/game/files",
+            scope: "test-account",
+            destination: &dest,
+            state_dir: &state,
+        },
+    )
+    .unwrap();
+    assert!(resumed.step().unwrap().complete);
+    assert_eq!(fs::read(dest.join("data/a")).unwrap(), b"abc");
+    drop(resumed);
+    fs::write(dest.join("data/a"), b"other").unwrap();
+    assert!(AssetSession::open(
+        Arc::new(MemoryRemote::new()),
+        &raw,
+        AssetOptions {
+            app_id: "game",
+            allow_legacy: false,
+            source_root: "game-files/game/files",
+            scope: "test-account",
+            destination: &dest,
+            state_dir: &state
+        }
+    )
+    .is_err());
+    assert_eq!(fs::read(dest.join("data/a")).unwrap(), b"other");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn interrupted_sessions_resume_across_provider_fakes() {
+    use save_relay::{
+        assets::session::{AssetOptions, AssetSession},
+        clients::{Client, GOOGLE_DESKTOP},
+        creds::Secret,
+        dropbox::Dropbox,
+        fake::{FakeDrive, FakeDropbox, REFRESH_TOKEN},
+        gdrive::Drive,
+        oauth::{TokenSource, DROPBOX, GOOGLE},
+        remote::{ensure_dir, MemoryRemote, Precondition, Remote},
+    };
+    use sha2::{Digest, Sha256};
+    use std::{fs, sync::Arc};
+    let db = Arc::new(FakeDropbox::new());
+    let db_tokens = TokenSource::new(
+        &DROPBOX,
+        Client {
+            id: "test",
+            secret: None,
+        },
+        Secret::new(REFRESH_TOKEN),
+        db.clone(),
+        || 1000,
+    );
+    let drive = Arc::new(FakeDrive::new());
+    let drive_tokens = TokenSource::new(
+        &GOOGLE,
+        GOOGLE_DESKTOP,
+        Secret::new(REFRESH_TOKEN),
+        drive.clone(),
+        || 1000,
+    );
+    let services: Vec<(&str, Arc<dyn Remote>)> = vec![
+        ("memory", Arc::new(MemoryRemote::new())),
+        (
+            "dropbox",
+            Arc::new(Dropbox::with_sleep(db_tokens, db, |_| {
+                panic!("unexpected retry")
+            })),
+        ),
+        (
+            "drive",
+            Arc::new(
+                Drive::new(drive_tokens, drive, || 1000)
+                    .with_wait(Arc::new(|_| panic!("unexpected retry"))),
+            ),
+        ),
+    ];
+    let data = vec![42; 1024 * 1024 + 3];
+    let digest = format!("{:x}", Sha256::digest(&data));
+    let raw = serde_json::json!({"version":1,"app_id":"game","files":[{"path":"payload.bin","size":data.len(),"sha256":digest}]}).to_string();
+    for (service, remote) in services {
+        let root = std::env::temp_dir().join(format!("sr-assets-{}-{service}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let dest = root.join("dest");
+        let state = root.join("state");
+        fs::create_dir_all(&dest).unwrap();
+        fs::create_dir_all(&state).unwrap();
+        ensure_dir(remote.as_ref(), "game-files/game/files").unwrap();
+        remote
+            .put(
+                "game-files/game/files/payload.bin",
+                &data,
+                &Precondition::Absent,
+            )
+            .unwrap();
+        let open = || {
+            AssetSession::open(
+                remote.clone(),
+                raw.as_bytes(),
+                AssetOptions {
+                    app_id: "game",
+                    allow_legacy: false,
+                    source_root: "game-files/game/files",
+                    scope: service,
+                    destination: &dest,
+                    state_dir: &state,
+                },
+            )
+            .unwrap()
+        };
+        let mut first = open();
+        assert_eq!(first.step().unwrap().durable_bytes, 1024 * 1024);
+        drop(first);
+        let mut resumed = open();
+        assert_eq!(resumed.progress().durable_bytes, 1024 * 1024);
+        assert_eq!(resumed.step().unwrap().durable_bytes, data.len() as u64);
+        assert!(resumed.step().unwrap().complete);
+        assert_eq!(fs::read(dest.join("payload.bin")).unwrap(), data);
+        drop(resumed);
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn manifest_fetch_is_bounded_and_complete() {
+    use save_relay::{
+        assets::fetch_manifest,
+        remote::{MemoryRemote, Precondition, Remote},
+    };
+    let remote = MemoryRemote::new();
+    let raw = manifest(&["data/a"], "game");
+    remote
+        .put("manifest.json", &raw, &Precondition::Absent)
+        .unwrap();
+    assert_eq!(fetch_manifest(&remote, "manifest.json").unwrap(), raw);
+    assert!(fetch_manifest(&remote, "../manifest.json").is_err());
 }
