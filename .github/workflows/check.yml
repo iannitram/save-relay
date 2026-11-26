@@ -146,6 +146,13 @@ jobs:
             -I bindings/ios \
             -c bindings/ios/SaveRelay.swift \
             -o build/bindings/SaveRelay.o
+      - name: Type-check the iOS device test app
+        if: matrix.name == 'ios'
+        run: |
+          set -euo pipefail
+          sdk="$(xcrun --sdk iphoneos --show-sdk-path)"
+          swiftc -target arm64-apple-ios15.0 -sdk "$sdk" -parse-as-library \
+            -I bindings/ios -typecheck bindings/ios/SaveRelay.swift bindings/ios/example/RelayCheck.swift
 
   frontend:
     # The panel (shared views and the desktop page) and the Decky plugin, as one pnpm
