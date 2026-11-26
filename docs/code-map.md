@@ -28,7 +28,7 @@ One Rust crate (`save-relay`: a library and a command-line tool), a C interface 
 | Platform | CPU in releases | CI | Credential store | Notes |
 |---|---|---|---|---|
 | Linux (SteamOS handhelds) | x86_64, static musl | `ubuntu-latest`: `rust`, `integration`, `frontend` | Secret Service (`secret-service`) | XDG folders. Game Mode may have no unlocked Secret Service and may show no browser, so Drive and Dropbox setup there defaults to the code flows. `wrap` finds Steam native or Flatpak and maps Windows games into their Proton prefix. The Decky plugin is Linux only. The musl binary is built only by `release.yml`. No aarch64 build |
-| Windows (desktop) | x86_64, unsigned | `windows-latest`: `rust`, `integration` | Credential Manager (`windows-credential-manager`; 2560 bytes per entry) | `%APPDATA%`, `%LOCALAPPDATA%`; Documents from `SHGetKnownFolderPath`. Save-set paths use `/` and are converted at the file-system edge. Steam in `C:\Program Files (x86)\Steam` unless `SAVE_RELAY_STEAM_DIR` says otherwise. No arm64 build |
+| Windows (desktop) | x86_64, unsigned | `windows-latest`: `rust`, `integration` | Credential Manager (`windows-credential-manager`; Windows caps an entry at 2560 bytes, `CRED_MAX_CREDENTIAL_BLOB_SIZE`) | `%APPDATA%`, `%LOCALAPPDATA%`; Documents from `SHGetKnownFolderPath`. Save-set paths use `/` and are converted at the file-system edge. Steam in `C:\Program Files (x86)\Steam` unless `SAVE_RELAY_STEAM_DIR` says otherwise. No arm64 build |
 | macOS | arm64, unsigned until #287; no library asset | `macos-latest`: `rust`, `integration` | Keychain (`macos-keychain`) | a Must (M17). `wrap`, `install-wrap` and the Steam-running check build and test here but are untried on a Mac. No Intel build; no deployment target set |
 | iOS | arm64 device static library (rc.2) | `mobile` (cross-build), `bindings` (Swift type-check, including `bindings/ios/example/`) | the app's, through callbacks (`host-app`) | a Must (M18). No simulator slice or XCFramework, so nothing runs in CI. The harness README says iOS 15 or later; the build sets no deployment target |
 | Android | none | `mobile` (cross-build), `bindings` (`kotlinc`, NDK clang) | the app's, through callbacks (`host-app`); no reference store | a Should. API floor 24 appears only as CI's linker name. `docs/android.md` holds the foreground rule for finishing a sign-in |
@@ -151,7 +151,7 @@ On each machine, with no password or token in any of them:
 | `<data>/save-relay/steam/cloud.json`, `cloud.lock` | cached Steam Cloud answers |
 | `<data>/save-relay/ffi/<id>.manifest.json` | the manifest a C call passed as text |
 
-All are written through `craft_atomic::atomic_write`. Every stored format carries `format: 1` and anything else is refused; a manifest is 1, or 2 with `strict_scope`. There is no written compatibility rule yet (`ROADMAP.md` P7). In a saves folder every name starting `.save-relay-` is reserved: the port's sidecar `.save-relay-meta.json` and download part files.
+The JSON records `LocalStore` writes, and `steam/cloud.json` through the same writer, go through `craft_atomic::atomic_write` (`local::write_json`). Three do not: `ffi/<id>.manifest.json` is a plain `std::fs::write` (`src/ffi.rs`), `waiting/<game>` is a plain write of a process id, and the ludusavi cache uses its own temp-file-and-rename (`src/ludusavi.rs`). The JSON records carry `format: 1` and anything else is refused; the exceptions are `waiting/<game>` (no format field), the cached ludusavi data file (upstream's own file) and the stored manifest text, which is format 1, or 2 with `strict_scope`. There is no written compatibility rule yet (`ROADMAP.md` P7). In a saves folder every name starting `.save-relay-` is reserved: the port's sidecar `.save-relay-meta.json` and download part files.
 
 ## Modules
 
@@ -197,7 +197,7 @@ All are written through `craft_atomic::atomic_write`. Every stored format carrie
 | `src/gamefiles/{mod,engine,manifest,fsx}.rs`, `src/cli/game_files.rs` | in review (#331) | the three-service engine: `GameSource`, `Layout` (Standard, Legacy, Inline), `HostOs`, `Plan`, `Progress`, checkpoints; `save-relay game-files plan|download|cleanup` | `service`, the three backends |
 | `src/lib.rs` | present | the module list | |
 | `bindings/android/` | present | `SaveRelay.kt`, `SaveRelayHost.kt`, `save_relay_jni.c`: init, pull, push, status, setup, signInStart, signInFinish, close. No game-file call. In review (#331): game-file calls | `include/save_relay.h` |
-| `bindings/ios/` | present | `SaveRelay.swift`, `module.modulemap`: the same six operations. No game-file call. In review (#331): game-file calls | `include/save_relay.h` |
+| `bindings/ios/` | present | `SaveRelay.swift`, `module.modulemap`: init, pull, push, status, setup, signInStart, signInFinish; `deinit` instead of close. No game-file call. In review (#331): game-file calls | `include/save_relay.h` |
 | `bindings/ios/example/` | present | `RelayCheck.swift` and README: the device-only harness for #289 (Nextcloud); type-checked in CI, never run | `bindings/ios/` |
 | `panel/` | present | React 18, Vite, vitest: `src/api.ts` (envelope types), `src/bridge.ts`, `src/App.tsx`, views, `src/theme.ts`, `tokens.css`, `app.css`, fixtures read by `tests/api_contract.rs`. No slot handling | `src/panel.rs`, `decky/` |
 | `decky/` | present | `plugin.json`, `main.py` (runs `save-relay --json`; stall and ceiling timeouts), `src/` including `launch-options.ts` (the Steam client launch-option calls), `test_main.py` | `panel/` |
@@ -237,7 +237,7 @@ All are written through `craft_atomic::atomic_write`. Every stored format carrie
 
 `SaveRelayHost`: `user_data`; folders `home`, `data`, `config`, `documents`; `cred_get`, `cred_set`, `cred_delete`; one `http` callback that receives a `SaveRelayHttpRequest` (method, url, headers, body, `max_response_bytes`) and answers through `save_relay_http_respond`.
 
-What the C interface does not reach today: play-anyway (`--anyway`), history, restore, where, sign-out, global status, `answer`. A slot is chosen by passing a manifest whose id is `<id>-slot-<n>` (#313; implemented, tested by `slot_suffixed_manifests_keep_ffi_slots_separate`, not released). `setup` data reports `credential_store: "host-app"`. Header drift is guarded for function names only (`tests/ffi_header.rs`), not struct layouts or wrappers.
+What the C interface does not reach today: play-anyway (`--anyway`), history, restore, where, sign-out, global status, `answer`. A slot is chosen by passing a manifest whose id is `<id>-slot-<n>` (#313; implemented, tested by `slot_suffixed_manifests_keep_ffi_slots_separate`, not released). `setup` data reports `credential_store: "host-app"`. Header drift is guarded for every exported signature (`tests/ffi_header.rs`, `every_exported_signature_matches_the_header`: return type, name, argument types and names); not struct layouts, callbacks or wrappers.
 
 ## API shape
 
@@ -256,7 +256,8 @@ save-relay restore <game> <entry> [--manifest <file>] [--saves-dir <dir>] [--slo
 save-relay wrap    [--game <id>] [--manifest <file>] [--saves-dir <dir>] [--slot <n>] -- <command>...
 save-relay which   <appid>
 save-relay steam-games [--no-steam-cloud] [--refresh]
-save-relay install-wrap (<appid>... | --all-known | --no-steam-cloud) [--remove] [--dry-run]
+save-relay install-wrap (<appid>... | --all-known) [--remove] [--dry-run]
+save-relay install-wrap --no-steam-cloud [--dry-run]
 save-relay launch-option <appid> [--remove] [--current=<text>]
 save-relay answer  <game> keep-server|keep-local|play-anyway|wait [--slot <n>]
 save-relay where
@@ -298,7 +299,7 @@ In review (#331): `error` gains `class`: `retryable`, `not_yet_uploaded`, `reaut
 | `where` | `WhereData` | `games[]` (game, held, server) |
 | `which` | `WhichData` | `app_id`, `game`, `name`, `saves_dir`, `include`, `source`, `message` |
 | `steam-games` | `SteamGamesData` | `games[]` (app_id, name, steam_cloud, saves, wrapped), `unknown` |
-| `install-wrap` | `InstallWrapData` | `dry_run`, `changed[]`, `skipped[]`, `backups`, `message` |
+| `install-wrap` | `InstallWrapData` | `dry_run`, `changed[]` (app_id, user_id, before, after), `skipped[]` (app_id, name, reason), `backups`, `message` |
 | `launch-option` | `LaunchOptionData` | `app_id`, `before`, `after` |
 | `answer` | `AnswerData` | `game`, `kind`, `answer`, `message` |
 | `picture` | `PictureData` | `path`, `bytes` |
@@ -307,6 +308,35 @@ In review (#331): `error` gains `class`: `retryable`, `not_yet_uploaded`, `reaut
 | `game-files-status` (C only) | `GameFilesStatus` | `game_id`, `total_files`, `completed_files`, `partial_files`, `bytes_on_disk`, `total_bytes`, `complete` |
 
 `action`: `held` · `noop` · `adopted` · `pulled` · `pushed` · `offline` (pull, unreachable: start the game) · `deferred` (push, unreachable) · `conflict`. A `Card`: `format`, `device`, `time`, `playtime_secs`, `place`, `picture`. `Held`: `device`, `since`. `PendingChoice`: `format`, `game`, `kind`, `server`, `local`, `server_card`, `local_card`, `held`, `time`, `answer`. Field names are locked by `tests/api.rs`, `tests/api_contract.rs` and `tests/cli_run.rs`.
+
+Values:
+
+| Field | Values |
+|---|---|
+| `status.would` | `noop` · `adopt` · `pull` · `push` · `conflict` · `offline` · `held` |
+| `repair.markers[].status` | `releasable` · `releasable_set_aside` · `released` · `set_aside` · `kept_later` · `unreadable` · `skipped_state_moved` |
+| `setup.service` | `nextcloud` · `gdrive` · `dropbox` |
+| `steam-games.games[].steam_cloud` | `yes` · `no` · `unknown` |
+| `steam-games.games[].saves` | `manifest` · `ludusavi` · `none` |
+| `which.source` | `manifest` · `ludusavi` |
+| `install-wrap.skipped[].reason` | `steam_cloud_unknown` · `no_saves_entry` · `no_local_config` |
+| `answer.kind`, `PendingChoice.kind` | `conflict` · `held` |
+| `answer.answer`, `PendingChoice.answer` | `keep_server` · `keep_local` · `play_anyway` · `wait`: underscores in JSON, hyphens on the command line (`keep-server`) |
+
+Nullable: in `pull` and `push`, `revision`, `server`, `local`, `backup`, `held`, `server_card`, `local_card` (`held` is set only with `action: held`); in `status`, `server`, `local`, `last_synced_revision`, `held`, `pending`; `Side.revision`; `Card.playtime_secs`, `place`, `picture`; `history.entries[].card`; `repair.markers[].entry` and `set_aside`, `repair.claim_recovery`; `restore.backup`; `SignInPrompt.code` (Dropbox shows its code on the sign-in page); `where.games[].held` and `server`; `install-wrap.changed[].before` and `after`; `launch-option.before` and `after`; `PendingChoice.server`, `local`, both cards, `held`, `answer`.
+
+A `pull` answer:
+
+```json
+{"game":"uncharted-1","action":"pulled","revision":7,
+ "server":{"device":"strix-halo-tablet","time":"2026-10-31T19:51:00Z","revision":7},
+ "local":{"device":"amd-handheld","time":"2026-10-30T21:02:11Z","revision":null},
+ "backup":null,"counts":{"uploaded":0,"downloaded":3,"deleted":0},
+ "message":"Pulled revision 7 from strix-halo-tablet (2026-10-31T19:51:00Z).",
+ "held":null,
+ "server_card":{"format":1,"device":"strix-halo-tablet","time":"2026-10-31T19:51:00Z","playtime_secs":3120,"place":"Chapter 7: The Fortress","picture":".save-relay-picture.jpg"},
+ "local_card":null}
+```
 
 ### Exit codes
 
@@ -317,7 +347,7 @@ In review (#331): `error` gains `class`: `retryable`, `not_yet_uploaded`, `reaut
 | 2 | `usage`, `manifest_invalid`, `game_unknown`, `no_such_entry`, `save_location_unclear`, `steam_not_found`, `steam_running`, `no_pending_choice` |
 | 3 | `conflict`: a choice is needed, nothing changed |
 | 4 | `not_set_up`, `auth_failed`, `credentials`, `reauth_needed`, `sign_in_failed` |
-| 5 | `server_unreachable`, `server_error`, `state_invalid`, `changed_on_server`, `not_found` |
+| 5 | `server_unreachable` (only from commands with no offline answer, such as history, restore, setup and where: `pull` answers `offline`, `push` `deferred`, `status` `reachable: false`, all exit 0), `server_error`, `state_invalid`, `changed_on_server`, `not_found` |
 | 6 | `held`: another machine has the game open, nothing changed |
 | 7 | cancelled game-file download; in review (#331) |
 
@@ -342,7 +372,7 @@ A wrapped game has no launcher: at `conflict` or `held`, `wrap` writes a pending
 
 ## Tests and CI
 
-93 integration test files in `tests/`, plus inline modules in `src/sync.rs`, `src/wrap.rs`, `src/transfer.rs`, `src/game_files.rs`.
+93 integration test files in `tests/`, plus inline test modules in `src/sync.rs`, `src/transfer.rs`, `src/game_files.rs`, `src/clients.rs`, `src/gdrive.rs`, `src/platform.rs`, `src/creds.rs` (only with feature `keyring`) and `src/wrap.rs` (only on Windows).
 
 | Area | Test files |
 |---|---|
@@ -371,4 +401,4 @@ Fixtures: `tests/fixtures/` (`games/`, `saves/`, `sidecar/`, `steam/`, `steam-ga
 | `frontend` | Linux | panel and decky typecheck, test, build; `cargo clippy` and `cargo test --test panel` with `panel-dist` |
 | `integration` | Linux (Nextcloud container), Windows and macOS (rclone) | `tests/cli_webdav.rs` against a real WebDAV server; Linux also checks Nextcloud's write preconditions |
 
-Gaps: a newer push to `main` cancels the running check, and `main` is unprotected, so many `main` commits have no completed check; tests never run in the mobile configuration; the release configuration (musl, `--release`, the zips) is built only by `release.yml`; no job has a timeout; the toolchain floats; there is no dependency audit; `KeyringStore` is never exercised. Artifact retention follows R42. All of these are `ROADMAP.md` step P6.
+Gaps: a newer push to `main` cancels the running check, and `main` is unprotected, so 9 of the 14 pushes to `main` since rc.2 had their check cancelled, and the audited commit had no completed check at audit time; tests never run in the mobile configuration; the release configuration (musl, `--release`, the zips) is built only by `release.yml`; no job has a timeout; the toolchain floats; there is no dependency audit; `KeyringStore` is never exercised. Artifact retention follows R42. All of these are `ROADMAP.md` step P6.

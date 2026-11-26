@@ -5,14 +5,14 @@ From `SPEC.md` to `v1.0.0`. Save Relay does two jobs for the owner's game ports:
 Updated: 2026-11-25
 
 features:
-- sync-engine: The sync engine, WebDAV client, CLI and launcher contract (F01-F26, #302, #311) (release: 1.0)
+- sync-engine: The sync engine, WebDAV client, CLI and launcher contract (F01-F23, F25, F69, #302, #311) (release: 1.0)
 - services: Google Drive and Dropbox beside Nextcloud, with their sign-in flows (F27-F47) (release: 1.0)
 - wrap: The open-elsewhere mark, wrap, install-wrap, save cards, the ludusavi data and the reusable Steam modules (F48-F61, F65, F66, #293) (release: 1.0)
 - panel: The panel, its Game Mode shell and the Add games view (F62-F64, F68, F72-F78) (release: 1.0)
-- hardening: The audit's blockers and should-fix items, and the shore-up steps of this roadmap (B1-B6, F79-F87, #329) (release: 1.0)
+- hardening: The audit's blockers and should-fix items, and the shore-up steps of this roadmap (B1-B6, F79-F87, F90, #329) (release: 1.0)
 - release: Release candidates, device checks and the 1.0 acceptance (F24, F26, F67, F71) (release: 1.0)
 - mac-build: The supported macOS build and Apple signing (F88, F91) (release: 1.0)
-- mobile-bindings: The iOS library and Android bindings (F70, F89, F92, F93, #306, #313) (release: 1.0)
+- mobile-bindings: The iOS library and Android bindings (F70, F89, F92, F93, #306) (release: 1.0)
 - save-slots: Follow the selected save slot (#240, #301, #313) (release: 1.0)
 - thin-app-install: Shared resumable game-file installation through Dropbox, Nextcloud and Google Drive (#305, #309, #310) (release: 1.0)
 - publisher: Chunked resumable uploads of prepared game files (#328) (release: after-1.0)
@@ -34,7 +34,7 @@ Every status in this file and in `docs/code-map.md` uses these terms and no othe
 | in review (#PR) | on a branch with an open PR, not on `main` | the PR |
 | planned (#issue) | not started, or design only | the issue |
 
-A green fake-backed test, a published archive, a source inspection or a sentence in a doc is none of the last-but-three. **No capability in this repo is device-verified today:** no issue holds owner-run output from a handheld, a Mac, an iPhone, an Android phone or a live Dropbox or Google Drive account.
+A green fake-backed test, a published archive, a source inspection or a sentence in a doc is not device verification. **No capability in this repo is device-verified today:** no issue holds owner-run output from a handheld, a Mac, an iPhone, an Android phone or a live Dropbox or Google Drive account.
 
 ## Decisions
 
@@ -51,7 +51,7 @@ Owner rulings that shape this roadmap, as already recorded in this repo, newest 
 
 ## Where it stands (2026-11-25)
 
-**Audited main: `b0ce9dc`. Stage: Dev Loop.** Tags: `v1.0.0-rc.1` (2026-11-17) and `v1.0.0-rc.2` (`961513c`, 2026-11-18), both pre-releases. `main` is 33 commits past rc.2; `Cargo.toml`, `panel/package.json` and `decky/package.json` still say `1.0.0-rc.2`. The last three changes (#327, #322, #332) were pushed to `main` as squashes with their PRs closed, not merged, and `check.yml` cancels superseded runs on `main`, so several `main` commits have no completed check (step P6).
+**Audited main: `b0ce9dc`. Stage: Dev Loop.** Tags: `v1.0.0-rc.1` (2026-11-17) and `v1.0.0-rc.2` (`961513c`, 2026-11-18), both pre-releases. `main` is 33 commits past rc.2; `Cargo.toml`, `panel/package.json` and `decky/package.json` still say `1.0.0-rc.2`. The last three changes (#327, #322, #332) were pushed to `main` as squashes with their PRs closed, not merged, and `check.yml` cancels superseded runs on `main`, so 9 of the 14 pushes to `main` since rc.2 had their check cancelled; the audited commit had no completed check at audit time (step P6).
 
 | Capability | implemented | tested | released | device-verified |
 |---|---|---|---|---|
@@ -85,8 +85,8 @@ Owner rulings that shape this roadmap, as already recorded in this repo, newest 
 | #324 | interim Dropbox-only downloader and two C exports; does not meet `docs/assets.md` (Known risks K1) | one unit test in `src/game_files.rs` |
 | #313 / #327 | slot-suffixed manifest ids through the C interface | `tests/ffi.rs` |
 | #322 | `bindings/ios/example/` harness for #289 | CI `bindings` type-check only |
-| #329 / #332 | debug-only `SAVE_RELAY_TEST_STEAM_RUNNING` seam so tests do not depend on a running Steam | `tests/steam_launch.rs`, `tests/steam_games_flow.rs` |
-| #205 | closed with rc.1 Linux and Windows checksum and version output; the run warned that the Mac binary was unsigned | - |
+| #329 / #332 | debug-only `SAVE_RELAY_TEST_STEAM_RUNNING` seam so tests do not depend on a running Steam | `tests/cli_install_wrap_bulk.rs`, `tests/steam_games_flow.rs` |
+| #205 | closed with rc.1 checksum and `version` output from Linux and Windows; both were satellite runs, not owner runs | - |
 
 ### Open pull requests
 
@@ -117,7 +117,7 @@ Agents do not decide these. Each blocks the step named.
 
 ## Run order to 1.0
 
-Order: agent work (P) lands, then `v1.0.0-rc.3` (R), then the owner gates (G) run against that tag, then the design pass (D), then the acceptance and the final tag. **rc.3 is not cut while the interim #324 downloader is exported in the header:** either #331 has replaced it or the two exports are removed or feature-gated. P rows are independent unless a row says otherwise; an owner gate blocks only its dependents. A defect found at a gate gets its own issue, a fix and a new RC before the gate is repeated.
+Order: agent work (P) lands, then `v1.0.0-rc.3` (R), then the owner gates G1-G7 run against that tag, then the design pass (D), then the 1.0 acceptance (G8 and G9, which depend on D1) and the final tag. **rc.3 is not cut while the interim #324 downloader is exported in the header:** either #331 has replaced it or the two exports are removed or feature-gated. P rows are independent unless a row says otherwise; an owner gate blocks only its dependents. A defect found at a gate gets its own issue, a fix and a new RC before the gate is repeated.
 
 "needs issue" marks a step with no issue yet, with the title to file.
 
@@ -126,16 +126,16 @@ Order: agent work (P) lands, then `v1.0.0-rc.3` (R), then the owner gates (G) ru
 | Step | Issue | What | Blocker | Done when |
 |---|---|---|---|---|
 | P0 | #308 | this roadmap and the code map rewritten against `b0ce9dc` | agent | merged; `PIPELINE.md` Notes updated (H5) |
-| P1 | #309, #310 / PR #331 | one installer engine for the three services with the CLI lane included; replaces `src/game_files.rs`; closes #323 and #326 | agent; Q1, Q3, Q4, Q7 for scope | on `main`; `docs/assets.md` holds without exception (no overwrite of a player file, containment and no-follow on every path, bounded range answers, SHA-256 before publication); tests on all three providers through fakes; the interim downloader's behaviour is gone |
+| P1 | #309, #310 / PR #331 | one installer engine for the three services with the CLI lane included; replaces `src/game_files.rs`; closes #323 and #326 | agent; Q1, Q3, Q4, Q7 for scope | on `main`; `docs/assets.md` holds without exception (no overwrite of a player file, containment and no-follow on every path, bounded range answers, SHA-256 before publication); tests on all three providers through fakes; the interim downloader's behaviour is gone; #331 is rebased on P0 and moves the code map rows from "in review (#331)" to present in the same PR (it also edits `CHANGELOG.md` and `check.yml`) |
 | P2 | needs issue: installer contract gaps before the C interface is versioned | a host-chosen layout argument so mobile reaches a legacy root, with an ACNH migration test over its partial folder; the changed-manifest update path (today it ends in `destination_conflict`); a free-space check and a storage-full error; the wording of pause (cancel keeps the checkpoint; one download per process) made the same in `SPEC.md`, `docs/assets.md` and the header | agent; Q8, Q10 | decided in #331 or split; the header documents each |
 | P3 | needs issue: header and bindings parity test | Kotlin, JNI and Swift wrap every exported C function; a test fails when the header, `src/ffi.rs`, a `repr(C)` layout or a wrapper drifts | agent; after P1 | CI `bindings` fails on a missing wrapper |
 | P4 | needs issue: C interface covers M18 | play-anyway, history, restore, where, sign-out and account status through the C interface; `held` through `tests/ffi.rs`; the phone rules for the mark written into `docs/android.md` and an iOS guide | agent; Q11 | a phone app can answer every envelope the desktop launcher can |
-| P5 | needs issue: release workflow gates | secret-bearing steps in a protected environment, tag-only, before any Apple secret is added; a final (non-rc) tag fails when the Mac binary is unsigned; the tagged commit must be on `main` with a successful check; deployment targets set for macOS and iOS; version equality across the three version files checked; release notes name the tag Mac ports pin; NOTICE and licences in every asset; the stale "unsupported for 1.0" comment removed | agent; Q2, Q5, Q6 for assets | a pull-request run of `release.yml` sees no secret; a dry tag run fails unsigned |
-| P6 | needs issue: CI on main and coverage | no cancel-in-progress on `main`; `main` protected with required checks and no direct pushes; `decky/test_main.py` run; the release configuration (musl, `--release`, `panel-dist` on Windows and macOS, Decky and iOS zips) built on pull requests; tests in the `--no-default-features --features ffi` configuration; job timeouts; pinned toolchain or MSRV; checksummed Kotlin and rclone downloads; dependency audit and an update bot; the duplicate `mobile` builds removed | agent | every `main` commit has a completed check |
+| P5 | needs issue: release workflow gates | secret-bearing steps in a protected environment, tag-only, before any Apple secret is added; a final (non-rc) tag fails when the Mac binary is unsigned; the tagged commit must be on `main` with a successful check; deployment targets set for macOS and iOS; version equality across the three version files checked; release notes name the tag Mac ports pin; NOTICE and licences in every asset | agent; Q2, Q5, Q6 for assets | a pull-request run of `release.yml` sees no secret; a dry tag run fails unsigned |
+| P6 | needs issue: CI on main and coverage | the stale comment at `check.yml:19-20` corrected (it calls Linux and Windows "the 1.0 platforms" and macOS a matter for "the game ports' 2.0"; macOS is a Must, M17); no cancel-in-progress on `main`; `main` protected with required checks and no direct pushes; `decky/test_main.py` run; the release configuration (musl, `--release`, `panel-dist` on Windows and macOS, Decky and iOS zips) built on pull requests; tests in the `--no-default-features --features ffi` configuration; job timeouts; pinned toolchain or MSRV; checksummed Kotlin and rclone downloads; dependency audit and an update bot; the duplicate `mobile` builds removed | agent | every `main` commit has a completed check |
 | P7 | needs issue: stored-data and C ABI compatibility rule | what a 1.x build promises to read (server tree, `state.json`, `playing.json`, cards, local files, manifest formats 1 and 2, installer checkpoints); a locked test reading a tree written by rc.2; what an older build does with format 2; one version call for the whole C interface | agent | rule in `SPEC.md` or an ADR; the test on `main` |
 | P8 | needs issue: split what is left of #249 | (a) the panel serves its token on an unauthenticated page and sends no anti-framing headers; (b) the Decky backend accepts commands and flags the panel audit removed | agent | two issues filed and fixed; then #249 closes (H2) |
 | P9 | needs issue: save-sync safety | symlinks treated the same on upload and download; bounded response sizes on every backend read; a local safety copy before a pull replaces saves; one lock per game across CLI, panel, wrap and the C interface; a rotated refresh token stored when it is issued, and its failure reported | agent | each has a test; see Known risks K4-K8 |
-| P10 | needs issue: docs sync for the installer and the launcher contract | `PRIVACY.md` (what is uploaded, mobile apps, game-file downloads, the shared Dropbox app folder); `README.md`; `docs/services.md` "Planned game-file downloads"; `docs/assets.md` contradictions; `docs/android.md` "verified on Android 15" without a recorded run; slot-suffixed ids in the header and `docs/manifest.md`; `GLOSSARY.md` (app id and game id, new terms); ADRs for the installer, slot ids, strict scope, the launcher contract; an iOS integration guide; supported OS versions and CPU types; `SECURITY.md` and a threat model; how to remove Save Relay from a machine; doc tests for `docs/assets.md`, `docs/android.md` and the header | agent; after P1 | each doc matches `main`; doc tests in CI |
+| P10 | needs issue: docs sync for the installer and the launcher contract | `docs/PRIVACY.md` (what is uploaded, mobile apps, game-file downloads, the shared Dropbox app folder); `README.md`; `docs/services.md` "Planned game-file downloads"; `docs/assets.md` contradictions; `docs/android.md` "verified on Android 15" without a recorded run; slot-suffixed ids in the header and `docs/manifest.md`; `GLOSSARY.md` (app id and game id, new terms); ADRs for the installer, slot ids, strict scope, the launcher contract; an iOS integration guide; supported OS versions and CPU types; `SECURITY.md` (new) and a threat model; how to remove Save Relay from a machine; doc tests for `docs/assets.md`, `docs/android.md` and the header | agent; after P1 | each doc matches `main`; doc tests in CI |
 | P11 | needs issue: `CHANGELOG.md` by version | entries for everything since the #308 audit; a released / unreleased split; the misplaced top line fixed | agent | rc.3 notes can be cut from it |
 
 ### R: the release candidate
@@ -147,7 +147,7 @@ Order: agent work (P) lands, then `v1.0.0-rc.3` (R), then the owner gates (G) ru
 
 ### G: owner gates
 
-Each needs the owner's device, account or signing identity. An agent prepares; only the owner's recorded output closes it.
+Each needs the owner's device, account or signing identity. An agent prepares; only the owner's recorded output closes it. G1-G7 run before the design pass; G8 and G9 depend on D1 and are the 1.0 acceptance after it.
 
 | Step | Issue | What the owner does | Depends on | Done when |
 |---|---|---|---|---|
@@ -189,7 +189,7 @@ Each needs the owner's device, account or signing identity. An agent prepares; o
 
 | Step | What |
 |---|---|
-| H1 | Labels and milestones: most issues carry no `feature:<id>` label and no milestone; ten of the thirteen feature ids have no label. Set milestone 1.0 on #212, #309, #310, #308; move #240 out of After 1.0 (it shipped in rc.1); label and milestone #300, #319, #325, #328 |
+| H1 | Labels and milestones: most issues carry no `feature:<id>` label and no milestone; ten of the thirteen feature ids have no label. Set milestone 1.0 on #212, #309, #310, #308; move #240 out of After 1.0 (it shipped in rc.1); label and milestone #300, #319, #325, #328; relabel #305 and #310 from `feature:mobile-bindings` to `feature:thin-app-install`, and label #309 the same; label #313 `feature:save-slots` (it has no feature label) |
 | H2 | #249 stays open until P8's two issues exist, then closes |
 | H3 | #325: part (a) is #309/#310, part (b) is #328, part (c) is outside this repo; rewrite or close it with those links |
 | H4 | #26's body still cites the closed Uncharted-Universal #163 and omits the Mac, iOS and installer gates |
@@ -199,7 +199,36 @@ Each needs the owner's device, account or signing identity. An agent prepares; o
 
 ## F-number index
 
-F numbers are historical ids in issue titles. F01-F26 = #1-#26; F27-F35 = #27-#35; F36-F46 = #37-#47; F47 = #36; F48-F68 = #53-#73; F69 = #48; F70 = #49; F71 = #205; F72-F78 = #207-#213; F79-F85 = #242-#248; F86 = #249 (split into #266, #267, #268); F87 = #250 (split into #269-#272); F88 = #238; F89 = #254; F91 = #287; F92 = #288; F93 = #289. B1-B6 = #223-#228. All are closed and released in rc.2 except the open gates named above (#26, #47, #72, #73, #212, #238, #249, #287, #289). Which module each landed in: `docs/code-map.md` § Modules.
+F numbers are historical ids in issue titles. All are closed and released in rc.2 except the open gates in the last column. B1-B6 = #223-#228 (the audit's blockers, closed).
+
+| Ids | Issues | What | Modules | Musts | Open |
+|---|---|---|---|---|---|
+| F01-F10 | #1-#10 | pure core | `glob`, `stamp`, `layout`, `platform`, `manifest`, `state`, `plan`, `retention`, `api`, `cli` (parse) | M1-M8 | - |
+| F11-F15 | #11-#15 | local I/O and the in-memory server | `scan`, `remote`, `creds`, `local`, `webdav` (pure part) | M1-M6 | - |
+| F16-F19 | #16-#19 | PROPFIND, the WebDAV client, the system credential store, safe transfers | `webdav`, `creds`, `transfer` | M1-M6 | - |
+| F20, F21 | #20, #21 | pull, push, status, history, restore | `sync` | M1-M5 | - |
+| F22-F26 | #22-#26 | the CLI end to end, integration tests, release binaries, the manifest guide, the 1.0 acceptance | `cli`, `tests/`, `release.yml`, `docs/manifest.md` | M1-M8 | #26 (G9) |
+| F27-F35 | #27-#35 | service names, PKCE, sign-in URLs, tokens, Dropbox and Drive request and answer tables, the Drive guard, setup parsing | `service`, `oauth`, `dropbox`, `gdrive`, `gdrive::guard`, `cli` | M6, M9, M10 | - |
+| F36-F46 | #37-#47 | the HTTP transport, `TokenSource`, the two fakes, the two backends, sign-in flows, the same suite on every service, the services guide, live round trips | `http`, `oauth`, `fake`, `dropbox`, `gdrive`, `service`, `docs/services.md`, `tests/live_services.rs` | M6, M9, M10 | #47 (G5) |
+| F47 | #36 | the app registrations with Google and Dropbox | `clients` | M6, M10 | - |
+| F48-F52 | #53-#57 | the open-elsewhere mark, `Held`, `--anyway`, `where`, parsing of the new commands | `presence`, `plan`, `api`, `layout`, `sync`, `cli` | M11 | - |
+| F53-F59 | #58-#64 | VDF, Steam facts, the ludusavi data, pending choices, `wrap`, `install-wrap` | `steam::vdf`, `steam`, `ludusavi`, `pending`, `wrap`, `steam::launch` | M12, M13 | - |
+| F60, F61 | #65, #66 | save cards, and cards travelling with entries | `card`, `transfer`, `scan`, `sync` | M14 | - |
+| F62-F64 | #67-#69 | the panel front end, `save-relay panel`, the Decky plugin | `panel/`, `panel`, `decky/` | M15 | - |
+| F65-F68 | #70-#73 | M11-M14 integration tests, docs, device checks, the panel's design pass | `tests/`, `docs/wrap.md`, `docs/panel.md` | M11-M15 | #72 (G8), #73 (D1) |
+| F69 | #48 | manifest `saves_from: "launcher"` | `manifest`, `cli` | M7 | - |
+| F70 | #49 | Android and iOS library builds with the C interface | `ffi`, `include/save_relay.h` | M18; Should (Android) | - |
+| F71 | #205 | the first release candidate | `Cargo.toml`, `release.yml` | M8 | - |
+| F72-F78 | #207-#213 | Steam Cloud answers and their cache, `steam-games`, `install-wrap --no-steam-cloud`, `launch-option`, the Add games view, its tests and docs | `steam::cloud`, `cli`, `api`, `steam::launch`, `panel`, `panel/`, `decky/` | M16 | #212 (G7) |
+| F79-F85 | #242-#248 | the audit's should-fix items S1-S13 | `sync`, `wrap`, `ludusavi`, `cli`, `decky/`, `http`, `dropbox`, `gdrive`, `transfer`, `plan`, workflows | M1-M3, M5, M7-M9, M11-M13, M15 | - |
+| F86 | #249 (split into #266, #267, #268) | panel token and API surface, in-flight restore state, Game Mode B and D-pad, `install-wrap` edge cases (S14-S17) | `panel`, `panel/`, `decky/`, `steam::launch` | M13, M15 | #249 (P8, H2) |
+| F87 | #250 (split into #269-#272) | the audit's Minor list | various | various | - |
+| F88 | #238 | the supported macOS build | `release.yml`, `README.md` | M17 | #238 (G2) |
+| F89 | #254 | Android and iOS bindings with platform browser sign-in | `bindings/`, `ffi`, `oauth` | M18; Should (Android) | - |
+| F90 | #280 | the slow-upload test flake on macOS, closed by #284 | `tests/` | - | - |
+| F91 | #287 | Apple signing secrets and a Mac round trip | - | M17 | #287 (G1) |
+| F92 | #288 | the iOS library as a release asset | `release.yml` | M18 | - |
+| F93 | #289 | the iOS device round trip | `bindings/ios/example/` | M18 | #289 (G3) |
 
 ## Mac, PC and Linux (R04)
 
@@ -232,7 +261,7 @@ Verified security and correctness findings with no issue of their own. Each is a
 | K11 | Every stored format is "equals 1 or fail"; nothing tests that a newer build reads what rc.2 wrote; manifest format 2 is already rejected by rc.2 | `src/state.rs`, `src/manifest.rs` | P7 |
 | K12 | A pull through the C interface writes a mark that never expires; a phone has no play-anyway and may be ended before it pushes | `src/presence.rs`, `src/ffi.rs` | P4, Q11 |
 | K13 | The save-sync C interface has no version or struct-size negotiation; struct layouts and wrapper mirrors are not tested; no run on a mobile target, no sanitizer or Miri job | `src/ffi.rs`, `bindings/` | P3, P7 |
-| K14 | Most `main` commits never get a completed check and `main` is unprotected; the tag workflow does not require a passing check | `.github/workflows/check.yml` | P6, P5 |
+| K14 | 9 of the 14 pushes to `main` since rc.2 had their check cancelled; the audited commit had no completed check at audit time; `main` is unprotected; the tag workflow does not require a passing check | `.github/workflows/check.yml` | P6, P5 |
 | K15 | WebDAV over plain `http://` sends the app password with only a text warning; a self-hosted server with a private CA cannot connect over HTTPS (bundled roots only); undocumented | `src/webdav.rs`, `src/http.rs` | P10 documents; After 1.0 A6 |
 | K16 | No dependency audit, no update bot, floating toolchain, unverified CI downloads | workflows | P6 |
 | K17 | Releases carry only `SHA256SUMS`: no signature or provenance; no licences inside the assets | `release.yml` | P5; After 1.0 A7 |
@@ -272,8 +301,8 @@ Closed and not pending: #240 (save slots, released in rc.1) and #295 (local writ
 | mtkennerly/ludusavi | MIT | learn its wrap flow, conflict check and retention; small imported pieces are recorded in `NOTICE` |
 | mtkennerly/ludusavi-manifest | MIT | its data file for wrapped Steam games, downloaded with its ETag and cached, never bundled |
 | saphyr-rs/serde-saphyr | MIT / Apache-2.0 | YAML reader for that data |
-| craft-libs (`craft-atomic`) | MIT OR Apache-2.0 per `Cargo.toml`; the repository shows no detected licence file | atomic local writes; a git dependency pinned by commit, so a source build fetches a second repository |
-| windows-sys | MIT / Apache-2.0 | Windows folders and console events |
+| craft-libs (`craft-atomic`) | `Cargo.toml` and `NOTICE` say MIT OR Apache-2.0; the repository's detected licence is Apache-2.0 only | atomic local writes; a git dependency pinned by commit, so a source build fetches a second repository |
+| windows-sys | MIT / Apache-2.0 | the Windows Documents folder (`src/platform.rs`) |
 | algesten/ureq + rustls (`ring`) | MIT / Apache-2.0, ISC | the HTTP client behind feature `http`; a build machine needs a C compiler |
 | open-source-cooperative/keyring-rs | MIT / Apache-2.0 | the credential store behind feature `keyring` |
 | rust-random/getrandom; RustCrypto `sha2`; `serde`, `serde_json`; `quick-xml` | MIT / Apache-2.0; MIT | PKCE randomness, hashes, JSON, PROPFIND |
@@ -296,8 +325,8 @@ Closed and not pending: #240 (save slots, released in rc.1) and #295 (local writ
 4. The engine: pull, push, conflict, offline, status, history, restore (F20, F21). Done.
 5. The tool: CLI, integration tests on three OSes, release binaries, manifest guide (F22-F25). Done.
 6. The other two services (F27-F47). Done, except the live acceptance (G5).
-7. Mark, wrap, cards, panel, Add games, audit hardening, Mac and mobile builds (F48-F93). Done, except the gates G1-G8.
+7. Mark, wrap, cards, panel, Add games, audit hardening, Mac and mobile builds (F48-F93). Done, except the owner gates G1-G8 and the design pass D1.
 8. The installer and the steps P1-P11, then `v1.0.0-rc.3` (R1). In progress.
-9. Owner gates G1-G8 against the release candidate.
+9. Owner gates G1-G7 against the release candidate.
 10. **Design pass** (R04; D1, #73): the last stage before 1.0. Save Relay has a screen, the panel, in Game Mode and in the browser, so the pass is not skipped.
-11. 1.0 acceptance (G9, #26) and the `v1.0.0` tag (F1, F2).
+11. 1.0 acceptance (G8, #72; G9, #26) and the `v1.0.0` tag (F1, F2).
