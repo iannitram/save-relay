@@ -298,7 +298,9 @@ fn steam_running_guard_precedes_cache_reads() {
 }
 
 /// The test seam (issue #329) on every platform: with Steam forced running, `install-wrap`
-/// refuses before it reads a cache or touches `localconfig.vdf`.
+/// refuses before it reads a cache or touches `localconfig.vdf`. Debug builds only, like the
+/// seam itself: a release binary never reads `SAVE_RELAY_TEST_STEAM_RUNNING`.
+#[cfg(debug_assertions)]
 #[test]
 fn forced_steam_running_refuses_and_writes_nothing() {
     let machine = Machine::new(&[504231, 504232]);
